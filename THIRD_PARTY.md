@@ -17,6 +17,15 @@ HighWire fork modifications — is available from the project's source
 repository, and the full erlbutt source tarball accompanies each
 release (GPLv2 §3).
 
+## enacl (libsodium bindings — HighWire's own dependency)
+
+- Source: <https://github.com/cmoid/enacl> (pinned commit in `mix.lock`)
+- License: **MIT**
+
+HighWire pins cmoid's arm64-maintained fork at the same commit erlbutt
+uses, so both sides of the loopback wire run identical crypto. On
+release, this fork's source ships with the app.
+
 erlbutt's own dependencies, as conveyed inside that binary:
 
 | Component | License |

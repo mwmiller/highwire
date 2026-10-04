@@ -64,6 +64,7 @@ defmodule HighWire.MixProject do
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
+      {:enacl, git: "https://github.com/cmoid/enacl", ref: "3be2ed2e4ee1fdfbd73c04207c0b572fcde49720"},
       {:bandit, "~> 1.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
