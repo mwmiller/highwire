@@ -15,7 +15,7 @@ Phase 0: skeleton boots; erlbutt interop spike in progress.
 | Phase | What |
 |---|---|
 | 0 | Fresh repo from selected catenary pieces; erlbutt fork; interop spike |
-| 1 | Accounts (N erlbutt processes), SSB read models, identity UI |
+| 1 | Accounts (N erlbutt processes), **first-run full import of `~/.ssb`** (secret + flume log + all blobs), SSB read models, identity UI |
 | 2 | Publishing: posts, threads, likes, follows, profiles, DMs |
 | 3 | Networking: invites, pubs, `_ssb._tcp` LAN discovery |
 | 4 | Patchwork parity: images, search, channels |
@@ -32,7 +32,14 @@ mix setup          # deps
 mix phx.server     # http://127.0.0.1:14042
 ```
 
-Data lives in `~/.highwire` (override with `HIGHWIRE_HOME`).
+Data lives in `~/.highwire` (override with `HIGHWIRE_HOME`) — **but only
+as the destination of a complete first-run import**. On first launch
+HighWire detects an existing `~/.ssb` (Poncho Wonky / Patchwork) and
+imports the whole object store: your secret, the entire flume
+`log.offset` history, and every blob. `~/.ssb` is never written to;
+retire (rename) the old client before HighWire starts publishing with
+that identity, per erlbutt's cutover rule — two writers on one feed is
+a permanent fork.
 
 ## License
 
