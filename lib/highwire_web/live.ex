@@ -1,8 +1,8 @@
 defmodule HighWireWeb.Live do
   @moduledoc """
-  Phase 0 landing view: identity and engine status until the SSB feed
-  UI arrives. Also swallows the Tauri menu/resize events so the shell's
-  bridge never crashes the mount before its views exist.
+  Landing view: engine status and data directory. Also swallows the
+  Tauri menu/resize events so the shell's bridge never crashes the mount
+  before its views exist.
   """
   use HighWireWeb, :live_view
 
@@ -33,7 +33,7 @@ defmodule HighWireWeb.Live do
         <div class="rounded-lg border border-slate-300 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
           <h2 class="font-semibold">SSB engine</h2>
           <p class="mt-1 text-sm text-amber-600 dark:text-amber-400">
-            erlbutt sidecar — not yet wired (Phase 0 interop spike)
+            erlbutt sidecar — local muxrpc over loopback
           </p>
         </div>
         <div class="rounded-lg border border-slate-300 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">

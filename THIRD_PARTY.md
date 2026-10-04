@@ -11,10 +11,11 @@ following third-party works:
 - Copyright (C) Charles Moid
 
 erlbutt runs as a **separate process**. HighWire never links its code;
-the two communicate over muxrpc on loopback. When HighWire installers
-include an erlbutt binary, that binary is conveyed under GPLv2 and its
-source (including any HighWire fork modifications) is available from the
-project's source repository.
+the two communicate over muxrpc on loopback. HighWire installers ship an
+erlbutt binary, conveyed under GPLv2; its source — including any
+HighWire fork modifications — is available from the project's source
+repository, and the full erlbutt source tarball accompanies each
+release (GPLv2 §3).
 
 erlbutt's own dependencies, as conveyed inside that binary:
 
@@ -23,5 +24,3 @@ erlbutt's own dependencies, as conveyed inside that binary:
 | ranch | ISC |
 | enacl | MIT |
 | esqlite | Apache-2.0 |
-
-*(Full erlbutt source tarball accompanies each release, per GPLv2 §3.)*

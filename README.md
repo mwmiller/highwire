@@ -1,29 +1,38 @@
 # HighWire
 
 A local-first social network on **Secure Scuttlebutt** — Catenary's
-interface and idioms, speaking the real SSB network so it syncs with
+interface and idioms, speaking the real SSB network, so it syncs with
 Poncho Wonky, pubs, and every other SSB client.
 
-HighWire itself is MIT. The SSB engine is a local **erlbutt** node (a
-GPL-2.0 fork, one process per account) that HighWire drives over muxrpc
-on loopback — same pattern as Poncho Wonky's hidden sbot.
+HighWire itself is MIT. The SSB engine is a local **erlbutt** node — a
+GPL-2.0 fork, one process per account — that HighWire drives over muxrpc
+on loopback, the same pattern as Poncho Wonky's hidden sbot. HighWire
+never signs messages itself: publishing goes to erlbutt's `publish`
+method, which owns canonical JSON and signing.
 
-## Status
+## What it does
 
-Phase 0: skeleton boots; erlbutt interop spike in progress.
+- Posts, threads, likes, follows, profiles, private messages
+- Images and blobs, full-text search, channels
+- Pub onboarding via invites; LAN sync over `_ssb._tcp`
+- Multiple accounts (one erlbutt process each)
+- Fusion idioms: `highwire-oasis` peer discovery, per-peer subjectivity
+  preferences carried as follows/blocks with local display filters
 
-| Phase | What |
-|---|---|
-| 0 | Fresh repo from selected catenary pieces; erlbutt fork; interop spike |
-| 1 | Accounts (N erlbutt processes), **first-run full import of `~/.ssb`** (secret + flume log + all blobs), SSB read models, identity UI |
-| 2 | Publishing: posts, threads, likes, follows, profiles, DMs |
-| 3 | Networking: invites, pubs, `_ssb._tcp` LAN discovery |
-| 4 | Patchwork parity: images, search, channels |
-| 5 | Fusion idioms: highwire-oasis, subjectivity prefs |
-| 6 | Packaging, licensing, releases |
+## Data and identity
 
-Deferred: backgammon, the WASM app platform (both live on as later
-phases; their engines stay untouched in catenary meanwhile).
+Data lives in `~/.highwire` (override with `HIGHWIRE_HOME`) — **as the
+destination of a complete first-run import**. On first launch HighWire
+detects an existing `~/.ssb` (Poncho Wonky / Patchwork) and imports the
+whole object store: your secret, the entire flume `log.offset` history,
+and every blob. `~/.ssb` is never written to.
+
+After the cutover, retire (rename) the old client before HighWire
+publishes with that identity — per erlbutt's rule, two writers on one
+feed is a permanent fork.
+
+The engine connects to the mainnet SSB network
+(`1KHLiKZvAvjbY1ziZEHMXawbCEIM6qwjCDm3VYRan/s=`).
 
 ## Development
 
@@ -31,15 +40,6 @@ phases; their engines stay untouched in catenary meanwhile).
 mix setup          # deps
 mix phx.server     # http://127.0.0.1:14042
 ```
-
-Data lives in `~/.highwire` (override with `HIGHWIRE_HOME`) — **but only
-as the destination of a complete first-run import**. On first launch
-HighWire detects an existing `~/.ssb` (Poncho Wonky / Patchwork) and
-imports the whole object store: your secret, the entire flume
-`log.offset` history, and every blob. `~/.ssb` is never written to;
-retire (rename) the old client before HighWire starts publishing with
-that identity, per erlbutt's cutover rule — two writers on one feed is
-a permanent fork.
 
 ## License
 

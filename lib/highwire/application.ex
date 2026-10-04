@@ -11,8 +11,6 @@ defmodule HighWire.Application do
       HighWireWeb.Telemetry,
       {Phoenix.PubSub, name: HighWire.PubSub},
       HighWireWeb.Endpoint
-      # AccountSup (spawns/supervises one erlbutt node per account) and
-      # the SSB read-model workers arrive with Phase 1.
     ]
 
     opts = [strategy: :one_for_one, name: HighWire.Supervisor]
