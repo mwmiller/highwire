@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HighWire",
+  "version": "0.1.0",
+  "identifier": "net.zebrine.highwire",
+  "build": {
+    "beforeDevCommand": "",
+    "devUrl": "http://localhost:14042",
+    "beforeBuildCommand": "",
+    "frontendDist": "http://localhost:14042"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "HighWire",
+        "url": "http://localhost:14042",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "externalBin": ["binaries/highwire-backend"],
+    "icon": ["icons/icon.png", "icons/icon.icns"],
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    }
+  },
+  "plugins": {}
+}

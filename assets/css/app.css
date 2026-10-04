@@ -1,0 +1,250 @@
+/* This file is for your main application CSS */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scrollbar-gutter: stable;
+  }
+  /* Tailwind's dark: variant is media-based, so native widgets (scrollbars,
+     form controls, text selection, caret) must be told the same thing or
+     they stay light inside the dark UI. */
+  :root {
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+    }
+  }
+  /* Playground editor colours. Custom properties rather than Tailwind
+     utilities because CodeMirror paints its own DOM from a JS theme and can
+     only read what is already on the cascade — this is how the app's
+     media-based dark: variant reaches it. */
+  :root {
+    --ed-bg: #ffffff;
+    --ed-fg: #0f172a;
+    --ed-muted: #94a3b8;
+    --ed-caret: #0f172a;
+    --ed-gutter: #64748b;
+    --ed-selection: #fde68a99;
+    --ed-active: #f8fafc;
+    --ed-match: #fef3c7;
+    --ed-border: #e2e8f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ed-bg: #0f172a;
+      --ed-fg: #f1f5f9;
+      --ed-muted: #64748b;
+      --ed-caret: #f1f5f9;
+      --ed-gutter: #64748b;
+      --ed-selection: #f59e0b66;
+      --ed-active: #1e293b;
+      --ed-match: #78350f;
+      --ed-border: #334155;
+    }
+  }
+  h1 {
+    @apply text-2xl m-1;
+  }
+  h2 {
+    @apply text-xl m-1;
+  }
+  h3 {
+    @apply text-lg mb-1;
+  }
+  p {
+    @apply mt-1;
+    @apply p-1;
+  }
+  a {
+    @apply underline;
+  }
+  .author {
+    @apply decoration-dotted decoration-slate-800 dark:decoration-slate-200 underline-offset-2; 
+  }
+  ul {
+    @apply list-disc;
+    @apply list-inside;
+    @apply ml-4;
+  }
+  ol {
+    @apply list-decimal;
+    @apply list-inside;
+    @apply ml-4;
+  }
+  pre {
+    @apply p-3 text-sm my-6 overflow-auto;
+    @apply border rounded-sm border-slate-500 dark:border-slate-600;
+    @apply bg-slate-300 dark:bg-slate-700;
+  }
+  code {
+    @apply bg-slate-300 dark:bg-slate-700;
+  }
+  blockquote {
+    @apply border-l-2;
+    @apply pl-2;
+    @apply opacity-50;
+    @apply mb-2;
+  }
+  /* Index indicator strip: a quiet read-out, so the background is only a
+     whisper of a tint. The running pill's amber fill is meant to be the one
+     thing in here that pulls the eye; idle glyphs carry the rest. */
+  .index-strip {
+    @apply flex items-center gap-1 font-mono text-xs rounded-md px-1.5 py-0.5;
+    @apply bg-slate-100 dark:bg-slate-800/50;
+  }
+  .new-border {
+    @apply border border-dotted border-amber-500 dark:border-amber-400;
+  }
+  .tighter {
+    @apply m-0 p-0;
+  }
+  .content-wrap {
+    @apply overflow-y-auto max-h-screen m-2 px-2;
+  }
+  body {
+    scrollbar-gutter: stable;
+  }
+}
+
+@layer components {
+  /* Horizontally scrollable button strips (explorebar nav) scroll without
+     drawing a scrollbar, so the strip keeps its height in the sticky bar. */
+  .scrollbar-hide {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Icon-only navigation buttons (explorebar, timeline) */
+  .btn-icon {
+    @apply relative px-3 py-2 rounded-md text-lg leading-none transition-colors;
+    @apply hover:bg-slate-200 dark:hover:bg-slate-700;
+  }
+  .btn-icon:disabled {
+    @apply opacity-40 cursor-default hover:bg-transparent dark:hover:bg-transparent;
+  }
+  /* Explorebar button for the view currently on screen. Amber to match the
+     active tab treatment, but flat rather than filled so it reads as
+     "you are here". Fill only, no colour of its own: the "there is something
+     new" badge on the same button is a separate channel, so the two
+     highlights stay legible stacked instead of one overwriting the other. */
+  .btn-icon-current {
+    @apply bg-amber-100 dark:bg-amber-900/40;
+    @apply hover:bg-amber-200 dark:hover:bg-amber-900/60;
+  }
+  /* "There is something new here" badge, in a button's top corner. */
+  .btn-icon-badge {
+    @apply absolute top-1.5 right-2 w-1.5 h-1.5 rounded-full bg-amber-500;
+  }
+
+  /* Primary action buttons (post, submit, accept) */
+  .btn-primary {
+    @apply bg-amber-500 hover:bg-amber-400 active:bg-amber-600;
+    @apply dark:bg-amber-400 dark:hover:bg-amber-300 dark:active:bg-amber-500;
+    @apply text-slate-900 text-sm font-semibold;
+    @apply px-4 py-2 rounded-md shadow-sm transition-colors;
+  }
+
+  /* Secondary/outline action buttons (withdraw, cancel) */
+  .btn-secondary {
+    @apply border border-amber-500 text-amber-600 dark:text-amber-400;
+    @apply hover:bg-amber-500 hover:text-white;
+    @apply dark:hover:bg-amber-400 dark:hover:text-slate-900;
+    @apply text-sm font-semibold px-4 py-2 rounded-md transition-colors;
+  }
+
+  /* Ghost/subtle buttons (utility, mark shown) */
+  .btn-ghost {
+    @apply text-slate-600 dark:text-slate-400;
+    @apply hover:text-amber-600 dark:hover:text-amber-400;
+    @apply hover:bg-slate-100 dark:hover:bg-slate-800;
+    @apply text-sm px-3 py-1.5 rounded-md transition-colors;
+  }
+
+  /* Tab buttons within a group */
+  .btn-tab {
+    @apply text-sm font-semibold px-4 py-2 transition-colors;
+  }
+  .btn-tab-active {
+    @apply bg-amber-500 hover:bg-amber-400 text-slate-900;
+  }
+  .btn-tab-inactive {
+    @apply text-slate-500 dark:text-slate-400;
+    @apply hover:text-slate-700 dark:hover:text-slate-200;
+  }
+
+  /* Tab group container */
+  .tab-group {
+    @apply inline-flex rounded-lg border border-slate-200 dark:border-slate-700 p-0.5;
+    @apply bg-slate-50 dark:bg-slate-800/40;
+  }
+
+  /* Game action buttons (play, await, spectate) */
+  .btn-game-play {
+    @apply rounded-md bg-slate-800 hover:bg-slate-700 active:bg-slate-900;
+    @apply dark:bg-slate-200 dark:hover:bg-slate-100 dark:active:bg-slate-300;
+    @apply text-white dark:text-slate-900 text-sm font-semibold;
+    @apply px-3 py-1.5 shadow-sm transition-colors;
+  }
+  .btn-game-await {
+    @apply rounded-md border border-slate-400 dark:border-slate-600;
+    @apply text-slate-500 dark:text-slate-300 text-sm px-3 py-1.5 transition-colors;
+  }
+  .btn-game-spectate {
+    @apply rounded-md border border-slate-300 dark:border-slate-700;
+    @apply text-slate-600 dark:text-slate-400 text-sm px-3 py-1.5 transition-colors;
+    @apply hover:border-slate-500 dark:hover:border-slate-500;
+    @apply hover:text-slate-800 dark:hover:text-slate-200;
+  }
+
+  /* Danger buttons (drop, delete) */
+  .btn-danger {
+    @apply text-slate-600 dark:text-slate-400 transition-colors;
+    @apply hover:bg-red-100 hover:text-red-700;
+    @apply dark:hover:bg-red-900/40 dark:hover:text-red-400;
+    @apply px-3 py-1.5 rounded-md;
+  }
+
+  /* Utility buttons (export, import) */
+  .btn-util {
+    @apply text-slate-600 dark:text-slate-400 transition-colors;
+    @apply hover:bg-amber-100 hover:text-amber-700;
+    @apply dark:hover:bg-amber-900/40 dark:hover:text-amber-400;
+    @apply px-3 py-1.5 rounded-md;
+  }
+
+  /* Data maintenance buttons */
+  .btn-maintenance {
+    @apply border border-slate-300 dark:border-slate-600;
+    @apply text-sm text-slate-700 dark:text-slate-400 transition-colors;
+    @apply hover:bg-slate-100 dark:hover:bg-slate-800;
+    @apply px-4 py-2 rounded-md;
+  }
+}
+
+/* The playground's run pane while a .wasm file is over it. Outside the
+   layers on purpose: the pane's border utilities are layered, and this has
+   to win over them for as long as the file is there. */
+.run-pane-drop {
+  border-color: #94a3b8;
+}
+
+@media (prefers-color-scheme: dark) {
+  .run-pane-drop {
+    border-color: #64748b;
+  }
+}
+
+/* The rail's ⇥ is a file input kept out of sight with .sr-only, so its own
+   focus ring would be a sliver nobody can see. Ring the label instead: that
+   is what a keyboard user is actually pointed at. */
+#wasm-dropin:focus-within {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
