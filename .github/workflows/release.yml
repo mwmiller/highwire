@@ -80,6 +80,11 @@ jobs:
           Invoke-WebRequest -Uri "https://ziglang.org/download/$v/$zip" -OutFile $zip
           Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP\zig
           Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig"
+          # Burrito's pre_check requires xz next to zig; the runner
+          # image ships neither xz nor a Git-bash copy of it.
+          if (-not (Get-Command xz -ErrorAction SilentlyContinue)) {
+            choco install xz -y
+          }
 
       # Burrito compiles its C wrapper; enacl links -lsodium and Tauri
       # needs the WebKitGTK stack on Linux.
