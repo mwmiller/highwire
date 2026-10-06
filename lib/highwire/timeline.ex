@@ -206,14 +206,70 @@ defmodule HighWire.Timeline do
   `{:error, reason}` when the engine is unreachable or refused.
   """
   @spec publish(binary()) :: {:ok, binary() | nil} | {:error, term()}
-  def publish(text) when is_binary(text) do
+  def publish(text) when is_binary(text), do: publish_content(post_content(text))
+
+  @doc """
+  Publishes a reply. `root` is the thread's root message key; `branch`
+  is the parent message key (a root reply branches from the root
+  itself).
+  """
+  @spec reply(binary(), binary(), binary()) :: {:ok, binary() | nil} | {:error, term()}
+  def reply(root, branch, text)
+      when is_binary(root) and is_binary(branch) and is_binary(text) do
+    publish_content(reply_content(root, branch, text))
+  end
+
+  @doc """
+  Likes (`like/1`) or unlikes (`unlike/1`) a message by publishing a
+  vote. The content shape matches this network's production votes
+  (`{type, vote: {link, value, expression}}`), which is also what
+  erlbutt's likes view consumes; a non-positive value retracts.
+  """
+  @spec like(binary()) :: {:ok, binary() | nil} | {:error, term()}
+  def like(key) when is_binary(key), do: publish_content(vote_content(key, 1))
+
+  @spec unlike(binary()) :: {:ok, binary() | nil} | {:error, term()}
+  def unlike(key) when is_binary(key), do: publish_content(vote_content(key, 0))
+
+  @doc """
+  Follows (`follow/1`) or unfollows (`unfollow/1`) an identity by
+  publishing a contact message; the engine's social graph turns it
+  into a contacts-stateStream delta.
+  """
+  @spec follow(binary()) :: {:ok, binary() | nil} | {:error, term()}
+  def follow(id) when is_binary(id), do: publish_content(contact_content(id, true))
+
+  @spec unfollow(binary()) :: {:ok, binary() | nil} | {:error, term()}
+  def unfollow(id) when is_binary(id), do: publish_content(contact_content(id, false))
+
+  # -- publish content (pure; the RPC only serializes these maps) -------
+
+  @doc false
+  def post_content(text), do: %{"type" => "post", "text" => text}
+
+  @doc false
+  def reply_content(root, branch, text) do
+    %{"type" => "post", "text" => text, "root" => root, "branch" => branch}
+  end
+
+  @doc false
+  def vote_content(key, value) do
+    %{"type" => "vote", "vote" => %{"link" => key, "value" => value, "expression" => "like"}}
+  end
+
+  @doc false
+  def contact_content(id, following) do
+    %{"type" => "contact", "contact" => id, "following" => following}
+  end
+
+  defp publish_content(content) do
     case Process.whereis(__MODULE__) do
       nil ->
         {:error, :offline}
 
       pid ->
         try do
-          GenServer.call(pid, {:publish, text}, 12_000)
+          GenServer.call(pid, {:publish_content, content}, 12_000)
         catch
           :exit, _ -> {:error, :offline}
         end
@@ -226,6 +282,7 @@ defmodule HighWire.Timeline do
       messages: [],
       reply_counts: %{},
       like_counts: %{},
+      my_likes: [],
       index: %{},
       follows: [],
       self_id: nil,
@@ -244,6 +301,7 @@ defmodule HighWire.Timeline do
       client: nil,
       self_id: nil,
       contacts_ref: nil,
+      contacts_primed?: false,
       follows: [],
       pending: %{},
       acc: [],
@@ -306,11 +364,9 @@ defmodule HighWire.Timeline do
     {:reply, fetch_post(state, key), state}
   end
 
-  def handle_call({:publish, text}, _from, state) do
+  def handle_call({:publish_content, content}, _from, state) do
     with true <- is_pid(state.client),
          true <- Process.alive?(state.client) do
-      content = %{"type" => "post", "text" => text}
-
       case Client.call(state.client, ["publish"], [content], 10_000) do
         {:ok, %{"key" => key}} when is_binary(key) ->
           {:reply, {:ok, key}, reload_soon(state)}
@@ -677,11 +733,15 @@ defmodule HighWire.Timeline do
           Client.stream(
             state.client,
             ["patchwork", "contacts", "stateStream"],
-            [%{"feedId" => id}],
+            # live: keep the stream open for {contact => state}
+            # deltas — without it silkpurse sends the snapshot and
+            # ends, and follow/unfollow never reach the UI.
+            [%{"feedId" => id, "live" => true}],
             self()
           )
 
-        {:noreply, %{state | status: :loading, self_id: id, contacts_ref: ref}}
+        {:noreply,
+         %{state | status: :loading, self_id: id, contacts_ref: ref, contacts_primed?: false}}
 
       {:error, reason} ->
         Logger.warning("timeline: whoami failed: #{inspect(reason)}")
@@ -689,23 +749,56 @@ defmodule HighWire.Timeline do
     end
   end
 
-  # contacts snapshot arrived
+  # The contacts stream opens with the full {id => state} dict, then
+  # emits single-edge deltas ({contact => state}) as contact messages
+  # land (the stream is opened with live: true — without it silkpurse
+  # sends the snapshot and ends, and follow/unfollow never reach the
+  # UI). The first item therefore replaces the list wholesale and
+  # continues the boot sequence where stream :done used to; later items
+  # merge — true adds the edge, false or null drops it (unfollow or
+  # block). A delta means a follow changed, so reload to re-broadcast
+  # the payload promptly.
   def handle_info({Client, ref, {:item, graph}}, %{contacts_ref: ref} = state)
       when is_map(graph) do
-    others = for {id, true} <- graph, id != state.self_id, is_binary(id), do: id
+    first? = not state.contacts_primed?
+
+    others =
+      Enum.reduce(graph, if(first?, do: [], else: state.follows), fn
+        {id, true}, acc when is_binary(id) -> [id | acc]
+        {id, _state}, acc when is_binary(id) -> List.delete(acc, id)
+        _other, acc -> acc
+      end)
+
     # Your own feed is not in the contacts graph — pin it so your own
     # published messages always show up in the timeline.
     follows = if is_binary(state.self_id), do: Enum.uniq([state.self_id | others]), else: others
-    {:noreply, %{state | follows: follows}}
+    state = %{state | follows: follows, contacts_primed?: true}
+
+    if first? do
+      if follows == [] do
+        {:noreply, finalize(state)}
+      else
+        {:noreply, %{state | status: :loading, pending: open_feeds(state)}}
+      end
+    else
+      {:noreply, reload_soon(state)}
+    end
   end
 
   def handle_info({Client, ref, :done}, %{contacts_ref: ref} = state) do
-    state = %{state | contacts_ref: nil}
-
-    if state.follows == [] do
-      {:noreply, finalize(state)}
+    if state.contacts_primed? do
+      # A live stream never ends on its own — reconnect reopens it.
+      Logger.warning("timeline: contacts stream ended; reconnecting")
+      reconnect(state)
     else
-      {:noreply, %{state | status: :loading, pending: open_feeds(state)}}
+      # No item ever arrived (snapshot-only server): keep the old path.
+      state = %{state | contacts_ref: nil}
+
+      if state.follows == [] do
+        {:noreply, finalize(state)}
+      else
+        {:noreply, %{state | status: :loading, pending: open_feeds(state)}}
+      end
     end
   end
 
@@ -922,7 +1015,8 @@ defmodule HighWire.Timeline do
     acc = state.acc
 
     reply_counts = reply_counts(acc)
-    like_counts = like_counts(acc)
+    likes = likes_state(acc)
+    like_counts = like_counts(likes)
     index = author_index(acc)
 
     # Flat list (order-of-arrival view). Generous cap — the LiveView
@@ -957,6 +1051,7 @@ defmodule HighWire.Timeline do
       messages: messages,
       reply_counts: reply_counts,
       like_counts: like_counts,
+      my_likes: my_likes(likes, state.self_id),
       index: index,
       follows: state.follows,
       self_id: state.self_id,
@@ -1099,7 +1194,8 @@ defmodule HighWire.Timeline do
         build_entry(:thread, row_msg, activity, participants, replies, likes, recent,
           self_id: self_id,
           rooted: root_msg != nil,
-          mentioned?: mentioned?
+          mentioned?: mentioned?,
+          root_key: root_key
         )
       end)
 
@@ -1168,7 +1264,8 @@ defmodule HighWire.Timeline do
       recent: recent,
       self?: is_binary(self_id) and self_id in participants,
       mentioned?: Keyword.get(opts, :mentioned?, false),
-      rooted?: Keyword.fetch!(opts, :rooted)
+      rooted?: Keyword.fetch!(opts, :rooted),
+      root_key: Keyword.get(opts, :root_key)
     }
   end
 
@@ -1263,12 +1360,91 @@ defmodule HighWire.Timeline do
     |> Enum.frequencies_by(fn msg -> content(msg)["root"] end)
   end
 
-  defp like_counts(acc) do
-    acc
-    |> Enum.filter(fn msg ->
-      content(msg)["type"] == "vote" and is_binary(content(msg)["link"])
+  # Per-target like state: `%{target => %{author => {timestamp, value}}}`.
+  # The latest vote per author wins, so an unlike lands even though both
+  # messages sit in the window; a positive value likes and anything else
+  # retracts (silkpurse_likes' rule).
+  @doc false
+  def likes_state(acc) do
+    Enum.reduce(acc, %{}, &add_vote/2)
+  end
+
+  defp add_vote(msg, likes) do
+    c = content(msg)
+    author = msg["value"]["author"]
+    link = vote_link(c)
+
+    if c["type"] == "vote" and is_binary(link) and is_binary(author) do
+      put_vote(likes, link, author, vote_ts(msg), vote_value(c))
+    else
+      likes
+    end
+  end
+
+  defp put_vote(likes, link, author, ts, value) do
+    entry = {ts, value}
+    by_author = Map.get(likes, link, %{})
+
+    by_author =
+      case Map.get(by_author, author) do
+        {prev_ts, _prev} when prev_ts > ts -> by_author
+        _ -> Map.put(by_author, author, entry)
+      end
+
+    Map.put(likes, link, by_author)
+  end
+
+  @doc false
+  def like_counts(likes) do
+    Enum.reduce(likes, %{}, fn {link, by_author}, counts ->
+      n = Enum.count(by_author, fn {_author, {_ts, value}} -> is_number(value) and value > 0 end)
+      if n > 0, do: Map.put(counts, link, n), else: counts
     end)
-    |> Enum.frequencies_by(fn msg -> content(msg)["link"] end)
+  end
+
+  @doc false
+  def my_likes(likes, self_id) when is_binary(self_id) do
+    likes
+    |> Enum.filter(fn {_link, by_author} ->
+      case Map.get(by_author, self_id) do
+        {_ts, value} -> is_number(value) and value > 0
+        nil -> false
+      end
+    end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  def my_likes(_likes, _self_id), do: []
+
+  # Vote content appears in three shapes: this network's nested
+  # {type, vote: {link, value}}, the classic js-client
+  # {type, value: {link, value}}, and a flat {type, link}. Read all.
+  @doc false
+  def vote_link(c) do
+    cond do
+      is_map(c["vote"]) and is_binary(c["vote"]["link"]) -> c["vote"]["link"]
+      is_map(c["value"]) and is_binary(c["value"]["link"]) -> c["value"]["link"]
+      is_binary(c["link"]) -> c["link"]
+      true -> nil
+    end
+  end
+
+  defp vote_value(c) do
+    value =
+      cond do
+        is_map(c["vote"]) -> c["vote"]["value"]
+        is_map(c["value"]) -> c["value"]["value"]
+        true -> nil
+      end
+
+    if is_number(value), do: value, else: 1
+  end
+
+  defp vote_ts(msg) do
+    case msg["value"]["timestamp"] do
+      t when is_number(t) -> t
+      _ -> 0
+    end
   end
 
   # key → author for the whole pass, so vote rows can name their target.

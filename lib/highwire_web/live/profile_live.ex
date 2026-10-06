@@ -9,6 +9,8 @@ defmodule HighWireWeb.ProfileLive do
 
   use HighWireWeb, :live_view
 
+  require Logger
+
   alias HighWire.Avatar, as: Ident
   alias HighWire.Markdown
   alias HighWire.Timeline
@@ -28,6 +30,8 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:profile, nil)
      |> assign(:messages, [])
      |> assign(:resume, nil)
+     |> assign(:follows, [])
+     |> assign(:self_id, nil)
      |> assign(:more, false)}
   end
 
@@ -47,7 +51,12 @@ defmodule HighWireWeb.ProfileLive do
 
   @impl true
   def handle_info({Timeline, :updated, payload}, socket) do
-    {:noreply, assign(socket, blob_rev: Map.get(payload, :blob_rev, 0))}
+    {:noreply,
+     assign(socket,
+       blob_rev: Map.get(payload, :blob_rev, 0),
+       follows: Map.get(payload, :follows, socket.assigns.follows),
+       self_id: Map.get(payload, :self_id, socket.assigns.self_id)
+     )}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -73,6 +82,17 @@ defmodule HighWireWeb.ProfileLive do
     end
   end
 
+  def handle_event("toggle-follow", %{"id" => id}, socket) do
+    result = if id in socket.assigns.follows, do: Timeline.unfollow(id), else: Timeline.follow(id)
+
+    case result do
+      {:error, reason} -> Logger.warning("profile: follow publish failed: #{inspect(reason)}")
+      _ok -> :ok
+    end
+
+    {:noreply, socket}
+  end
+
   defp load(socket, id) do
     {status, payload} = Timeline.snapshot()
     %{rows: rows, resume: resume, more: more} = Timeline.profile_feed(id)
@@ -86,6 +106,8 @@ defmodule HighWireWeb.ProfileLive do
       messages: posts,
       resume: resume,
       more: more,
+      follows: Map.get(payload, :follows, []),
+      self_id: Map.get(payload, :self_id),
       blob_rev: Map.get(payload, :blob_rev, 0)
     )
   end
@@ -151,6 +173,16 @@ defmodule HighWireWeb.ProfileLive do
               </h1>
 
               <p class="mt-1 break-all font-mono text-xs text-dim">{@id}</p>
+
+              <button
+                :if={@id != @self_id and @status != :disabled}
+                type="button"
+                phx-click="toggle-follow"
+                phx-value-id={@id}
+                class={["btn mt-3", @id in @follows and "btn-primary"]}
+              >
+                {if @id in @follows, do: "Following", else: "Follow"}
+              </button>
 
               <div
                 :if={@profile && @profile.description}

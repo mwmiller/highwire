@@ -11,6 +11,8 @@ defmodule HighWireWeb.PostLive do
 
   use HighWireWeb, :live_view
 
+  require Logger
+
   alias HighWire.Avatar, as: Ident
   alias HighWire.Markdown
   alias HighWire.Timeline
@@ -30,7 +32,12 @@ defmodule HighWireWeb.PostLive do
        not_found: false,
        profiles: %{},
        like_counts: %{},
+       my_likes: [],
        self_id: nil,
+       status: :disabled,
+       raw_key: nil,
+       reply_body: "",
+       reply_error: nil,
        blob_rev: 0
      )}
   end
@@ -49,30 +56,98 @@ defmodule HighWireWeb.PostLive do
 
   @impl true
   def handle_info({Timeline, :updated, payload}, socket) do
-    {:noreply,
-     assign(socket,
-       blob_rev: Map.get(payload, :blob_rev, 0),
-       profiles: Map.get(payload, :profiles, socket.assigns.profiles)
-     )}
+    socket =
+      assign(socket,
+        blob_rev: Map.get(payload, :blob_rev, 0),
+        profiles: Map.get(payload, :profiles, socket.assigns.profiles),
+        like_counts: Map.get(payload, :like_counts, socket.assigns.like_counts),
+        my_likes: Map.get(payload, :my_likes, socket.assigns.my_likes),
+        self_id: Map.get(payload, :self_id, socket.assigns.self_id)
+      )
+
+    # Re-read the thread so a reply or like we just published appears
+    # without a navigation — fetch_post scans the in-memory window.
+    {:noreply, if(socket.assigns.raw_key, do: load(socket, socket.assigns.raw_key), else: socket)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   defp load(socket, raw_key) do
-    {_status, payload} = Timeline.snapshot()
+    {status, payload} = Timeline.snapshot()
     post = Timeline.post(raw_key)
 
     socket
     |> assign(
+      raw_key: raw_key,
+      status: status,
       root: post && post.root,
       replies: (post && post.replies) || [],
       not_found: post == nil,
       profiles: Map.get(payload, :profiles, %{}),
       like_counts: Map.get(payload, :like_counts, %{}),
+      my_likes: Map.get(payload, :my_likes, []),
       self_id: Map.get(payload, :self_id),
       blob_rev: Map.get(payload, :blob_rev, 0)
     )
   end
+
+  # -- events ------------------------------------------------------------
+
+  @impl true
+  def handle_event("reply-draft", %{"body" => body}, socket) do
+    {:noreply, assign(socket, reply_body: body)}
+  end
+
+  def handle_event("reply", _params, socket) do
+    root = socket.assigns.root
+    body = String.trim(socket.assigns.reply_body)
+
+    cond do
+      root == nil ->
+        {:noreply, socket}
+
+      body == "" ->
+        {:noreply, assign(socket, reply_error: "Nothing to reply.")}
+
+      socket.assigns.status == :disabled ->
+        {:noreply, assign(socket, reply_error: "SSB engine disabled in this configuration.")}
+
+      not is_binary(socket.assigns.self_id) ->
+        {:noreply, assign(socket, reply_error: "Not connected to the local SSB engine yet.")}
+
+      true ->
+        # A reply from this view answers the thread root; branch points
+        # at the same root (there is no per-reply addressing here).
+        case Timeline.reply(root["key"], root["key"], body) do
+          {:ok, _key} ->
+            {:noreply, assign(socket, reply_body: "", reply_error: nil)}
+
+          {:error, reason} ->
+            {:noreply, assign(socket, reply_error: reply_error(reason))}
+        end
+    end
+  end
+
+  def handle_event("like", %{"key" => key}, socket) do
+    result =
+      if key in socket.assigns.my_likes do
+        Timeline.unlike(key)
+      else
+        Timeline.like(key)
+      end
+
+    case result do
+      {:error, reason} -> Logger.warning("post: like publish failed: #{inspect(reason)}")
+      _ok -> :ok
+    end
+
+    {:noreply, socket}
+  end
+
+  defp reply_error(:offline), do: "Not connected to the local SSB engine yet."
+  defp reply_error(_reason), do: "Reply failed — the engine refused the message."
+
+  defp liked?(assigns, key), do: key in assigns.my_likes
 
   # -- message helpers (the timeline's, kept local as on the profile page) --
 
@@ -133,8 +208,9 @@ defmodule HighWireWeb.PostLive do
   @impl true
   def render(assigns) do
     likes = if assigns.root, do: Map.get(assigns.like_counts, assigns.root["key"], 0), else: 0
+    root_liked = is_map(assigns.root) and liked?(assigns, assigns.root["key"])
 
-    assigns = assign(assigns, likes: likes)
+    assigns = assign(assigns, likes: likes, root_liked: root_liked)
 
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
@@ -197,7 +273,18 @@ defmodule HighWireWeb.PostLive do
                     <span :if={length(@replies) > 0}>
                       {length(@replies)} {if length(@replies) == 1, do: "reply", else: "replies"}
                     </span>
-                    <span :if={@likes > 0}>❤ {@likes}</span>
+                    <button
+                      type="button"
+                      phx-click="like"
+                      phx-value-key={@root["key"]}
+                      class={[
+                        "flex items-center gap-1 transition-colors hover:text-paper",
+                        @root_liked and "font-medium text-accent"
+                      ]}
+                      title={if(@root_liked, do: "Unlike", else: "Like")}
+                    >
+                      ❤ <span :if={@likes > 0}>{@likes}</span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -250,12 +337,54 @@ defmodule HighWireWeb.PostLive do
                 <div :if={text(reply) != ""} class="md-body mt-1.5 text-sm text-ink">
                   {raw(Markdown.to_html(text(reply), blob_rev: @blob_rev))}
                 </div>
+
+                <div class="mt-1.5">
+                  <button
+                    type="button"
+                    phx-click="like"
+                    phx-value-key={reply["key"]}
+                    class={[
+                      "flex items-center gap-1 text-xs text-dim transition-colors hover:text-paper",
+                      reply["key"] in @my_likes and "font-medium text-accent"
+                    ]}
+                    title={if(reply["key"] in @my_likes, do: "Unlike", else: "Like")}
+                  >
+                    ❤
+                    <span :if={Map.get(@like_counts, reply["key"], 0) > 0}>
+                      {Map.get(@like_counts, reply["key"], 0)}
+                    </span>
+                  </button>
+                </div>
               </div>
             </div>
 
             <p :if={@replies == []} class="mt-6 text-sm italic text-faint">
               No replies in the local store.
             </p>
+
+            <form phx-submit="reply" class="mt-6 border-t border-edge pt-4">
+              <label for="reply-body" class="sr-only">Reply</label>
+              <textarea
+                id="reply-body"
+                name="body"
+                phx-change="reply-draft"
+                phx-debounce="300"
+                placeholder="Write a reply…"
+                rows="3"
+                class="w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
+              >{@reply_body}</textarea>
+              <p :if={@reply_error} role="alert" class="mt-1 text-xs text-bad">
+                {@reply_error}
+              </p>
+              <div class="mt-2 flex items-center justify-end gap-3">
+                <span :if={@self_id} class="mr-auto truncate text-xs text-faint">
+                  Replying as {display_name(@self_id, @profiles)}
+                </span>
+                <button type="submit" class="btn btn-primary" phx-disable-with="Replying…">
+                  Reply
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       </section>
