@@ -91,13 +91,20 @@ jobs:
         shell: pwsh
         run: |
           vcpkg install libsodium:x64-windows
-          Copy-Item C:\vcpkg\installed\x64\lib\sodium.lib C:\vcpkg\installed\x64\lib\libsodium.dll.a
-          Add-Content -Path $env:GITHUB_ENV -Value "LIB=C:\vcpkg\installed\x64\lib;$env:LIB"
-          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=C:\vcpkg\installed\x64\include;$env:INCLUDE"
+          Copy-Item C:\vcpkg\installed\x64-windows\lib\sodium.lib C:\vcpkg\installed\x64-windows\lib\libsodium.dll.a
+          Add-Content -Path $env:GITHUB_ENV -Value "LIB=C:\vcpkg\installed\x64-windows\lib;$env:LIB"
+          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=C:\vcpkg\installed\x64-windows\include;$env:INCLUDE"
 
       - name: system libraries (macOS)
         if: runner.os == 'macOS'
-        run: brew install libsodium
+        run: |
+          brew install libsodium
+          # Homebrew's libsodium sits outside clang's default search
+          # path, and enacl's port_env only adds -I/-L on FreeBSD and
+          # Solaris. Job-wide (GITHUB_ENV): the engine build and mix's
+          # own enacl dep both compile against it.
+          echo "CFLAGS=-I$(brew --prefix)/include ${CFLAGS:-}" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-L$(brew --prefix)/lib ${LDFLAGS:-}" >> "$GITHUB_ENV"
 
       - name: system libraries (Linux)
         if: runner.os == 'Linux'
@@ -119,10 +126,10 @@ jobs:
       #     binding-in-filter comprehension style); both are fatal
       #     under erlbutt's warnings_as_errors. Suppress the warning
       #     classes rather than patching a repo we clone as-is.
-      #   CFLAGS/LDFLAGS (macOS) — Homebrew's libsodium sits outside
-      #     clang's default search path, and enacl's port_env only
-      #     adds -I/-L on FreeBSD and Solaris. apt's Linux paths are
-      #     already default; Windows uses the vcpkg INCLUDE/LIB env.
+      #   CFLAGS/LDFLAGS (macOS) — exported job-wide by the system
+      #     libraries step above: Homebrew's libsodium is outside
+      #     clang's default search path. apt's Linux paths are already
+      #     default; Windows uses the vcpkg INCLUDE/LIB env.
       - name: Build and embed the erlbutt engine
         env:
           ERL_COMPILER_OPTIONS: '[nowarn_deprecated_catch, nowarn_export_var_subexpr]'
@@ -135,10 +142,6 @@ jobs:
           # the repo config still applies).
           export PATH="$(dirname "$(mise which erl)"):$PATH"
           git clone --depth 1 https://github.com/cmoid/erlbutt.git "$RUNNER_TEMP/erlbutt"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            export CFLAGS="-I$(brew --prefix)/include ${CFLAGS:-}"
-            export LDFLAGS="-L$(brew --prefix)/lib ${LDFLAGS:-}"
-          fi
           if [ "$RUNNER_OS" = "Windows" ]; then
             (cd "$RUNNER_TEMP/erlbutt" && ./rebar3 as prod release)
           else
