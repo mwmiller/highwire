@@ -91,22 +91,27 @@ jobs:
         shell: pwsh
         run: |
           vcpkg install libsodium:x64-windows
-          # The install root varies by image (vcpkg.exe location,
-          # VCPKG_INSTALLATION_ROOT) and the import lib has appeared
-          # under both sodium.lib and libsodium.lib — find it instead
-          # of guessing a path.
-          $roots = @('C:\vcpkg', $env:VCPKG_INSTALLATION_ROOT, (Split-Path (Get-Command vcpkg).Source)) |
-            Where-Object { $_ } | Select-Object -Unique
-          $lib = $roots |
-            ForEach-Object { Get-ChildItem -Path $_ -Recurse -Include sodium.lib, libsodium.lib -File -ErrorAction SilentlyContinue } |
-            Where-Object { $_.FullName -notmatch '\\debug\\' } |
+          # vcpkg guarantees installed/<triplet>/{lib,include}. A
+          # recursive search for the import lib can match a buildtrees
+          # artifact whose sibling include\ has no sodium.h — use the
+          # canonical prefix and verify the header is really there.
+          $prefix = @($env:VCPKG_INSTALLATION_ROOT, 'C:\vcpkg') |
+            Where-Object { $_ } | Select-Object -Unique |
+            ForEach-Object { Join-Path $_ 'installed\x64-windows' } |
+            Where-Object { Test-Path (Join-Path $_ 'include\sodium.h') } |
             Select-Object -First 1
-          if (-not $lib) { Write-Host "::error::sodium.lib not found under: $($roots -join ', ')"; exit 1 }
-          Write-Host "import lib: $($lib.FullName)"
-          Copy-Item $lib.FullName (Join-Path $lib.DirectoryName 'libsodium.dll.a')
-          $inc = Join-Path (Split-Path $lib.DirectoryName -Parent) 'include'
-          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$($lib.DirectoryName);$env:LIB"
-          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$inc;$env:INCLUDE"
+          if (-not $prefix) {
+            Write-Host "::error::vcpkg prefix with installed\x64-windows\include\sodium.h not found"
+            exit 1
+          }
+          $libdir = Join-Path $prefix 'lib'
+          $lib = @((Join-Path $libdir 'sodium.lib'), (Join-Path $libdir 'libsodium.lib')) |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $lib) { Write-Host "::error::sodium import lib not found under $libdir"; exit 1 }
+          Write-Host "import lib: $lib"
+          Copy-Item $lib (Join-Path $libdir 'libsodium.dll.a')
+          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$libdir;$env:LIB"
+          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$(Join-Path $prefix 'include');$env:INCLUDE"
 
       - name: system libraries (macOS)
         if: runner.os == 'macOS'
