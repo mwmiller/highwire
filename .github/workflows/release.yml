@@ -164,9 +164,15 @@ jobs:
             # bounded so a stall surfaces as a step failure with the
             # last phase marker visible in the log.
             export GIT_TERMINAL_PROMPT=0
-            # curl reaches hex.pm in milliseconds but rebar3's hex
-            # fetch stalls for the full bound — probe OTP's own DNS
-            # and run rebar3 verbosely to see where it stops.
+            # git-bash exports TMPDIR=/tmp (POSIX), which win32 file
+            # ops resolve root-relative (\tmp\...) — rebar3 then hangs
+            # 15m in its plugin-install temp move. Pin every temp var
+            # under the workspace so source and destination share a
+            # drive.
+            export TMP="$RUNNER_TEMP/tmp"
+            export TEMP="$TMP"
+            export TMPDIR="$TMP"
+            mkdir -p "$TMP"
             export HEX_HTTP_TIMEOUT=120
             echo "== phase: hex.pm probe =="
             curl -sS -IL --max-time 30 https://repo.hex.pm/tarballs/rebar3_auto-0.6.0.tar \
