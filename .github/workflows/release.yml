@@ -112,6 +112,14 @@ jobs:
           Copy-Item $lib (Join-Path $libdir 'libsodium.dll.a')
           Add-Content -Path $env:GITHUB_ENV -Value "LIB=$libdir;$env:LIB"
           Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$(Join-Path $prefix 'include');$env:INCLUDE"
+          # The port compiler runs gcc-style on this runner (its
+          # diagnostics are gcc's; MSVC would read INCLUDE and find
+          # the header) — give gcc the same -I/-L knobs the macOS
+          # step uses. Forward slashes: gcc on Windows wants them.
+          $incf = (Join-Path $prefix 'include') -replace '\\', '/'
+          $libf = $libdir -replace '\\', '/'
+          Add-Content -Path $env:GITHUB_ENV -Value "CFLAGS=-I$incf $env:CFLAGS"
+          Add-Content -Path $env:GITHUB_ENV -Value "LDFLAGS=-L$libf $env:LDFLAGS"
 
       - name: system libraries (macOS)
         if: runner.os == 'macOS'
