@@ -116,9 +116,14 @@ jobs:
           # diagnostics are gcc's; MSVC would read INCLUDE and find
           # the header) — give gcc the same -I/-L knobs the macOS
           # step uses. Forward slashes: gcc on Windows wants them.
+          # GCC 14+ also promotes legacy C constructs to errors
+          # (LLP64 size_t*/ulong*, C23 defaults) that the Linux/macOS
+          # toolchains still accept — keep the unmodified upstream
+          # sources compiling exactly as they do there.
           $incf = (Join-Path $prefix 'include') -replace '\\', '/'
           $libf = $libdir -replace '\\', '/'
-          Add-Content -Path $env:GITHUB_ENV -Value "CFLAGS=-I$incf $env:CFLAGS"
+          $legacy = '-std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-function-declaration -Wno-error=return-mismatch'
+          Add-Content -Path $env:GITHUB_ENV -Value "CFLAGS=-I$incf $legacy $env:CFLAGS"
           Add-Content -Path $env:GITHUB_ENV -Value "LDFLAGS=-L$libf $env:LDFLAGS"
 
       - name: system libraries (macOS)
