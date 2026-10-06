@@ -88,6 +88,7 @@ defmodule HighWire.SSB.Sidecar do
 
   def handle_info({:probe_result, {:attach, port}}, state) do
     Logger.info("sidecar: attached to existing erlbutt on 127.0.0.1:#{port}")
+    ensure_dialer(port)
     {:noreply, %{state | status: :ready, listen_port: port, attempts: 0}}
   end
 
@@ -112,6 +113,7 @@ defmodule HighWire.SSB.Sidecar do
         case String.trim(line) do
           "HW_SIDECAR_READY" ->
             Logger.info("sidecar: erlbutt ready on 127.0.0.1:#{st.listen_port}")
+            ensure_dialer(st.listen_port)
             %{st | status: :ready, attempts: 0}
 
           "HW_SIDECAR_FAIL" <> detail ->
@@ -228,6 +230,69 @@ defmodule HighWire.SSB.Sidecar do
   end
 
   defp os_alive?(_), do: false
+
+  # -- dialer --------------------------------------------------------------
+
+  # erlbutt ships with the peer dialer off, and neither spawning nor
+  # attaching flips it — without this the engine would gossip only from
+  # its static publish list and drift out of date. Best-effort owner RPC
+  # fired once the engine answers: an upstream build without the admin
+  # dialer API must not crash the sidecar (log at debug instead), and a
+  # slow or wedged engine must not stall the readiness transition.
+  defp ensure_dialer(port) do
+    spawn(fn ->
+      # Same reason the probe traps: Client.start_link links, and an
+      # SHS/init crash would otherwise kill this worker mid-flight.
+      Process.flag(:trap_exit, true)
+      dialer_enable(port)
+    end)
+  end
+
+  defp dialer_enable(port) do
+    result = dialer_rpc(port)
+
+    case result do
+      {:ok, _} -> Logger.info("sidecar: peer dialer enabled")
+      other -> Logger.debug("sidecar: dialer enable skipped: #{inspect(other)}")
+    end
+  end
+
+  defp dialer_rpc(port) do
+    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
+
+    try do
+      with true <- File.exists?(secret),
+           {:ok, client} <-
+             Client.start_link(
+               port: port,
+               remote_pk: Keys.load!(secret).public,
+               net_id: Base.decode64!(net_id()),
+               keys: Keys.load!(secret)
+             ) do
+        call =
+          try do
+            Client.call(client, ["admin", "dialer", "enable"], [], 3_000)
+          catch
+            kind, reason -> {:error, {kind, reason}}
+          end
+
+        _ =
+          try do
+            Client.stop(client)
+          catch
+            _, _ -> :ok
+          end
+
+        call
+      else
+        _ -> {:error, :unreachable}
+      end
+    rescue
+      e -> {:error, e}
+    catch
+      kind, reason -> {:error, {kind, reason}}
+    end
+  end
 
   defp retry(state) do
     attempts = state.attempts + 1
