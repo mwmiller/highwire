@@ -135,6 +135,70 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  describe "build_feed/4" do
+    # Thread factory: root nil → a rootless (own-key) post. Keys carry
+    # the .sha256 suffix msg_id?/1 requires of thread root references.
+    defp post(author, key, ts, root \\ nil) do
+      content = %{"type" => "post", "text" => "hi"}
+      content = if root, do: Map.put(content, "root", root), else: content
+      msg(author, key, ts, content)
+    end
+
+    test "root likes count once when the root sits in the window" do
+      root = post("@alice", "%root.sha256", 1_000)
+      reply = post("@bob", "%reply.sha256", 2_000, "%root.sha256")
+
+      assert [row] = Timeline.build_feed([root, reply], "@me", %{"%root.sha256" => 2}, 10_000)
+      assert row.likes == 2
+    end
+
+    test "mid-chain roots merge under the thread root" do
+      root = post("@alice", "%root.sha256", 1_000)
+      mid = post("@bob", "%mid.sha256", 2_000, "%root.sha256")
+      # a client that set root to its parent instead of the thread head
+      deep = post("@carol", "%deep.sha256", 3_000, "%mid.sha256")
+
+      assert [row] = Timeline.build_feed([root, mid, deep], "@me", %{}, 10_000)
+      assert row.root_key == "%root.sha256"
+      assert row.msg["key"] == "%root.sha256"
+      assert row.rooted?
+
+      # the raw root-key count only sees mid; the label counts both posts
+      assert row.replies == 2
+    end
+
+    test "a missing root never lets one message head two rows" do
+      mid = post("@alice", "%mid.sha256", 2_000, "%gone.sha256")
+      older = post("@bob", "%older.sha256", 1_500, "%gone.sha256")
+      deep = post("@carol", "%deep.sha256", 3_000, "%mid.sha256")
+
+      assert [row] = Timeline.build_feed([mid, older, deep], "@me", %{}, 10_000)
+      refute row.rooted?
+      assert row.root_key == "%gone.sha256"
+
+      # newest post heads the row, and never previews itself
+      assert row.msg["key"] == "%deep.sha256"
+      assert Enum.map(row.recent, & &1["key"]) == ["%mid.sha256", "%older.sha256"]
+      assert row.replies == 2
+    end
+
+    test "an in-window head is excluded from its own recent previews" do
+      root = post("@alice", "%root.sha256", 1_000)
+      reply = post("@bob", "%reply.sha256", 2_000, "%root.sha256")
+
+      assert [row] = Timeline.build_feed([root, reply], "@me", %{}, 10_000)
+      assert row.msg["key"] == "%root.sha256"
+      assert Enum.map(row.recent, & &1["key"]) == ["%reply.sha256"]
+    end
+
+    test "cyclic roots terminate instead of hanging" do
+      a = post("@alice", "%a.sha256", 1_000, "%b.sha256")
+      b = post("@bob", "%b.sha256", 2_000, "%a.sha256")
+
+      assert is_list(Timeline.build_feed([a, b], "@me", %{}, 10_000))
+    end
+  end
+
   describe "contacts stream items" do
     defp contacts_state(overrides \\ %{}) do
       Map.merge(

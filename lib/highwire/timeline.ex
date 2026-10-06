@@ -1027,7 +1027,7 @@ defmodule HighWire.Timeline do
       |> Enum.sort_by(&clamped_ts(&1, now), :desc)
       |> Enum.take(2000)
 
-    feed = build_feed(acc, state.self_id, reply_counts, like_counts, now)
+    feed = build_feed(acc, state.self_id, like_counts, now)
 
     # Suggestion rows need names/avatars too, or the sidebar shows bare
     # short ids for strangers — profile fetch covers them on top of the
@@ -1152,35 +1152,39 @@ defmodule HighWire.Timeline do
   # positioned at its latest bumping activity; votes never row/bump;
   # rootless posts are their own rows; contact messages collapse into
   # one row per author listing who they followed.
-  defp build_feed(acc, self_id, reply_counts, like_counts, now) do
+  @doc false
+  def build_feed(acc, self_id, like_counts, now) do
     # Boxed (encrypted) messages never form public rows — the Private tab
     # shows them decrypted, straight from privateFeed.
     acc = Enum.reject(acc, &boxed?/1)
 
     by_key = Map.new(acc, fn msg -> {msg["key"], msg} end)
     {contacts, rest} = Enum.split_with(acc, &contact?/1)
-    {threaded, standalone} = Enum.split_with(rest, &thread_root(&1))
+    {threaded, standalone} = Enum.split_with(rest, &(thread_root(&1, by_key) != nil))
 
     thread_entries =
       threaded
-      |> Enum.group_by(&thread_root/1)
+      |> Enum.group_by(&thread_root(&1, by_key))
       |> Enum.map(fn {root_key, group} ->
         root_msg = Map.get(by_key, root_key)
         sorted = Enum.sort_by(group, &clamped_ts(&1, now), :desc)
         row_msg = root_msg || hd(sorted)
 
+        # The head never previews itself; a fallback head (root absent
+        # from the window) is excluded too, else it greets its own row.
         recent =
           sorted
-          |> Enum.reject(&(&1["key"] == root_key))
+          |> Enum.reject(&(&1["key"] in [root_key, row_msg["key"]]))
           |> Enum.filter(&post?/1)
           |> Enum.take(3)
 
-        replies = Map.get(reply_counts, root_key, 0)
+        replies =
+          group
+          |> Enum.filter(&post?/1)
+          |> Enum.reject(&(&1["key"] == row_msg["key"]))
+          |> length()
 
-        likes =
-          Enum.reduce(group, Map.get(like_counts, root_key, 0), fn msg, acc_likes ->
-            acc_likes + Map.get(like_counts, msg["key"] || "", 0)
-          end)
+        likes = thread_likes(group, root_key, like_counts)
 
         activity = sorted |> Enum.map(&clamped_ts(&1, now)) |> Enum.max()
 
@@ -1324,14 +1328,35 @@ defmodule HighWire.Timeline do
   # row, never a standalone duplicate of its root), abouts → about when
   # it references a message. Votes are not grouped (they never become
   # rows); they only contribute like counts.
-  defp thread_root(msg) do
+  #
+  # Roots are chain-normalized: when only part of a conversation's chain
+  # is in the window, walk up through in-window post parents so every
+  # piece groups under one key — otherwise an intermediate parent heads
+  # its own row while the replies it spawned head another (the split
+  # conversations bug).
+  defp thread_root(msg, by_key) do
     c = content(msg)
 
     cond do
-      c["type"] == "post" and msg_id?(c["root"]) -> c["root"]
+      c["type"] == "post" and msg_id?(c["root"]) -> walk_root(c["root"], by_key)
       c["type"] == "post" and is_binary(msg["key"]) -> msg["key"]
       c["type"] == "about" and msg_id?(c["about"]) -> c["about"]
       true -> nil
+    end
+  end
+
+  # Bounded upward walk: posts only; stop at the first ancestor missing
+  # from the window (its further chain is unknowable here), at a
+  # non-post or rootless parent, on revisit, or at depth 32 so a cyclic
+  # or pathological chain can never hang the finalize pass.
+  defp walk_root(root, by_key, seen \\ MapSet.new(), depth \\ 0) do
+    parent = Map.get(by_key, root)
+
+    if parent != nil and post?(parent) and msg_id?(content(parent)["root"]) and
+         depth < 32 and not MapSet.member?(seen, root) do
+      walk_root(content(parent)["root"], by_key, MapSet.put(seen, root), depth + 1)
+    else
+      root
     end
   end
 
@@ -1358,6 +1383,19 @@ defmodule HighWire.Timeline do
     acc
     |> Enum.filter(fn msg -> post?(msg) and msg_id?(content(msg)["root"]) end)
     |> Enum.frequencies_by(fn msg -> content(msg)["root"] end)
+  end
+
+  # A row's like total: the seed already covers the root key, so the
+  # in-window root is skipped — re-adding it per member double-counted
+  # likes on every rooted row (the "likes exactly 2x" bug).
+  defp thread_likes(group, root_key, like_counts) do
+    Enum.reduce(group, Map.get(like_counts, root_key, 0), fn msg, acc ->
+      if msg["key"] == root_key do
+        acc
+      else
+        acc + Map.get(like_counts, msg["key"] || "", 0)
+      end
+    end)
   end
 
   # Per-target like state: `%{target => %{author => {timestamp, value}}}`.
