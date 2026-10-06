@@ -66,6 +66,7 @@ jobs:
         if: runner.os == 'Windows'
         with:
           version-file: .tool-versions
+          version-type: strict
 
       - uses: dtolnay/rust-toolchain@1.98.1
         if: runner.os == 'Windows'
@@ -126,6 +127,13 @@ jobs:
         env:
           ERL_COMPILER_OPTIONS: '[nowarn_deprecated_catch, nowarn_export_var_subexpr]'
         run: |
+          # mise's shims resolve tool versions by walking up from the
+          # CWD. The clone lives in $RUNNER_TEMP, outside this repo's
+          # .tool-versions, so rebar3's `#!/usr/bin/env escript` would
+          # die with "No version is set for shim". Put the real erlang
+          # bin ahead of the shims for this step (resolved here, where
+          # the repo config still applies).
+          export PATH="$(dirname "$(mise which erl)"):$PATH"
           git clone --depth 1 https://github.com/cmoid/erlbutt.git "$RUNNER_TEMP/erlbutt"
           if [ "$RUNNER_OS" = "macOS" ]; then
             export CFLAGS="-I$(brew --prefix)/include ${CFLAGS:-}"
