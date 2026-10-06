@@ -164,16 +164,20 @@ jobs:
             # bounded so a stall surfaces as a step failure with the
             # last phase marker visible in the log.
             export GIT_TERMINAL_PROMPT=0
-            # hex.pm reachability first: the stall we chase sits right
-            # after "Fetching rebar3_auto", so the probe separates a
-            # network fetch problem from a rebar3/plugin problem.
+            # curl reaches hex.pm in milliseconds but rebar3's hex
+            # fetch stalls for the full bound — probe OTP's own DNS
+            # and run rebar3 verbosely to see where it stops.
             export HEX_HTTP_TIMEOUT=120
             echo "== phase: hex.pm probe =="
             curl -sS -IL --max-time 30 https://repo.hex.pm/tarballs/rebar3_auto-0.6.0.tar \
               -w 'probe: code=%{http_code} time=%{time_total}s\n' -o /dev/null \
               || echo "== phase: hex.pm probe FAILED =="
+            echo "== phase: erlang dns probe =="
+            timeout 30 erl -noshell -eval \
+              'io:format("dns: ~p~n", [inet_res:lookup("repo.hex.pm", in, a)]), halt().' \
+              || echo "== phase: erlang dns probe FAILED =="
             echo "== phase: clone ok, starting rebar3 =="
-            (cd "$RUNNER_TEMP/erlbutt" && timeout 15m ./rebar3 as prod release)
+            (cd "$RUNNER_TEMP/erlbutt" && DEBUG=1 timeout 15m ./rebar3 as prod release)
             echo "== phase: rebar3 release done =="
           else
             make -C "$RUNNER_TEMP/erlbutt" prod
