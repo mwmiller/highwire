@@ -124,6 +124,21 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
 
+      # The job's default shell is Git bash, whose PATH rewriting lets
+      # rustc resolve the coreutils `link` in Git\usr\bin instead of the
+      # MSVC linker; pin cargo to the real linker by absolute path.
+      - name: Pin MSVC linker for cargo (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $link = Join-Path $env:VCToolsInstallDir 'bin\HostX64\x64\link.exe'
+          if (-not (Test-Path $link)) {
+            Write-Host "::error::MSVC link.exe not found at $link"
+            exit 1
+          }
+          Write-Host "cargo linker: $link"
+          Add-Content -Path $env:GITHUB_ENV -Value "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$link"
+
       - name: vcpkg libsodium (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -325,6 +340,7 @@ jobs:
 
       - name: Tauri build (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         working-directory: src-tauri
         run: tauri build --config tauri.windows.conf.json
 
