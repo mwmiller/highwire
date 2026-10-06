@@ -1,0 +1,219 @@
+name: Release
+
+# Tag push → three native builds (no cross-compiling: each runner builds
+# its own Burrito backend with BURRITO_TARGET, so the enacl NIF links
+# against the host), bundles the Tauri shell around it, and attaches the
+# installers to the GitHub release for that tag.
+#
+#   macos-14   → HighWire.app + .dmg      (backend: aarch64-apple-darwin)
+#   ubuntu-22.04 → .deb + .AppImage       (backend: x86_64-unknown-linux-gnu)
+#   windows-2022 → NSIS -setup.exe        (backend: x86_64-pc-windows-msvc)
+#
+# Known gaps to close before shipping: the erlbutt engine is not yet
+# embedded (sidecar needs `erl` on PATH + an erlbutt release dir), and
+# the Windows enacl build needs sodium.dll beside the backend at
+# runtime.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            burrito_target: macos
+            backend: highwire_macos
+            triple: aarch64-apple-darwin
+            sidecar: highwire-backend-aarch64-apple-darwin
+            tauri_conf: ""
+          - os: ubuntu-22.04
+            burrito_target: linux
+            backend: highwire_linux
+            triple: x86_64-unknown-linux-gnu
+            sidecar: highwire-backend-x86_64-unknown-linux-gnu
+            tauri_conf: tauri.linux.conf.json
+          - os: windows-2022
+            burrito_target: windows
+            backend: highwire_windows.exe
+            triple: x86_64-pc-windows-msvc
+            sidecar: highwire-backend-x86_64-pc-windows-msvc.exe
+            tauri_conf: tauri.windows.conf.json
+    runs-on: ${{ matrix.os }}
+    env:
+      MIX_ENV: prod
+      BURRITO_TARGET: ${{ matrix.burrito_target }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unix toolchain: every tool pinned in .tool-versions (elixir,
+      # erlang, rust, zig, node) in one step. mise has no Windows
+      # support — that job sets its toolchain up piecewise below.
+      - uses: jdx/mise-action@v2
+        if: runner.os != 'Windows'
+
+      - uses: erlef/setup-beam@v1
+        if: runner.os == 'Windows'
+        with:
+          version-file: .tool-versions
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+        if: runner.os == 'Windows'
+
+      - name: zig (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = "0.16.0"
+          $zip = "zig-x86_64-windows-$v.zip"
+          Invoke-WebRequest -Uri "https://ziglang.org/download/$v/$zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP\zig
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig"
+
+      # Burrito compiles its C wrapper; enacl links -lsodium and Tauri
+      # needs the WebKitGTK stack on Linux.
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+
+      - name: vcpkg libsodium (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          vcpkg install libsodium:x64-windows
+          Copy-Item C:\vcpkg\installed\x64\lib\sodium.lib C:\vcpkg\installed\x64\lib\libsodium.dll.a
+          Add-Content -Path $env:GITHUB_ENV -Value "LIB=C:\vcpkg\installed\x64\lib;$env:LIB"
+          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=C:\vcpkg\installed\x64\include;$env:INCLUDE"
+
+      - name: system libraries (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libsodium
+
+      - name: system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev libwebkit2gtk-4.1-dev \
+            libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      # The engine the sidecar spawns: erlbutt's prod release — its own
+      # ERTS (so the shipped app needs no system Erlang), the real
+      # network id, and native NIFs built for this runner's OS — into
+      # priv/. mix release snapshots priv, so it rides inside the
+      # Burrito wrapper; the release.yml runtime config points the
+      # sidecar at it. erlbutt is public, so a plain shallow clone.
+      - name: Build and embed the erlbutt engine
+        run: |
+          git clone --depth 1 https://github.com/cmoid/erlbutt.git "$RUNNER_TEMP/erlbutt"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            (cd "$RUNNER_TEMP/erlbutt" && ./rebar3 as prod release)
+          else
+            make -C "$RUNNER_TEMP/erlbutt" prod
+          fi
+          mkdir -p priv/erlbutt
+          cp -R "$RUNNER_TEMP/erlbutt/_build/prod/rel/ssb/." priv/erlbutt/
+          rm -rf priv/erlbutt/erl_crash.dump priv/erlbutt/log priv/erlbutt/log.offset
+
+      - run: mix local.hex --force && mix local.rebar --force
+      - run: mix deps.get
+
+      # Digested priv/static must exist in the release: the shell loads
+      # http://localhost:24042, which serves these assets.
+      - run: mix assets.deploy
+      - run: mix release highwire
+
+      # Tauri's externalBin requires the sidecar named after the target
+      # triple: binaries/<name>-<triple>[.exe].
+      - name: Place the backend as the Tauri sidecar
+        run: |
+          mkdir -p src-tauri/binaries
+          cp "burrito_out/${{ matrix.backend }}" \
+             "src-tauri/binaries/${{ matrix.sidecar }}"
+
+      # Notarization pipeline: decode the base64 .p12 into a dedicated
+      # keychain that stays on the search path (login keychain kept for
+      # the toolchain). The certificate password is regenerated in the
+      # same secret-set step as the cert, never echoed.
+      - name: Import signing certificate (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import "$RUNNER_TEMP/cert.p12" -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security list-keychains -d user -s build.keychain login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      # Tauri signs the .app bundle but not externalBin sidecars, so the
+      # burrito backend is signed separately — hardened runtime + secure
+      # timestamp are required for notarization to accept the bundle.
+      - name: Codesign the backend sidecar (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          codesign --force --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            "src-tauri/binaries/${{ matrix.sidecar }}"
+          codesign --verify --verbose=2 \
+            "src-tauri/binaries/${{ matrix.sidecar }}"
+
+      - run: npm install -g @tauri-apps/cli@2
+
+      # Tauri notarizes (staples) the dmg/app when these are present.
+      - name: Tauri build (macOS)
+        if: runner.os == 'macOS'
+        working-directory: src-tauri
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: tauri build
+
+      - name: Tauri build (Linux)
+        if: runner.os == 'Linux'
+        working-directory: src-tauri
+        run: tauri build --config tauri.linux.conf.json
+
+      - name: Tauri build (Windows)
+        if: runner.os == 'Windows'
+        working-directory: src-tauri
+        run: tauri build --config tauri.windows.conf.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.triple }}
+          path: src-tauri/target/release/bundle/**
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          generate_release_notes: true

@@ -5,12 +5,12 @@ defmodule HighWireWeb.LiveTest do
 
   describe "landing view" do
     test "GET / renders HighWire", %{conn: conn} do
-      conn = get(conn, "/")
+      conn = get(conn, "/about")
       assert html_response(conn, 200) =~ "HighWire"
     end
 
     test "live mount shows engine status and swallows menu events", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/")
+      {:ok, view, _html} = live(conn, "/about")
 
       assert render(view) =~ "erlbutt"
       assert render(view) =~ HighWire.home_dir()

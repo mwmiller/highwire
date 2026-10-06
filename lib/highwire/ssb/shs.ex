@@ -12,7 +12,13 @@ defmodule HighWire.SSB.SHS do
 
   @type keypair :: %{public: binary(), secret: binary()}
 
-  @spec handshake((binary() -> :ok), (non_neg_integer() -> binary()), binary(), binary(), keypair()) ::
+  @spec handshake(
+          (binary() -> :ok),
+          (non_neg_integer() -> binary()),
+          binary(),
+          binary(),
+          keypair()
+        ) ::
           {:ok, %{enc_key: binary(), enc_nonce: binary(), dec_key: binary(), dec_nonce: binary()}}
   def handshake(send!, recv!, remote_pk, net_id, %{public: our_pk, secret: our_sk}) do
     {eph_sk, hello, dec_nonce} = gen_hello(net_id)
@@ -22,28 +28,31 @@ defmodule HighWire.SSB.SHS do
     {serv_eph, enc_nonce} = check_hello!(server_hello, net_id)
 
     shared_ab = :enacl.curve25519_scalarmult(eph_sk, serv_eph)
-    shared_aB = :enacl.curve25519_scalarmult(eph_sk, to_curve_pk(remote_pk))
+    shared_aeph_bkey = :enacl.curve25519_scalarmult(eph_sk, to_curve_pk(remote_pk))
     sha_ab = :crypto.hash(:sha256, shared_ab)
 
     sig_a = :enacl.sign_detached(net_id <> remote_pk <> sha_ab, our_sk)
-    auth_key = :crypto.hash(:sha256, net_id <> shared_ab <> shared_aB)
+    auth_key = :crypto.hash(:sha256, net_id <> shared_ab <> shared_aeph_bkey)
     :ok = send!.(:enacl.secretbox(sig_a <> our_pk, @shs_nonce, auth_key))
 
-    shared_Ab =
+    shared_akey_beph =
       :enacl.curve25519_scalarmult(
         :enacl.crypto_sign_ed25519_secret_to_curve25519(our_sk),
         serv_eph
       )
 
     server_auth = recv!.(80)
-    resp_key = :crypto.hash(:sha256, net_id <> shared_ab <> shared_aB <> shared_Ab)
+    resp_key = :crypto.hash(:sha256, net_id <> shared_ab <> shared_aeph_bkey <> shared_akey_beph)
     sig_b = open!(server_auth, @shs_nonce, resp_key)
 
     true =
       :enacl.sign_verify_detached(sig_b, net_id <> sig_a <> our_pk <> sha_ab, remote_pk)
 
     session =
-      :crypto.hash(:sha256, :crypto.hash(:sha256, net_id <> shared_ab <> shared_aB <> shared_Ab))
+      :crypto.hash(
+        :sha256,
+        :crypto.hash(:sha256, net_id <> shared_ab <> shared_aeph_bkey <> shared_akey_beph)
+      )
 
     {:ok,
      %{
@@ -77,5 +86,6 @@ defmodule HighWire.SSB.SHS do
     end
   end
 
-  defp to_curve_pk(<<_::binary-size(32)>> = pk), do: :enacl.crypto_sign_ed25519_public_to_curve25519(pk)
+  defp to_curve_pk(<<_::binary-size(32)>> = pk),
+    do: :enacl.crypto_sign_ed25519_public_to_curve25519(pk)
 end

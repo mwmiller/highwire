@@ -32,8 +32,8 @@ fn kill_backend(pid: i32) {
 }
 
 // The Elixir (Burrito) backend serves the LiveView on this port.
-const BACKEND_URL: &str = "http://localhost:14042";
-const BACKEND_ADDR: &str = "127.0.0.1:14042";
+const BACKEND_URL: &str = "http://localhost:24042";
+const BACKEND_ADDR: &str = "127.0.0.1:24042";
 
 #[tauri::command]
 fn set_window_size(window: Window, width: f64, height: f64) {

@@ -211,7 +211,9 @@ defmodule HighWire.SSB.Client do
       {req, {:call, from}} ->
         _ = req
         GenServer.reply(from, {:error, reason})
-      {req, {:stream, sub}} -> send(sub, {__MODULE__, req, {:error, reason}})
+
+      {req, {:stream, sub}} ->
+        send(sub, {__MODULE__, req, {:error, reason}})
     end)
 
     %{state | calls: %{}}

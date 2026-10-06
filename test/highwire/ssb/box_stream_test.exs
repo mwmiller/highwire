@@ -48,6 +48,7 @@ defmodule HighWire.SSB.BoxStreamTest do
     {boxed, _} = BoxStream.box("payload", @nonce, key)
     <<a, rest::binary>> = boxed
     tampered = <<Bitwise.bxor(a, 1)>> <> rest
+
     assert_raise RuntimeError, ~r/authentication failed/, fn ->
       BoxStream.unbox(tampered, @nonce, key)
     end

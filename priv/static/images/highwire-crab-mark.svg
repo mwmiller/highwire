@@ -1,0 +1,138 @@
+<svg width="1024" height="1024" viewBox="200 15 740 740" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#0b1224"/>
+      <stop stop-color="#1e2f56"/>
+      <stop stop-color="#3b5f9e"/>
+      <stop stop-color="#7ea6e0"/>
+    </linearGradient>
+    <linearGradient id="wire" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#f1f5f9"/>
+      <stop stop-color="#94a3b8"/>
+      <stop stop-color="#475569"/>
+    </linearGradient>
+    <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#fb7185"/>
+      <stop stop-color="#e11d48"/>
+      <stop stop-color="#9f1239"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#fda4af"/>
+      <stop stop-color="#f43f5e"/>
+    </linearGradient>
+    <linearGradient id="cloud" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#f8fafc"/>
+      <stop stop-color="#cbd5e1"/>
+      <stop stop-color="#94a3b8"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#sky)"/>
+
+  <!-- stars -->
+  <g fill="#e2e8f0">
+    <circle cx="120" cy="90" r="4" opacity="0.9"/>
+    <circle cx="240" cy="150" r="3" opacity="0.6"/>
+    <circle cx="860" cy="90" r="4" opacity="0.8"/>
+    <circle cx="760" cy="170" r="3" opacity="0.5"/>
+    <circle cx="520" cy="70" r="3" opacity="0.7"/>
+    <circle cx="950" cy="220" r="3" opacity="0.5"/>
+    <circle cx="70" cy="240" r="3" opacity="0.5"/>
+    <circle cx="420" cy="140" r="2.5" opacity="0.5"/>
+  </g>
+
+  <!-- moon -->
+  <circle cx="866" cy="150" r="56" fill="#fde68a" opacity="0.95"/>
+  <circle cx="846" cy="136" r="12" fill="#fcd34d" opacity="0.7"/>
+  <circle cx="884" cy="168" r="9" fill="#fcd34d" opacity="0.7"/>
+
+  <!-- cloud sea below -->
+  <g>
+    <ellipse cx="140" cy="880" rx="260" ry="120" fill="url(#cloud)"/>
+    <ellipse cx="430" cy="930" rx="300" ry="140" fill="url(#cloud)"/>
+    <ellipse cx="760" cy="880" rx="300" ry="130" fill="url(#cloud)"/>
+    <ellipse cx="980" cy="940" rx="240" ry="120" fill="url(#cloud)"/>
+    <ellipse cx="270" cy="800" rx="190" ry="90" fill="#e2e8f0"/>
+    <ellipse cx="620" cy="820" rx="220" ry="95" fill="#e2e8f0"/>
+    <ellipse cx="880" cy="790" rx="160" ry="75" fill="#f1f5f9"/>
+    <ellipse cx="90" cy="780" rx="130" ry="65" fill="#f1f5f9"/>
+    <ellipse cx="460" cy="770" rx="150" ry="65" fill="#f8fafc"/>
+    <!-- cloud haze -->
+    <rect x="0" y="720" width="1024" height="60" fill="#e2e8f0" opacity="0.35"/>
+  </g>
+
+  <!-- the high wire above the clouds -->
+  <path d="M -20 520 Q 512 566 1044 520" fill="none" stroke="#0f172a" stroke-width="30" stroke-linecap="round" opacity="0.45"/>
+  <path d="M -20 514 Q 512 560 1044 514" fill="none" stroke="url(#wire)" stroke-width="20" stroke-linecap="round"/>
+  <path d="M -20 508 Q 512 554 1044 508" fill="none" stroke="#f8fafc" stroke-width="4.5" stroke-linecap="round" opacity="0.7"/>
+
+  <!-- the crab, walking right along the wire -->
+  <g transform="translate(500 0)">
+    <!-- back legs (behind body), feet planted on the wire -->
+    <g fill="none" stroke="#be123c" stroke-width="19" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M -130 430 L -185 480 L -170 524"/>
+      <path d="M -62 444 L -102 492 L -90 527"/>
+    </g>
+
+    <!-- spiral shell, carried on the back -->
+    <g transform="translate(-155 286) rotate(-12)">
+      <path d="M 140 100
+               C 140 28 86 -24 20 -24
+               C -52 -24 -110 32 -110 108
+               C -110 166 -72 204 -24 214
+               L 145 238
+               C 168 242 178 214 158 195
+               Z" fill="url(#shell)" stroke="#881337" stroke-width="13" stroke-linejoin="round"/>
+      <path d="M 38 -17 C -28 -5 -80 47 -80 108 C -80 156 -52 188 -14 199" fill="none" stroke="#fecdd3" stroke-width="15" stroke-linecap="round" opacity="0.85"/>
+      <path d="M 92 33 C 44 43 6 81 6 124 C 6 162 30 189 63 200" fill="none" stroke="#fecdd3" stroke-width="13" stroke-linecap="round" opacity="0.7"/>
+      <path d="M 145 238 C 168 242 178 214 158 195 L 58 181 C 72 214 110 236 145 238 Z" fill="#881337" opacity="0.85"/>
+    </g>
+
+    <!-- soft body -->
+    <path d="M -62 404 C -24 358 62 354 120 391 C 153 415 163 453 144 481 L -42 491 C -76 467 -85 429 -62 404 Z"
+          fill="url(#body)" stroke="#9f1239" stroke-width="13" stroke-linejoin="round"/>
+
+    <!-- front legs -->
+    <g fill="none" stroke="#be123c" stroke-width="19" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 64 444 L 108 494 L 100 526"/>
+      <path d="M 128 430 L 180 480 L 172 522"/>
+      <path d="M 16 444 L 26 496 L 18 527"/>
+    </g>
+
+    <!-- claws forward -->
+    <g fill="url(#body)" stroke="#9f1239" stroke-width="13" stroke-linejoin="round">
+      <path d="M 124 404 C 190 390 246 386 294 372
+               C 332 361 360 381 346 410
+               C 332 439 285 444 242 439
+               C 204 435 157 439 129 429 Z"/>
+      <path d="M 347 387 L 285 398" stroke="#0f172a" stroke-width="11" stroke-linecap="round" fill="none"/>
+      <path d="M 114 445 C 171 459 224 464 262 476
+               C 296 487 291 521 257 524
+               C 224 527 191 511 158 502
+               C 134 495 114 473 114 445 Z"/>
+      <path d="M 275 499 L 233 491" stroke="#0f172a" stroke-width="10" stroke-linecap="round" fill="none"/>
+    </g>
+
+    <!-- antennae + antennules, sprouting from the face, arcing through the air (behind the eyes) -->
+    <g fill="none" stroke="#fda4af" stroke-width="6" stroke-linecap="round" opacity="0.95">
+      <path d="M 122 375 C 116 320 130 275 170 248 C 215 222 275 215 335 218"/>
+      <path d="M 130 388 C 122 335 145 295 185 270 C 225 245 285 240 345 244"/>
+    </g>
+    <g fill="none" stroke="#fecdd3" stroke-width="5" stroke-linecap="round" opacity="0.9">
+      <path d="M 128 395 C 135 368 152 348 176 336"/>
+      <path d="M 138 404 C 149 384 168 371 192 364"/>
+    </g>
+
+    <!-- eye stalks -->
+    <g fill="none" stroke="#be123c" stroke-width="15" stroke-linecap="round">
+      <path d="M 112 388 C 128 350 142 332 154 318"/>
+      <path d="M 143 397 C 166 368 186 354 202 343"/>
+    </g>
+    <g>
+      <circle cx="158" cy="312" r="21" fill="#f8fafc" stroke="#9f1239" stroke-width="9"/>
+      <circle cx="164" cy="312" r="8.5" fill="#0f172a"/>
+      <circle cx="207" cy="337" r="21" fill="#f8fafc" stroke="#9f1239" stroke-width="9"/>
+      <circle cx="213" cy="337" r="8.5" fill="#0f172a"/>
+    </g>
+  </g>
+</svg>

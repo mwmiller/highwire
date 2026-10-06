@@ -5,9 +5,9 @@
   "identifier": "net.zebrine.highwire",
   "build": {
     "beforeDevCommand": "",
-    "devUrl": "http://localhost:14042",
+    "devUrl": "http://localhost:24042",
     "beforeBuildCommand": "",
-    "frontendDist": "http://localhost:14042"
+    "frontendDist": "http://localhost:24042"
   },
   "app": {
     "withGlobalTauri": true,
@@ -15,7 +15,7 @@
       {
         "label": "main",
         "title": "HighWire",
-        "url": "http://localhost:14042",
+        "url": "http://localhost:24042",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -30,7 +30,15 @@
     "active": true,
     "targets": ["app", "dmg"],
     "externalBin": ["binaries/highwire-backend"],
-    "icon": ["icons/icon.png", "icons/icon.icns"],
+    "icon": [
+      "icons/icon.png",
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "macOS": {
       "entitlements": "entitlements.plist"
     }

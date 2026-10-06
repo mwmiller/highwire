@@ -1,17 +1,50 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <meta charset="utf-8"/>
-    <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <meta name="csrf-token" content={Phoenix.Controller.get_csrf_token()}/>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="csrf-token" content={Phoenix.Controller.get_csrf_token()} />
     <.live_title suffix=" · Live">
-    <%= assigns[:page_title] || "HighWire" %>
+      {assigns[:page_title] || "HighWire"}
     </.live_title>
-    <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"}/>
-    <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}></script>
+    <script>
+      // Apply stored preferences before the first paint so switching or
+      // reloading never flashes the wrong theme or text settings.
+      (function () {
+        try {
+          var mode = localStorage.getItem("theme") || "dark";
+          var theme = mode;
+          if (mode === "system") {
+            theme = window.matchMedia("(prefers-color-scheme: light)").matches
+              ? "light"
+              : "dark";
+          }
+          document.documentElement.dataset.theme = theme;
+
+          var fontSize = localStorage.getItem("font-size");
+          if (fontSize) document.documentElement.style.fontSize = fontSize;
+
+          var fontFamily = localStorage.getItem("font-family");
+          if (fontFamily) document.documentElement.style.fontFamily = fontFamily;
+
+          document.documentElement.dataset.participating =
+            localStorage.getItem("participating") === "on" ? "on" : "off";
+          document.documentElement.dataset.spellcheck =
+            localStorage.getItem("spellcheck") === "off" ? "off" : "on";
+        } catch (e) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
+    <link rel="icon" type="image/svg+xml" href={~p"/images/highwire-crab-mark.svg"} />
+    <link rel="icon" href={~p"/favicon.ico"} />
+    <link rel="apple-touch-icon" href={~p"/images/apple-touch-icon.png"} />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
+    </script>
   </head>
-  <body class="m-6 bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-slate-100">
-    <%= @inner_content %>
+  <body class="m-0 bg-app text-ink">
+    {@inner_content}
   </body>
 </html>

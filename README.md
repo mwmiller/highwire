@@ -38,7 +38,7 @@ The engine connects to the mainnet SSB network
 
 ```sh
 mix setup          # deps
-mix phx.server     # http://127.0.0.1:14042
+mix phx.server     # http://127.0.0.1:24042
 ```
 
 ## License

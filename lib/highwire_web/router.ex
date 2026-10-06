@@ -17,7 +17,18 @@ defmodule HighWireWeb.Router do
   scope "/", HighWireWeb do
     pipe_through :browser
 
-    live("/", Live)
+    live("/", TimelineLive)
+    live("/about", Live)
+    live("/profile", ProfileLive)
+    live("/network", NetworkLive)
+    live("/settings", SettingsLive)
+    live("/post/:key", PostLive)
+  end
+
+  # Blobs are static bytes: no session, CSRF or format negotiation.
+  scope "/", HighWireWeb do
+    get "/blob/:key", BlobController, :show
+    get "/identicon/:key", BlobController, :ident
   end
 
   # Other scopes may use custom stacks.

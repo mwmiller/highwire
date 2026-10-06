@@ -78,7 +78,7 @@ defmodule HighWireWeb do
         endpoint: HighWireWeb.Endpoint,
         router: HighWireWeb.Router,
         as: :Routes,
-        statics: ~w(assets)
+        statics: ~w(assets fonts images favicon.ico robots.txt)
     end
   end
 
@@ -92,6 +92,9 @@ defmodule HighWireWeb do
     quote do
       # Import LiveView helpers (live_render, live_patch, <.form>, etc)
       import Phoenix.LiveView
+
+      # raw/1 and friends for trusted HTML (e.g. Markdown output)
+      import Phoenix.HTML
 
       # Routes generation with the ~p sigil
       unquote(verified_routes())

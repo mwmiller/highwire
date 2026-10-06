@@ -9,7 +9,7 @@ import Config
 config :highwire, HighWireWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}, port: 14042],
+  http: [ip: {127, 0, 0, 1}, port: 24042],
   http_options: [idle_timeout: 98947],
   check_origin: false,
   code_reloader: true,
@@ -65,3 +65,14 @@ config :phoenix, :stacktrace_depth, 20
 config :phoenix_live_view,
   debug_heex_annotations: true,
   debug_attributes: true
+
+# The erlbutt sidecar: spawned as an external process by
+# HighWire.SSB.Sidecar. Network id is the dev one (config/default.vars
+# in erlbutt), so this node can never reach the real network.
+config :highwire, :ssb,
+  enabled: true,
+  port: 8899,
+  erlbutt_rel: System.get_env("ERLBUTT_REL", "/Users/matt/git/erlbutt/_build/default/rel/ssb"),
+  net_id: "1KHLiKZvAvjbY1ziZEHMXawbCEIM6qwjCDm3VYnaR/s=",
+  max_feeds: 400,
+  messages_per_feed: 10

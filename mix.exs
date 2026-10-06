@@ -46,9 +46,10 @@ defmodule HighWire.MixProject do
   defp elixirc_paths(_), do: ["lib"]
 
   # Protocol deps (baby, baobab, quagga_def) and deferred-feature deps
-  # (watusi, cbor, mdex, scrypt_ex, excon, toml, tz) are intentionally
+  # (watusi, cbor, mdex, scrypt_ex, toml, tz) are intentionally
   # absent: HighWire speaks SSB via the erlbutt sidecar, and the app
-  # platform / backgammon import in later phases.
+  # platform / backgammon import in later phases.  excon is present:
+  # deterministic identicon images for feeds/blobs without an image.
   defp deps do
     [
       {:tidewave, "~> 0.9", only: [:dev]},
@@ -64,7 +65,10 @@ defmodule HighWire.MixProject do
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
-      {:enacl, git: "https://github.com/cmoid/enacl", ref: "3be2ed2e4ee1fdfbd73c04207c0b572fcde49720"},
+      {:excon, "~> 4.1"},
+      {:mdex, "~> 0.14.2"},
+      {:enacl,
+       git: "https://github.com/cmoid/enacl", ref: "3be2ed2e4ee1fdfbd73c04207c0b572fcde49720"},
       {:bandit, "~> 1.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]

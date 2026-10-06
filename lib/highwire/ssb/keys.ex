@@ -17,7 +17,9 @@ defmodule HighWire.SSB.Keys do
       path
       |> File.stream!()
       |> Stream.map(&String.trim_leading/1)
-      |> Stream.reject(&(String.trim(&1) == "" or String.starts_with?(&1, "#") or String.starts_with?(&1, "%")))
+      |> Stream.reject(
+        &(String.trim(&1) == "" or String.starts_with?(&1, "#") or String.starts_with?(&1, "%"))
+      )
       |> Enum.join()
       |> Jason.decode!()
 
