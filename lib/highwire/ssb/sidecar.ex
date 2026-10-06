@@ -42,7 +42,16 @@ defmodule HighWire.SSB.Sidecar do
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  def status, do: GenServer.call(__MODULE__, :status)
+  # The sidecar child is :temporary — a deliberate stop (engine surgery,
+  # refresh runs) leaves no process behind. Callers poll this during
+  # that window, so a missing process answers :down instead of taking
+  # them down with a noproc exit.
+  def status do
+    case Process.whereis(__MODULE__) do
+      nil -> :down
+      pid -> GenServer.call(pid, :status)
+    end
+  end
 
   defp config_port, do: Keyword.get(config(), :port, 8899)
 
