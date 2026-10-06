@@ -78,13 +78,46 @@ jobs:
           $v = "0.16.0"
           $zip = "zig-x86_64-windows-$v.zip"
           Invoke-WebRequest -Uri "https://ziglang.org/download/$v/$zip" -OutFile $zip
-          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP\zig
-          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig"
-          # Burrito's pre_check requires xz next to zig; the runner
-          # image ships neither xz nor a Git-bash copy of it.
+          $dest = Join-Path $env:RUNNER_TEMP 'zig'
+          Expand-Archive $zip -DestinationPath $dest
+          # The zip nests everything under zig-x86_64-windows-$v/ while
+          # we PATH $dest; Burrito finds zig with find_executable, so
+          # flatten the tree until zig.exe sits directly in $dest.
+          $nested = Join-Path $dest "zig-x86_64-windows-$v"
+          if (Test-Path (Join-Path $nested 'zig.exe')) {
+            Get-ChildItem $nested -Force | Move-Item -Destination $dest -Force
+          }
+          if (-not (Test-Path (Join-Path $dest 'zig.exe'))) {
+            Write-Host "::error::zig.exe not found after extraction"
+            Get-ChildItem $dest | Select-Object -First 20 Name
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $dest
+          # Burrito's pre_check requires xz on PATH; the image ships none.
           if (-not (Get-Command xz -ErrorAction SilentlyContinue)) {
             choco install xz -y
           }
+          if (-not (Get-Command xz -ErrorAction SilentlyContinue)) {
+            Write-Host "::error::xz still not on PATH after choco install"
+            exit 1
+          }
+          # Burrito packs the Windows release with 7z; the image has it
+          # under Program Files but off PATH.
+          if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
+            $p7 = 'C:\Program Files\7-Zip'
+            if (Test-Path (Join-Path $p7 '7z.exe')) {
+              Add-Content -Path $env:GITHUB_PATH -Value $p7
+            } else {
+              choco install 7zip -y
+            }
+          }
+          # GITHUB_PATH updates apply to later steps only; call zig by
+          # its real path here. Burrito also demands exactly 0.16.0.
+          & (Join-Path $dest 'zig.exe') version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          xz --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          exit 0
 
       # Burrito compiles its C wrapper; enacl links -lsodium and Tauri
       # needs the WebKitGTK stack on Linux.
