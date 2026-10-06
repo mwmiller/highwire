@@ -91,9 +91,22 @@ jobs:
         shell: pwsh
         run: |
           vcpkg install libsodium:x64-windows
-          Copy-Item C:\vcpkg\installed\x64-windows\lib\sodium.lib C:\vcpkg\installed\x64-windows\lib\libsodium.dll.a
-          Add-Content -Path $env:GITHUB_ENV -Value "LIB=C:\vcpkg\installed\x64-windows\lib;$env:LIB"
-          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=C:\vcpkg\installed\x64-windows\include;$env:INCLUDE"
+          # The install root varies by image (vcpkg.exe location,
+          # VCPKG_INSTALLATION_ROOT) and the import lib has appeared
+          # under both sodium.lib and libsodium.lib — find it instead
+          # of guessing a path.
+          $roots = @('C:\vcpkg', $env:VCPKG_INSTALLATION_ROOT, (Split-Path (Get-Command vcpkg).Source)) |
+            Where-Object { $_ } | Select-Object -Unique
+          $lib = $roots |
+            ForEach-Object { Get-ChildItem -Path $_ -Recurse -Include sodium.lib, libsodium.lib -File -ErrorAction SilentlyContinue } |
+            Where-Object { $_.FullName -notmatch '\\debug\\' } |
+            Select-Object -First 1
+          if (-not $lib) { Write-Host "::error::sodium.lib not found under: $($roots -join ', ')"; exit 1 }
+          Write-Host "import lib: $($lib.FullName)"
+          Copy-Item $lib.FullName (Join-Path $lib.DirectoryName 'libsodium.dll.a')
+          $inc = Join-Path (Split-Path $lib.DirectoryName -Parent) 'include'
+          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$($lib.DirectoryName);$env:LIB"
+          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$inc;$env:INCLUDE"
 
       - name: system libraries (macOS)
         if: runner.os == 'macOS'
