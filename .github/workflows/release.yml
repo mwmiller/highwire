@@ -124,7 +124,10 @@ jobs:
           $libf = $libdir -replace '\\', '/'
           $legacy = '-std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-function-declaration -Wno-error=return-mismatch'
           Add-Content -Path $env:GITHUB_ENV -Value "CFLAGS=-I$incf $legacy $env:CFLAGS"
-          Add-Content -Path $env:GITHUB_ENV -Value "LDFLAGS=-L$libf $env:LDFLAGS"
+          # enacl's port_env adds -lsodium only on Unix — put the lib
+          # on the mingw link line ourselves (the dll.a copy above is
+          # what ld's -lsodium resolves to).
+          Add-Content -Path $env:GITHUB_ENV -Value "LDFLAGS=-L$libf -lsodium $env:LDFLAGS"
 
       - name: system libraries (macOS)
         if: runner.os == 'macOS'
