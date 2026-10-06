@@ -9,10 +9,11 @@ name: Release
 #   ubuntu-22.04 → .deb + .AppImage       (backend: x86_64-unknown-linux-gnu)
 #   windows-2022 → NSIS -setup.exe        (backend: x86_64-pc-windows-msvc)
 #
-# Known gaps to close before shipping: the erlbutt engine is not yet
-# embedded (sidecar needs `erl` on PATH + an erlbutt release dir), and
-# the Windows enacl build needs sodium.dll beside the backend at
-# runtime.
+# Known gaps: the Windows enacl build needs sodium.dll beside the
+# backend at runtime (that job is expected to need more work). The
+# erlbutt engine IS embedded — this workflow builds its prod profile
+# with bundled ERTS into priv/erlbutt, and the sidecar prefers that
+# copy's own erts over any system Erlang.
 
 on:
   push:
@@ -109,10 +110,27 @@ jobs:
       # network id, and native NIFs built for this runner's OS — into
       # priv/. mix release snapshots priv, so it rides inside the
       # Burrito wrapper; the release.yml runtime config points the
-      # sidecar at it. erlbutt is public, so a plain shallow clone.
+      # sidecar at it. erlbutt is public, so a plain shallow clone —
+      # upstream is built UNMODIFIED. Two environment knobs only:
+      #
+      #   ERL_COMPILER_OPTIONS — OTP 29 deprecates the bare `catch`
+      #     idiom the codebase deliberately uses (and the old
+      #     binding-in-filter comprehension style); both are fatal
+      #     under erlbutt's warnings_as_errors. Suppress the warning
+      #     classes rather than patching a repo we clone as-is.
+      #   CFLAGS/LDFLAGS (macOS) — Homebrew's libsodium sits outside
+      #     clang's default search path, and enacl's port_env only
+      #     adds -I/-L on FreeBSD and Solaris. apt's Linux paths are
+      #     already default; Windows uses the vcpkg INCLUDE/LIB env.
       - name: Build and embed the erlbutt engine
+        env:
+          ERL_COMPILER_OPTIONS: '[nowarn_deprecated_catch, nowarn_export_var_subexpr]'
         run: |
           git clone --depth 1 https://github.com/cmoid/erlbutt.git "$RUNNER_TEMP/erlbutt"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            export CFLAGS="-I$(brew --prefix)/include ${CFLAGS:-}"
+            export LDFLAGS="-L$(brew --prefix)/lib ${LDFLAGS:-}"
+          fi
           if [ "$RUNNER_OS" = "Windows" ]; then
             (cd "$RUNNER_TEMP/erlbutt" && ./rebar3 as prod release)
           else

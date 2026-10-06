@@ -487,7 +487,18 @@ defmodule HighWire.Timeline do
     cursor = private_cursor(markers)
 
     %{
-      rows: Enum.map(rows, &Map.drop(&1, ["latestReplies", "bumps"])),
+      # Sorted here, not just requested: an engine that does not
+      # understand `order: "timestamp"` pages by thread activity, which
+      # interleaves a bumped thread above more recent posts. Every row
+      # carries the root timestamp either way, so the visible order is
+      # fixed regardless of what the engine did. The set is still the
+      # engine's window — this cannot recover a post that window
+      # dropped — but the two nearly coincide outside feeds where old
+      # threads stay busy.
+      rows:
+        rows
+        |> Enum.map(&Map.drop(&1, ["latestReplies", "bumps"]))
+        |> Enum.sort_by(& &1["timestamp"], :desc),
       resume: cursor,
       more: is_integer(cursor)
     }
