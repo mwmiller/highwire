@@ -295,3 +295,142 @@
 html[data-participating="off"] [data-pref-tab] {
   display: none;
 }
+
+/* Settings: the network combination lock. The LockDials hook gates the
+   shackle client-side until the boxes spell the combination; the server
+   only owns which network is engaged (data-lock-state), which swings
+   the shackle open. */
+@keyframes lock-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-4px);
+  }
+  40%,
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+@layer components {
+  .lock-char {
+    @apply h-9 w-7 cursor-text rounded border border-edge bg-input p-0 text-center font-mono text-sm text-paper outline-none;
+    box-shadow:
+      inset 0 6px 7px -7px rgb(0 0 0 / 0.7),
+      inset 0 -6px 7px -7px rgb(0 0 0 / 0.7);
+  }
+
+  .lock-char:focus {
+    border-color: rgb(255 255 255 / 0.45);
+  }
+
+  .lock-char[data-correct="true"] {
+    border-color: var(--dot-ok);
+    color: var(--ok-text);
+  }
+
+  .lock-char[data-correct="false"] {
+    border-color: var(--dot-bad);
+    color: var(--bad-text);
+  }
+}
+
+.lock-shackle {
+  transform-origin: 90% 100%;
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+[data-lock-state="open"] .lock-shackle {
+  transform: translateY(-6px) rotate(16deg);
+}
+
+.lock-body.lock-shaking {
+  animation: lock-shake 0.4s ease;
+}
+
+/* Complete combination: the whole area (label, key, caption) lights
+   green while the boxes spell it. Specificity beats the utility
+   colors on the inner <p>s. */
+#net-lock[data-combo-ok="true"] .lock-combo p {
+  color: var(--ok-text);
+}
+
+/* Hold-to-leave plate: a bar fills across the plate while it is held;
+   only a completed hold lets the click through the hook's gate. */
+.lock-leave {
+  position: relative;
+  overflow: hidden;
+}
+
+.lock-leave::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: rgb(255 255 255 / 0.16);
+  pointer-events: none;
+  transition: width 1.5s linear;
+}
+
+.lock-leave.holding::after {
+  width: 100%;
+}
+
+/* Narrow screens: one whole-key field with a mirror behind it painting
+   each character green/red and the rest a dim ghost. Left-aligned so
+   the typed prefix and the mirror share the same start. */
+.lock-key-wrap {
+  position: relative;
+}
+
+@layer components {
+  .lock-mirror {
+    @apply pointer-events-none absolute inset-0 flex items-center justify-start overflow-hidden whitespace-nowrap px-2 font-mono text-xs;
+  }
+
+  .lock-key-field {
+    @apply relative h-9 w-full rounded border border-edge bg-input px-2 text-left font-mono text-xs text-transparent outline-none;
+    caret-color: rgb(127 127 127);
+    box-shadow:
+      inset 0 6px 7px -7px rgb(0 0 0 / 0.7),
+      inset 0 -6px 7px -7px rgb(0 0 0 / 0.7);
+  }
+}
+
+.lock-mirror .ok {
+  color: var(--ok-text);
+}
+
+.lock-mirror .bad {
+  color: var(--bad-text);
+}
+
+.lock-mirror .todo {
+  color: rgb(127 127 127 / 0.55);
+}
+
+.lock-key-field:focus {
+  border-color: rgb(255 255 255 / 0.45);
+}
+
+.lock-key-field[data-correct="true"] {
+  border-color: var(--dot-ok);
+}
+
+.lock-key-field[data-correct="false"] {
+  border-color: var(--dot-bad);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lock-body.lock-shaking {
+    animation: none;
+    border-color: var(--dot-bad);
+  }
+
+  .lock-shackle {
+    transition: none;
+  }
+}

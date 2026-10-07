@@ -8,7 +8,16 @@ defmodule HighWire.SSB.NetworkTest do
   @mainnet "1KHLiKZvAvjbY1ziZEHMXawbCEIM6qwjCDm3VYRan/s="
 
   setup do
-    tmp = Path.join(System.tmp_dir!(), "hw-net-#{System.unique_integer([:positive])}")
+    # unique_integer restarts every VM boot, so the name must carry a
+    # run-scoped prefix — otherwise a later run's shuffle can land on a
+    # same-numbered leftover directory from an earlier run.
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "hw-net-#{System.system_time(:microsecond)}-#{System.unique_integer([:positive])}"
+      )
+
+    _ = File.rm_rf(tmp)
     previous = Application.get_env(:highwire, :application_dir)
     Application.put_env(:highwire, :application_dir, tmp)
 
