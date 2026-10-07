@@ -24,7 +24,7 @@ defmodule HighWire.SSB.Sidecar do
 
   require Logger
 
-  alias HighWire.SSB.{Client, Keys}
+  alias HighWire.SSB.{Client, Keys, Network}
 
   def config, do: Application.get_env(:highwire, :ssb, [])
 
@@ -38,7 +38,10 @@ defmodule HighWire.SSB.Sidecar do
     end
   end
 
-  def net_id, do: Keyword.get(config(), :net_id, "")
+  # The overrides file wins over dev.exs/runtime.exs: a network switch
+  # rewrites it, and every local client (probe, dialer RPC, timeline)
+  # must present the id the engine actually booted with.
+  def net_id, do: Network.current_id()
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -50,6 +53,118 @@ defmodule HighWire.SSB.Sidecar do
     case Process.whereis(__MODULE__) do
       nil -> :down
       pid -> GenServer.call(pid, :status)
+    end
+  end
+
+  @doc """
+  Switch the engine to another network profile: stop this sidecar and
+  the engine it owns, make sure nothing still holds the muxrpc port,
+  write the new network id into the engine's overrides file, and start
+  again. Returns once the new sidecar is up; the engine then boots
+  asynchronously and `status/0` moves `:starting → :ready`.
+
+  Refuses when the engine is disabled in this configuration, and rolls
+  the sidecar back if the old port cannot be freed — a leftover engine
+  still holding the store must never run beside its replacement.
+  """
+  @spec switch_network(Network.selectable()) :: :ok | {:error, term()}
+  def switch_network(profile) when profile in [:dev, :mainnet] do
+    cond do
+      not enabled?() ->
+        {:error, :disabled}
+
+      profile == Network.current() ->
+        :ok
+
+      true ->
+        with :ok <- stop_child(),
+             :ok <- ensure_port_free(),
+             :ok <- Network.set(profile),
+             {:ok, _pid} <- start_child() do
+          :ok
+        else
+          {:error, reason} ->
+            _ = start_child()
+            {:error, reason}
+        end
+    end
+  end
+
+  defp stop_child do
+    case Supervisor.terminate_child(HighWire.Supervisor, __MODULE__) do
+      :ok -> :ok
+      {:error, :not_found} -> :ok
+      other -> other
+    end
+  end
+
+  defp start_child do
+    case Supervisor.start_child(HighWire.Supervisor, child_spec([])) do
+      {:ok, _pid} = ok -> ok
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      other -> other
+    end
+  end
+
+  # Free the muxrpc port for the replacement engine. The pidfile engine
+  # is ours and always goes; a listener found on the port is only killed
+  # when it is an Erlang VM (a foreign process on the port just fails
+  # the switch — it is not ours to kill). The store must never see two
+  # writers, so a port that stays busy is an error, not a fallback.
+  defp ensure_port_free do
+    port = config_port()
+    _ = stop_pidfile_engine()
+    _ = stop_port_listener(port)
+
+    case await_closed(port, 50) do
+      :ok -> :ok
+      :timeout -> {:error, :port_busy}
+    end
+  end
+
+  defp stop_pidfile_engine do
+    case read_pidfile() do
+      %{"os_pid" => pid} when is_integer(pid) ->
+        System.cmd("kill", ["-TERM", to_string(pid)], stderr_to_stdout: true)
+        remove_pidfile(pid)
+
+      _none ->
+        :ok
+    end
+  end
+
+  defp stop_port_listener(port) do
+    cmd = ["-nP", "-iTCP:" <> to_string(port), "-sTCP:LISTEN", "-t"]
+
+    case System.cmd("lsof", cmd, stderr_to_stdout: true) do
+      {out, 0} ->
+        out
+        |> String.split()
+        |> Enum.filter(&beam?/1)
+        |> Enum.each(fn pid ->
+          System.cmd("kill", ["-TERM", pid], stderr_to_stdout: true)
+        end)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp beam?(pid) do
+    case System.cmd("ps", ["-p", pid, "-o", "comm="], stderr_to_stdout: true) do
+      {comm, 0} -> comm =~ "beam" or comm =~ "/erl"
+      _ -> false
+    end
+  end
+
+  defp await_closed(_port, 0), do: :timeout
+
+  defp await_closed(port, tries) do
+    if tcp_open?(port) do
+      Process.sleep(100)
+      await_closed(port, tries - 1)
+    else
+      :ok
     end
   end
 

@@ -1,9 +1,11 @@
 defmodule HighWireWeb.Components.Nav do
   @moduledoc """
   The shared left rail: the crab mark and application name (linking to
-  the timeline) with the settings gear beside it — and nothing else. Pages
-  add their own content to the rail through the default slot. Pages that
-  pass no content get a narrow mark-only rail instead of an empty column.
+  the timeline) with the settings gear beside it, and — pinned to the
+  bottom — the current network badge, which links to the network
+  section of settings. Pages add their own content to the rail through
+  the default slot. Pages that pass no content get a narrow
+  mark-only rail instead of an empty column.
   """
 
   use Phoenix.Component
@@ -12,6 +14,8 @@ defmodule HighWireWeb.Components.Nav do
     router: HighWireWeb.Router,
     endpoint: HighWireWeb.Endpoint,
     statics: ~w(assets fonts images favicon.ico robots.txt)
+
+  alias HighWire.SSB.Network
 
   @doc """
   Renders the rail frame. Anything given as content is placed below the
@@ -71,9 +75,26 @@ defmodule HighWireWeb.Components.Nav do
         <.gear />
       </.link>
       {render_slot(@inner_block)}
+      <.link
+        navigate="/settings"
+        title={"Network: #{Network.label(Network.current())} — click to change"}
+        aria-label="Network settings"
+        class={[
+          "mt-auto block border-t border-edge py-2 text-center text-[10px] font-medium uppercase",
+          "tracking-wide transition hover:text-paper",
+          Network.current() == :mainnet && "text-bad",
+          Network.current() != :mainnet && "text-dim"
+        ]}
+      >
+        {if @compact?, do: short_label(Network.current()), else: Network.label(Network.current())}
+      </.link>
     </aside>
     """
   end
+
+  defp short_label(:dev), do: "Dev"
+  defp short_label(:mainnet), do: "Main"
+  defp short_label(_other), do: "?"
 
   defp gear(assigns) do
     ~H"""

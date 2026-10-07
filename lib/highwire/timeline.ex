@@ -54,7 +54,7 @@ defmodule HighWire.Timeline do
   require Logger
 
   alias HighWire.Blob
-  alias HighWire.SSB.{Client, Keys, Sidecar}
+  alias HighWire.SSB.{Client, Keys, Network, Sidecar}
 
   @topic "timeline"
 
@@ -262,17 +262,24 @@ defmodule HighWire.Timeline do
     %{"type" => "contact", "contact" => id, "following" => following}
   end
 
+  # Single chokepoint for every outbound message (posts, replies, votes,
+  # follows): on mainnet the identity still has a second writer, so the
+  # whole publish surface refuses there until Patchwork is retired.
   defp publish_content(content) do
-    case Process.whereis(__MODULE__) do
-      nil ->
-        {:error, :offline}
+    if Network.publishable?() do
+      case Process.whereis(__MODULE__) do
+        nil ->
+          {:error, :offline}
 
-      pid ->
-        try do
-          GenServer.call(pid, {:publish_content, content}, 12_000)
-        catch
-          :exit, _ -> {:error, :offline}
-        end
+        pid ->
+          try do
+            GenServer.call(pid, {:publish_content, content}, 12_000)
+          catch
+            :exit, _ -> {:error, :offline}
+          end
+      end
+    else
+      {:error, :mainnet_read_only}
     end
   end
 

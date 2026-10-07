@@ -2,18 +2,25 @@ defmodule HighWireWeb.SettingsLive do
   @moduledoc """
   Application settings — Patchwork's settings page, packaged for the
   browser: colour scheme, font size, font family, the opt-in
-  "Participating" tab, spellchecking, and the version line.
+  "Participating" tab, spellchecking, the network selector, and the
+  version line.
 
-  Every preference is client-side: the value lives in `localStorage`
-  and is applied to `<html>` by the `Prefs` hook the moment a control
-  changes, with the root-layout script reapplying it before first paint
-  on the next load. The server only renders the controls; aria-pressed
-  and checkbox checked states mark the active choice in the DOM, so
-  they survive LiveView patches.
+  Appearance preferences are client-side: the value lives in
+  `localStorage` and is applied to `<html>` by the `Prefs` hook the
+  moment a control changes, with the root-layout script reapplying it
+  before first paint on the next load. The server only renders the
+  controls; aria-pressed and checkbox checked states mark the active
+  choice in the DOM, so they survive LiveView patches.
+
+  The Network section is server-side: switching rewrites the engine's
+  overrides file and restarts the erlbutt process, so the LiveView
+  tracks the switch asynchronously and polls the sidecar until the
+  engine answers again.
   """
 
   use HighWireWeb, :live_view
 
+  alias HighWire.SSB.{Network, Sidecar}
   alias HighWireWeb.Components.Nav
 
   @modes ["system", "light", "dark"]
@@ -46,9 +53,108 @@ defmodule HighWireWeb.SettingsLive do
        modes: @modes,
        font_sizes: @font_sizes,
        font_families: @font_families,
-       version: HighWire.version()
+       version: HighWire.version(),
+       network: Network.current(),
+       net_status: Sidecar.status(),
+       switching: false,
+       switch_notice: nil,
+       polls: 0
      )}
   end
+
+  @impl true
+  def handle_event("switch_network", %{"network" => want}, socket)
+      when want in ["dev", "mainnet"] do
+    profile = String.to_existing_atom(want)
+
+    if socket.assigns.switching or profile == socket.assigns.network do
+      {:noreply, socket}
+    else
+      parent = self()
+
+      Task.start(fn ->
+        result =
+          try do
+            Sidecar.switch_network(profile)
+          catch
+            kind, reason -> {:error, {kind, reason}}
+          end
+
+        send(parent, {:network_switch, result, profile})
+      end)
+
+      {:noreply,
+       assign(socket,
+         switching: true,
+         net_status: :starting,
+         switch_notice: "Switching to #{Network.label(profile)}…"
+       )}
+    end
+  end
+
+  def handle_event("switch_network", _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_info({:network_switch, :ok, profile}, socket) do
+    send(self(), :poll_net_status)
+
+    {:noreply,
+     assign(socket,
+       switching: false,
+       network: profile,
+       polls: 0,
+       switch_notice: "Switched to #{Network.label(profile)} — starting the engine…"
+     )}
+  end
+
+  def handle_info({:network_switch, {:error, reason}, _profile}, socket) do
+    {:noreply,
+     assign(socket,
+       switching: false,
+       network: Network.current(),
+       net_status: Sidecar.status(),
+       switch_notice: "Switch failed: #{switch_error(reason)}"
+     )}
+  end
+
+  def handle_info(:poll_net_status, socket) do
+    status = Sidecar.status()
+
+    cond do
+      status == :ready ->
+        {:noreply,
+         assign(socket,
+           net_status: :ready,
+           switch_notice: "Connected to #{Network.label(socket.assigns.network)}."
+         )}
+
+      socket.assigns.polls >= 60 ->
+        {:noreply,
+         assign(socket,
+           net_status: status,
+           switch_notice: "The engine has not come back yet — reload this page shortly."
+         )}
+
+      true ->
+        Process.send_after(self(), :poll_net_status, 1_000)
+        {:noreply, assign(socket, net_status: status, polls: socket.assigns.polls + 1)}
+    end
+  end
+
+  def handle_info(_other, socket), do: {:noreply, socket}
+
+  defp switch_error(:disabled), do: "the SSB engine is disabled in this configuration."
+
+  defp switch_error(:port_busy),
+    do: "the engine port is still in use — a leftover engine is holding it."
+
+  defp switch_error(reason), do: inspect(reason)
+
+  defp status_text(:ready), do: "connected"
+  defp status_text(:starting), do: "starting"
+  defp status_text(:down), do: "stopped"
+  defp status_text(:disabled), do: "disabled"
+  defp status_text(other), do: inspect(other)
 
   @impl true
   def render(assigns) do
@@ -59,6 +165,50 @@ defmodule HighWireWeb.SettingsLive do
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-10">
           <h1 class="text-xl font-bold text-paper">Settings</h1>
+
+          <h2 class="mt-6 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub">
+            Network
+          </h2>
+
+          <p class="mt-3 text-sm text-dim">
+            Which SSB network the local engine joins. Switching restarts the engine —
+            the timeline pauses for a few seconds while it boots.
+          </p>
+
+          <div class="mt-3 flex flex-wrap gap-3" role="group" aria-label="Network">
+            <button
+              :for={{profile, label} <- Network.profiles()}
+              type="button"
+              class="pref-choice"
+              phx-click="switch_network"
+              phx-value-network={profile}
+              aria-pressed={to_string(profile == @network)}
+              disabled={@switching}
+            >
+              {label}
+            </button>
+          </div>
+
+          <p class="mt-3 text-sm text-dim">
+            Network key: <span class="font-mono text-xs">{Network.current_id()}</span>
+          </p>
+
+          <p :if={@switch_notice} role="status" class="mt-3 text-sm text-dim">
+            {@switch_notice}
+          </p>
+
+          <p class="mt-3 text-sm text-dim">Engine: {status_text(@net_status)}</p>
+
+          <p :if={@network == :mainnet} class="mt-4 text-sm text-bad">
+            Connected to Mainnet: receiving and replicating from mainnet peers is active,
+            but posting, replying, liking and following are disabled while Patchwork still
+            publishes this identity — two writers would fork the feed.
+          </p>
+
+          <p :if={@network == :custom} class="mt-4 text-sm text-bad">
+            Unknown network id in overrides.cfg — posting is disabled. Choose a profile
+            above to continue.
+          </p>
 
           <div phx-hook="Prefs" id="prefs">
             <h2 class="mt-8 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub">
