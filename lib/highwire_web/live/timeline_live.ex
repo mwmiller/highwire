@@ -83,6 +83,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(active: true, peers_timer: peers_timer)
       |> maybe_load_page()
       |> merge_paged()
+      |> schedule_labels_tick()
 
     {:ok, socket}
   end
@@ -103,6 +104,21 @@ defmodule HighWireWeb.TimelineLive do
     else
       {:noreply, socket}
     end
+  end
+
+  # Relative labels age only when something re-renders, so tick a no-op
+  # assign while the tab is visible — otherwise "3m ago" freezes at the
+  # time of the last render. Hidden tabs skip the assign; the tab-active
+  # flip re-renders them the moment the tab comes back.
+  def handle_info(:labels_tick, socket) do
+    socket =
+      if socket.assigns.active do
+        assign(socket, :labels_tick, System.system_time(:millisecond))
+      else
+        socket
+      end
+
+    {:noreply, schedule_labels_tick(socket)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -222,6 +238,11 @@ defmodule HighWireWeb.TimelineLive do
 
   defp schedule_peers(socket) do
     assign(socket, :peers_timer, Process.send_after(self(), :peers_tick, 5_000))
+  end
+
+  defp schedule_labels_tick(socket) do
+    if connected?(socket), do: Process.send_after(self(), :labels_tick, 30_000)
+    socket
   end
 
   # The active tab's first page: fetched once the engine reports :ok,

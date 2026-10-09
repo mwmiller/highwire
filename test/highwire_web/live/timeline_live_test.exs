@@ -23,6 +23,16 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert render_hook(view, "tab-active", %{}) =~ "Timeline"
   end
 
+  test "the label tick re-renders so relative times keep aging", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    send(view.pid, :labels_tick)
+    assert render(view) =~ "Timeline"
+
+    state = :sys.get_state(view.pid)
+    assert is_integer(state.socket.assigns.labels_tick)
+  end
+
   test "about page still renders", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/about")
     assert html =~ "HighWire"
