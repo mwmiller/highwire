@@ -25,8 +25,6 @@ defmodule HighWireWeb.SettingsLive do
 
   @modes ["system", "light", "dark"]
 
-  @mainnet_key Network.id(:mainnet)
-
   @font_sizes [
     {"", "Default"},
     {"8px", "8px"},
@@ -53,7 +51,6 @@ defmodule HighWireWeb.SettingsLive do
      assign(socket,
        page_title: "Settings",
        modes: @modes,
-       lock_key: @mainnet_key,
        font_sizes: @font_sizes,
        font_families: @font_families,
        version: HighWire.version(),
@@ -182,135 +179,22 @@ defmodule HighWireWeb.SettingsLive do
           </p>
 
           <p class="mt-3 text-sm text-dim">
-            The network selector is a luggage lock, and the combination is the key itself —
-            printed below, the way a luggage tag prints it. Type the whole thing into the
-            boxes, click the shackle, and the engine reboots onto the real SSB mainnet; the
-            plate on the lock keeps score of which network you're on — and once the lock is
-            open it takes a deliberate hold to snap it shut.
+            HighWire starts on Mainnet. Switching rewrites the engine's overrides
+            file and restarts the local engine — feeds and blobs carry over either way.
           </p>
 
-          <div
-            id="net-lock"
-            class="mt-5 flex flex-col items-start"
-            role="group"
-            aria-label="Network combination lock"
-            phx-hook="LockDials"
-            data-combo={@lock_key}
-            data-lock-state={if(@network == :mainnet, do: "open", else: "closed")}
-          >
-            <div class="relative w-fit pt-10">
-              <button
-                type="button"
-                class="absolute left-1/2 top-0 -translate-x-1/2"
-                phx-click="switch_network"
-                phx-value-network="mainnet"
-                data-unlock
-                aria-pressed={to_string(@network == :mainnet)}
-                aria-label="Click the shackle onto Mainnet"
-                disabled={@switching}
-              >
-                <span class="lock-shackle block h-12 w-20 rounded-t-full border-[6px] border-b-0 border-paper"></span>
-              </button>
-
-              <div class="lock-body flex w-[min(26rem,calc(100vw-6rem))] flex-col items-center gap-2 rounded-md border border-edge bg-raised px-4 py-3 shadow md:w-fit">
-                <div
-                  class="hidden max-w-[26rem] flex-wrap gap-x-2 gap-y-1.5 md:flex"
-                  role="group"
-                  aria-label="Type the whole mainnet network key"
-                >
-                  <div :for={g <- 0..10} class="flex gap-1">
-                    <input
-                      :for={o <- 0..3}
-                      type="text"
-                      class="lock-char"
-                      data-idx={g * 4 + o}
-                      data-value={
-                        if(@network == :mainnet, do: String.at(@lock_key, g * 4 + o), else: "")
-                      }
-                      value={if(@network == :mainnet, do: String.at(@lock_key, g * 4 + o), else: "")}
-                      maxlength="1"
-                      autocomplete="off"
-                      spellcheck="false"
-                      tabindex={if(g == 0 and o == 0, do: "0", else: "-1")}
-                      aria-label={"Key character #{g * 4 + o + 1} of #{String.length(@lock_key)}"}
-                    />
-                  </div>
-                </div>
-                <div class="lock-key-wrap w-full md:hidden">
-                  <span class="lock-mirror" aria-hidden="true"></span>
-                  <input
-                    type="text"
-                    class="lock-key-field"
-                    data-value={if(@network == :mainnet, do: @lock_key, else: "")}
-                    value={if(@network == :mainnet, do: @lock_key, else: "")}
-                    maxlength={String.length(@lock_key)}
-                    autocomplete="off"
-                    spellcheck="false"
-                    aria-label="The whole mainnet network key"
-                  />
-                </div>
-                <p class="text-[10px] uppercase tracking-[0.3em] text-faint" aria-hidden="true">
-                  type the whole key
-                </p>
-                <div aria-hidden="true">
-                  <div class="mx-auto h-3 w-3 rounded-full bg-faint"></div>
-                  <div class="mx-auto h-2 w-[3px] bg-faint"></div>
-                </div>
-
-                <button
-                  type="button"
-                  class="pref-choice lock-leave mt-1 w-full px-2 text-center text-xs"
-                  phx-click="switch_network"
-                  phx-value-network="dev"
-                  aria-pressed={to_string(@network == :dev)}
-                  title={
-                    if(@network == :mainnet,
-                      do: "Press and hold to leave the Mainnet",
-                      else: "Already on Development"
-                    )
-                  }
-                  data-leave="true"
-                  disabled={@switching}
-                >
-                  {if @network == :mainnet,
-                    do: "Hold to snap shut — Development",
-                    else: "Locked: Development"}
-                </button>
-              </div>
-            </div>
-
-            <p
-              id="net-lock-status"
-              class="mt-2 min-h-[1rem] text-xs text-dim"
-              role="status"
-              aria-live="polite"
+          <div class="mt-4 flex flex-wrap gap-3" role="group" aria-label="Network">
+            <button
+              :for={{key, label} <- Network.profiles()}
+              type="button"
+              class="pref-choice"
+              phx-click="switch_network"
+              phx-value-network={to_string(key)}
+              aria-pressed={to_string(@network == key)}
+              disabled={@switching}
             >
-            </p>
-
-            <div class="lock-combo mt-4 flex flex-col items-start gap-1 transition-colors duration-200">
-              <p class="text-xs uppercase tracking-widest text-faint">The combination</p>
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  class="select-all break-all text-left font-mono text-sm text-paper"
-                  data-fill="true"
-                  title="Fill the lock boxes with the mainnet key"
-                >
-                  {Network.id(:mainnet)}
-                </button>
-                <button
-                  type="button"
-                  class="shrink-0 text-xs text-faint transition hover:text-paper"
-                  data-copy="true"
-                >
-                  Copy
-                </button>
-              </div>
-              <p class="max-w-md text-xs text-dim">
-                Type or paste the whole mainnet key into the boxes — green characters agree,
-                red ones vary. Click the shackle when it's all green.
-              </p>
-            </div>
+              {label}
+            </button>
           </div>
 
           <p :if={@switch_notice} role="status" class="mt-3 text-sm text-dim">
@@ -328,7 +212,7 @@ defmodule HighWireWeb.SettingsLive do
           <p :if={@network == :custom} class="mt-4 text-sm text-bad">
             Unknown network id in overrides.cfg
             (<span class="font-mono text-xs">{Network.current_id()}</span>) — posting is
-            disabled. Snap the lock shut for Development to continue.
+            disabled. Switch to Development to continue.
           </p>
 
           <div phx-hook="Prefs" id="prefs">

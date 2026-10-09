@@ -123,6 +123,34 @@ defmodule HighWire.SSB.Network do
     end
   end
 
+  @doc """
+  First boot: while no overrides file selects a network, seed it from
+  the configured startup default — the app env's `net_id`, falling back
+  to the development id. The engine reads the same file, so this keeps
+  engine and local clients on one network from the very first spawn;
+  later switches rewrite the file as before.
+  """
+  @spec ensure_default() :: :ok | {:error, term()}
+  def ensure_default do
+    if overrides_network_id() == nil do
+      seed(current())
+    else
+      :ok
+    end
+  end
+
+  defp seed(profile) when profile in [:dev, :mainnet] do
+    case set(profile) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("network: could not seed overrides.cfg: #{inspect(reason)}")
+    end
+  end
+
+  defp seed(_unknown), do: :ok
+
   @spec path() :: String.t()
   def path, do: Path.join([HighWire.home_dir(), ".ssberl", "overrides.cfg"])
 

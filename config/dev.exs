@@ -67,12 +67,14 @@ config :phoenix_live_view,
   debug_attributes: true
 
 # The erlbutt sidecar: spawned as an external process by
-# HighWire.SSB.Sidecar. Network id is the dev one (config/default.vars
-# in erlbutt), so this node can never reach the real network.
+# HighWire.SSB.Sidecar. Startup network is Mainnet (the packaged app's
+# network too); Development is a switch away in Settings. On a fresh
+# machine Sidecar seeds .ssberl/overrides.cfg from this id so the engine
+# and the local clients always boot on the same network.
 config :highwire, :ssb,
   enabled: true,
   port: 8899,
   erlbutt_rel: System.get_env("ERLBUTT_REL", "/Users/matt/git/erlbutt/_build/default/rel/ssb"),
-  net_id: "1KHLiKZvAvjbY1ziZEHMXawbCEIM6qwjCDm3VYnaR/s=",
+  net_id: "1KHLiKZvAvjbY1ziZEHMXawbCEIM6qwjCDm3VYRan/s=",
   max_feeds: 400,
   messages_per_feed: 10

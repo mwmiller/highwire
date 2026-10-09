@@ -164,19 +164,38 @@ defmodule HighWire.Timeline do
           resume: integer() | nil,
           more: boolean()
         }
-  def private_feed(resume \\ nil) do
+  def private_feed(resume \\ nil), do: feed(:private, resume)
+
+  @doc """
+  One page of a timeline feed tab: the engine's paged thread-root view
+  for the tab — `patchwork.<Feed>.roots`, newest activity first — so
+  every tab pages without bound. Views: `:public`, `:private`,
+  `:participating`, `:profile` (this account's roots) and `:mentions`.
+
+  `resume` is the cursor from the previous page's marker. Returns
+  `%{rows, resume, more}`; rows are shaped like feed rows.
+  """
+  @spec feed(:public | :private | :participating | :profile | :mentions, integer() | nil) :: %{
+          rows: [map()],
+          resume: integer() | nil,
+          more: boolean()
+        }
+  def feed(view, resume \\ nil)
+      when view in [:public, :private, :participating, :profile, :mentions] do
     case Process.whereis(__MODULE__) do
       nil ->
-        %{rows: [], resume: nil, more: false}
+        empty_page()
 
       pid ->
         try do
-          GenServer.call(pid, {:private_feed, resume}, 15_000)
+          GenServer.call(pid, {:feed, view, resume}, 15_000)
         catch
-          :exit, _ -> %{rows: [], resume: nil, more: false}
+          :exit, _ -> empty_page()
         end
     end
   end
+
+  defp empty_page, do: %{rows: [], resume: nil, more: false}
 
   @doc """
   One message with its full thread, for the post viewer: the root
@@ -363,8 +382,8 @@ defmodule HighWire.Timeline do
     {:reply, fetch_profile(state, id, resume), state}
   end
 
-  def handle_call({:private_feed, resume}, _from, state) do
-    {:reply, fetch_private(state, resume), state}
+  def handle_call({:feed, view, resume}, _from, state) do
+    {:reply, fetch_view(state, view, resume), state}
   end
 
   def handle_call({:post, key}, _from, state) do
@@ -567,43 +586,68 @@ defmodule HighWire.Timeline do
     }
   end
 
-  # -- private feed --------------------------------------------------------
+  # -- paged feed tabs -----------------------------------------------------
 
-  # One patchwork.privateFeed.roots page, drained here like
-  # fetch_history. The trailing {marker, resume} frame (only sent on a
-  # full page) carries the integer cursor for the next one.
-  defp fetch_private(state, resume) do
-    props = %{"limit" => 30, "reverse" => true}
+  # The engine view behind each tab. Every tab is a thread-root scope in
+  # the engine (publicFeed, participatingFeed, mentionsFeed, profile,
+  # privateFeed) paged by the same resume marker, so the UI never runs
+  # out of feed; `profile` targets this account's own roots.
+  defp fetch_view(state, :public, resume),
+    do: fetch_roots(state, "publicFeed", %{}, resume, false)
+
+  defp fetch_view(state, :participating, resume),
+    do: fetch_roots(state, "participatingFeed", %{}, resume, false)
+
+  defp fetch_view(state, :mentions, resume),
+    do: fetch_roots(state, "mentionsFeed", %{}, resume, false)
+
+  defp fetch_view(state, :private, resume),
+    do: fetch_roots(state, "privateFeed", %{}, resume, true)
+
+  defp fetch_view(%{self_id: id} = state, :profile, resume) when is_binary(id),
+    do: fetch_roots(state, "profile", %{"id" => id}, resume, false)
+
+  defp fetch_view(_state, :profile, _resume), do: empty_page()
+
+  # One patchwork.<Feed>.roots page, drained here like fetch_history.
+  # The trailing {marker, resume} frame (only sent on a full page)
+  # carries the integer cursor for the next one. Rows are shaped like
+  # feed rows; private items arrive freshly decrypted from the view.
+  defp fetch_roots(state, feed, extra, resume, private?) do
+    props = Map.merge(%{"limit" => 30, "reverse" => true}, extra)
     props = if is_integer(resume), do: Map.put(props, "resume", resume), else: props
     self_id = state.self_id
     now = System.system_time(:millisecond)
 
     if is_pid(state.client) and Process.alive?(state.client) do
-      case Client.stream(
-             state.client,
-             ["patchwork", "privateFeed", "roots"],
-             [props],
-             self()
-           ) do
-        {:ok, ref} -> private_page(ref, self_id, now)
-        _ -> %{rows: [], resume: nil, more: false}
+      case Client.stream(state.client, ["patchwork", feed, "roots"], [props], self()) do
+        {:ok, ref} -> roots_page(ref, state, self_id, now, private?)
+        _ -> empty_page()
       end
     else
-      %{rows: [], resume: nil, more: false}
+      empty_page()
     end
   catch
-    _, _ -> %{rows: [], resume: nil, more: false}
+    _, _ -> empty_page()
   end
 
-  defp private_page(ref, self_id, now) do
-    {markers, rows} = drain_stream(ref, []) |> Enum.split_with(&(&1["marker"] == true))
+  defp roots_page(ref, state, self_id, now, private?) do
+    {markers, items} = drain_stream(ref, []) |> Enum.split_with(&(&1["marker"] == true))
     cursor = private_cursor(markers)
 
-    %{
-      rows: Enum.map(rows, &private_row(&1, self_id, now)),
-      resume: cursor,
-      more: is_integer(cursor)
-    }
+    like_counts =
+      case state.messages do
+        %{like_counts: counts} when is_map(counts) -> counts
+        _ -> %{}
+      end
+
+    rows =
+      Enum.map(items, fn item ->
+        row = root_row(item, self_id, now, private?)
+        Map.put(row, :likes, Map.get(like_counts, item["key"], row.likes))
+      end)
+
+    %{rows: rows, resume: cursor, more: is_integer(cursor)}
   end
 
   defp private_cursor(markers) do
@@ -1280,10 +1324,10 @@ defmodule HighWire.Timeline do
     }
   end
 
-  # A privateFeed.roots item (decrypted envelope + rollup extras) shaped
-  # exactly like a feed row, so the timeline renders it with the same
-  # components. private? marks it for the lock badge.
-  defp private_row(item, self_id, now) do
+  # A `roots` view item (thread summary + rollup extras) shaped exactly
+  # like a feed row, so the timeline renders it with the same
+  # components. private? marks it for the private badge.
+  defp root_row(item, self_id, now, private?) do
     msg = %{
       "key" => item["key"],
       "value" => item["value"],
@@ -1298,18 +1342,21 @@ defmodule HighWire.Timeline do
       [clamped_ts(msg, now) | Enum.map(recent, &clamped_ts(&1, now))]
       |> Enum.max()
 
-    build_entry(
-      if(replies > 0, do: :thread, else: :post),
-      msg,
-      activity,
-      [author],
-      replies,
-      0,
-      recent,
-      self_id: self_id,
-      rooted: true
-    )
-    |> Map.put(:private?, true)
+    row =
+      build_entry(
+        if(replies > 0, do: :thread, else: :post),
+        msg,
+        activity,
+        [author],
+        replies,
+        0,
+        recent,
+        self_id: self_id,
+        rooted: true,
+        mentioned?: mentions_self?(msg, self_id)
+      )
+
+    if private?, do: Map.put(row, :private?, true), else: row
   end
 
   # Everyone in the thread: reply authors plus the root's author.

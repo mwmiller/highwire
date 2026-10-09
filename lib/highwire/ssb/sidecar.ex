@@ -184,6 +184,10 @@ defmodule HighWire.SSB.Sidecar do
     }
 
     if enabled?() do
+      # Seed overrides.cfg from the startup default before the probe or
+      # the spawn reads it, so a fresh install boots engine and clients
+      # on the same network.
+      _ = Network.ensure_default()
       send(self(), :spawn_node)
       {:ok, %{state | status: :starting}}
     else

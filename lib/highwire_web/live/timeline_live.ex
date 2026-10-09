@@ -2,20 +2,21 @@ defmodule HighWireWeb.TimelineLive do
   @moduledoc """
   The home timeline: a Patchwork/Poncho Wonky-style infinite-scroll feed.
 
-  Ordering comes from `HighWire.Timeline`: one row per thread at its
-  latest activity ("bump"), votes folded into like counts, follow
-  messages collapsed into one row per author. Patchwork's feed tabs sit
-  in the top bar — Public (the window), Private (silkpurse's decrypted
-  `privateFeed`, cursor-paginated), Participating (threads we posted
-  into; opt-in via Settings → Notification options), Profile (this
-  account's own posts) and Mentions (threads that name us) — with a
-  peer chip driven by real `gossip.peers` data linking to the network
-  page. Clicking a post opens the post viewer at `/post/:key`. The app
-  opens straight to this feed. The Public tab's composer at the top of
-  the feed publishes through the engine's `publish` RPC (`Timeline.publish/1`),
-  with local validation for blank drafts and an offline engine. Swallows
-  the Tauri menu/resize/escape events so the shell's bridge never crashes
-  the mount.
+  Every feed tab is a cursor-paginated thread-root view from the engine
+  (`Timeline.feed/2`): Public, Private (decrypted), Participating
+  (threads we posted into; opt-in via Settings → Notification options),
+  Profile (this account's own roots) and Mentions (threads that name
+  us). Pages arrive newest-activity-first and the sentinel fetches the
+  next cursor, so no tab ever runs out; the flat window payload keeps
+  arriving live and is merged in as fresh roots, so new posts show up
+  without a refresh. Threads preview their latest replies and fold votes
+  into like counts. A peer chip driven by real `gossip.peers` data
+  links to the network page. Clicking a post opens the post viewer at
+  `/post/:key`. The app opens straight to this feed. The Public tab's
+  composer at the top of the feed publishes through the engine's
+  `publish` RPC (`Timeline.publish/1`), with local validation for blank
+  drafts and an offline engine. Swallows the Tauri menu/resize/escape
+  events so the shell's bridge never crashes the mount.
   """
 
   use HighWireWeb, :live_view
@@ -27,8 +28,6 @@ defmodule HighWireWeb.TimelineLive do
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Nav
-
-  @page_size 60
 
   # Patchwork's feed tabs: the first three sit left of the search box,
   # the last two right of it (as in Patchwork's top bar). Participating
@@ -72,21 +71,26 @@ defmodule HighWireWeb.TimelineLive do
 
     {status, payload} = Timeline.snapshot()
 
-    {:ok,
-     socket
-     |> assign(:page_title, "Timeline")
-     |> assign(:status, status)
-     |> assign_payload(payload)
-     |> assign(:peers, Timeline.network())
-     |> assign(q: "", expanded: MapSet.new(), limit: @page_size, view: :public)
-     |> assign(compose: "", compose_error: nil)
-     |> assign(private_rows: [], private_resume: nil, private_more: false)
-     |> assign(active: true, peers_timer: peers_timer)}
+    socket =
+      socket
+      |> assign(:page_title, "Timeline")
+      |> assign(:status, status)
+      |> assign_payload(payload)
+      |> assign(:peers, Timeline.network())
+      |> assign(q: "", expanded: MapSet.new(), view: :public)
+      |> assign(compose: "", compose_error: nil)
+      |> assign(paged: %{})
+      |> assign(active: true, peers_timer: peers_timer)
+      |> maybe_load_page()
+      |> merge_paged()
+
+    {:ok, socket}
   end
 
   @impl true
   def handle_info({Timeline, :updated, payload}, socket) do
-    {:noreply, socket |> assign(:status, :ok) |> assign_payload(payload)}
+    socket = socket |> assign(:status, :ok) |> assign_payload(payload)
+    {:noreply, socket |> maybe_load_page() |> merge_paged()}
   end
 
   def handle_info(:peers_tick, socket) do
@@ -105,7 +109,7 @@ defmodule HighWireWeb.TimelineLive do
 
   @impl true
   def handle_event("search", %{"q" => q}, socket) do
-    {:noreply, assign(socket, q: String.downcase(q), limit: @page_size)}
+    {:noreply, assign(socket, q: String.downcase(q))}
   end
 
   # Composer drafts debounce into the assign; publish trims, validates
@@ -162,16 +166,7 @@ defmodule HighWireWeb.TimelineLive do
         if Atom.to_string(key) == v, do: key
       end)
 
-    socket = socket |> assign(:view, view) |> assign(:limit, @page_size)
-
-    socket =
-      if view == :private and socket.assigns.private_rows == [] do
-        load_private_page(socket)
-      else
-        socket
-      end
-
-    {:noreply, socket}
+    {:noreply, socket |> assign(:view, view) |> maybe_load_page()}
   end
 
   def handle_event("expand", %{"key" => key}, socket) do
@@ -193,10 +188,12 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   def handle_event("load-more", _params, socket) do
-    if socket.assigns.view == :private and socket.assigns.private_more do
-      {:noreply, load_private_page(socket)}
-    else
-      {:noreply, update(socket, :limit, &(&1 + @page_size))}
+    case Map.get(socket.assigns.paged, socket.assigns.view) do
+      %{more: true, resume: resume} when is_integer(resume) ->
+        {:noreply, fetch_page(socket, socket.assigns.view, resume)}
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -227,6 +224,118 @@ defmodule HighWireWeb.TimelineLive do
     assign(socket, :peers_timer, Process.send_after(self(), :peers_tick, 5_000))
   end
 
+  # The active tab's first page: fetched once the engine reports :ok,
+  # kept per view so switching back restores the loaded rows. The engine's
+  # flat window rides along, so follow/about events are in the tab from
+  # first paint and after a view switch.
+  defp maybe_load_page(%{assigns: %{status: status, view: view, paged: paged}} = socket) do
+    if connected?(socket) and status == :ok and not Map.has_key?(paged, view) do
+      fetch_page(socket, view, nil)
+    else
+      socket
+    end
+  end
+
+  defp fetch_page(socket, view, resume) do
+    page = Timeline.feed(view, resume)
+
+    entry =
+      socket.assigns.paged
+      |> Map.get(view, %{rows: [], resume: nil, more: false})
+      |> append_page(page.rows)
+      |> Map.put(:resume, page.resume)
+      |> Map.put(:more, page.more)
+
+    assign(socket, paged: Map.put(socket.assigns.paged, view, merge_into(view, entry, socket)))
+  end
+
+  # Cursor pages append at the tail, deduped in favour of the page row:
+  # a quiet feed carries the same root in the window's rows too, and the
+  # roots view has the true reply rollup and the newest replies.
+  defp append_page(%{rows: rows} = entry, page_rows) do
+    merged =
+      (rows ++ page_rows)
+      |> Enum.reverse()
+      |> Enum.uniq_by(&row_uid/1)
+      |> Enum.reverse()
+
+    %{entry | rows: merged}
+  end
+
+  # Fresh rows from the engine's flat window merge into every loaded tab
+  # within that tab's scope, then the list re-sorts by activity so
+  # follows and abouts sit in chronological context among the paged
+  # threads. Like totals re-annotate on the way past — a cursor page can
+  # arrive carrying counts from an earlier payload.
+  defp merge_paged(socket) do
+    paged =
+      Map.new(socket.assigns.paged, fn {view, entry} ->
+        {view, merge_into(view, entry, socket)}
+      end)
+
+    assign(socket, paged: paged)
+  end
+
+  # Private rows come from the decrypted feed; the public window never
+  # carries boxed messages, so there is nothing to merge in.
+  defp merge_into(:private, entry, _socket), do: entry
+
+  defp merge_into(view, entry, socket) do
+    self_id = socket.assigns.self_id
+    known = MapSet.new(entry.rows, &row_uid/1)
+
+    {fresh_contacts, fresh_rows} =
+      socket.assigns.feed
+      |> Enum.filter(&in_scope?(view, &1, self_id))
+      |> Enum.split_with(&(&1.kind == :contact))
+
+    # A follow row's message key changes with every new follow, so its
+    # identity is the author: the fresh row replaces the loaded one.
+    contact_authors = MapSet.new(fresh_contacts, &author_of(&1.msg))
+    {entry_contacts, entry_rest} = Enum.split_with(entry.rows, &(&1.kind == :contact))
+
+    kept_contacts =
+      Enum.reject(entry_contacts, &MapSet.member?(contact_authors, author_of(&1.msg)))
+
+    fresh_rows = Enum.reject(fresh_rows, &MapSet.member?(known, row_uid(&1)))
+
+    rows =
+      (fresh_rows ++ fresh_contacts ++ kept_contacts ++ entry_rest)
+      |> annotate_likes(socket.assigns.like_counts)
+      |> Enum.sort_by(& &1.activity, :desc)
+      |> Enum.uniq_by(&dedupe_id/1)
+
+    %{entry | rows: rows}
+  end
+
+  # Thread identity is the root key — a window row whose root never
+  # reached the window still carries it, while a cursor row IS the root.
+  defp row_uid(%{root_key: root}) when is_binary(root), do: root
+  defp row_uid(%{msg: msg}), do: msg["key"]
+
+  # One row per follow author; everything else keys by thread identity.
+  defp dedupe_id(%{kind: :contact} = row), do: {:contact, author_of(row.msg)}
+  defp dedupe_id(row), do: {:row, row_uid(row)}
+
+  defp annotate_likes(rows, like_counts) when is_map(like_counts) do
+    Enum.map(rows, fn row ->
+      key = row_uid(row)
+
+      case like_counts do
+        %{^key => n} when is_integer(n) -> %{row | likes: n}
+        _ -> row
+      end
+    end)
+  end
+
+  # The window reaches the Public tab whole (threads, follows, abouts);
+  # the other tabs keep the thread-only predicates below, whose guards
+  # reject contact/other rows themselves.
+  defp in_scope?(:public, row, _self_id), do: row.kind in [:thread, :post, :contact, :other]
+  defp in_scope?(:participating, row, _self_id), do: participating?(row)
+  defp in_scope?(:mentions, row, _self_id), do: mention_match?(row)
+  defp in_scope?(:profile, row, self_id), do: profile_match?(row, self_id)
+
   defp publish_error(:offline), do: "SSB engine offline."
 
   defp publish_error(:mainnet_read_only),
@@ -236,61 +345,17 @@ defmodule HighWireWeb.TimelineLive do
   defp publish_error(%{"message" => msg}) when is_binary(msg), do: msg
   defp publish_error(_reason), do: "Publish failed — the engine refused the message."
 
-  # One more Private tab page from silkpurse's cursor.
-  defp load_private_page(socket) do
-    %{rows: rows, resume: resume, more: more} =
-      Timeline.private_feed(socket.assigns.private_resume)
-
-    assign(socket,
-      private_rows: socket.assigns.private_rows ++ rows,
-      private_resume: resume,
-      private_more: more
-    )
-  end
-
   @impl true
   def render(assigns) do
-    query_base =
-      assigns
-      |> rows()
-      |> Enum.filter(&matches_query?(&1, assigns.q))
-
-    counts = %{
-      public: length(query_base),
-      participating: Enum.count(query_base, &participating?/1),
-      profile: Enum.count(query_base, &profile_match?(&1, assigns.self_id)),
-      mentions: Enum.count(query_base, &mention_match?/1),
-      private: length(assigns.private_rows)
-    }
-
-    filtered =
-      case assigns.view do
-        :private -> Enum.filter(assigns.private_rows, &matches_query?(&1, assigns.q))
-        :participating -> Enum.filter(query_base, &participating?/1)
-        :profile -> Enum.filter(query_base, &profile_match?(&1, assigns.self_id))
-        :mentions -> Enum.filter(query_base, &mention_match?/1)
-        :public -> query_base
-      end
-
-    # Private rows arrive already paged by silkpurse's cursor; the window
-    # tabs page by the client-side limit.
-    page =
-      if assigns.view == :private, do: filtered, else: Enum.take(filtered, assigns.limit)
-
-    more =
-      case assigns.view do
-        :private -> assigns.private_more
-        _ -> counts[assigns.view] > length(page)
-      end
+    page = Map.get(assigns.paged, assigns.view, %{rows: [], more: false})
 
     assigns =
       assign(assigns,
-        rows: page,
-        counts: counts,
+        rows: Enum.filter(page.rows, &matches_query?(&1, assigns.q)),
         views: @views,
         left_views: Enum.filter(@views, fn {v, _} -> v in @left_views end),
         right_views: Enum.filter(@views, fn {v, _} -> v in @right_views end),
-        more: more,
+        more: page.more,
         as: %{
           expanded: assigns.expanded,
           index: assigns.index,
@@ -356,13 +421,7 @@ defmodule HighWireWeb.TimelineLive do
       <div class="flex min-w-0 flex-1 flex-col">
         <header class="flex h-11 shrink-0 items-center gap-2 border-b border-edge bg-panel px-4">
           <nav class="flex items-center gap-1" aria-label="Feeds">
-            <.feed_tab
-              :for={{v, label} <- @left_views}
-              v={v}
-              label={label}
-              current={@view}
-              count={@counts[v]}
-            />
+            <.feed_tab :for={{v, label} <- @left_views} v={v} label={label} current={@view} />
           </nav>
           <form
             id="feed-search"
@@ -381,13 +440,7 @@ defmodule HighWireWeb.TimelineLive do
             />
           </form>
           <nav class="flex items-center gap-1" aria-label="Profile feeds">
-            <.feed_tab
-              :for={{v, label} <- @right_views}
-              v={v}
-              label={label}
-              current={@view}
-              count={@counts[v]}
-            />
+            <.feed_tab :for={{v, label} <- @right_views} v={v} label={label} current={@view} />
           </nav>
           <.link
             :if={n = peer_count(@peers)}
@@ -488,7 +541,6 @@ defmodule HighWireWeb.TimelineLive do
   attr :v, :atom, required: true
   attr :label, :string, required: true
   attr :current, :atom, required: true
-  attr :count, :integer, required: true
 
   defp feed_tab(assigns) do
     ~H"""
@@ -503,7 +555,7 @@ defmodule HighWireWeb.TimelineLive do
         @current != @v and "text-dim hover:bg-raised hover:text-paper"
       ]}
     >
-      {@label}<span :if={@count > 0} class="ml-1 text-[10px] text-sub">{@count}</span>
+      {@label}
     </button>
     """
   end
@@ -784,10 +836,6 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   # -- row selection ------------------------------------------------------
-  # The single feed: thread-bumped rows straight from the Timeline.
-
-  defp rows(a), do: a.feed
-
   defp matches_query?(_row, ""), do: true
 
   defp matches_query?(row, q) do

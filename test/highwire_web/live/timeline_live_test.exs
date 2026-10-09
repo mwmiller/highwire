@@ -60,4 +60,131 @@ defmodule HighWireWeb.TimelineLiveTest do
 
     assert html =~ "SSB engine disabled in this configuration."
   end
+
+  describe "event rows from the engine window" do
+    test "follow events land on the Public tab in chronological context", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%root-old.sha256", "@bob:.ed25519", now - 60_000, %{
+          "type" => "post",
+          "text" => "oldest words"
+        }),
+        ssb_msg("%follow-dave.sha256", "@alice:.ed25519", now - 2_000, %{
+          "type" => "contact",
+          "contact" => "@dave:.ed25519"
+        }),
+        ssb_msg("%root-new.sha256", "@carol:.ed25519", now - 500, %{
+          "type" => "post",
+          "text" => "newest words"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs, now: now))
+      dave = URI.encode_www_form("@dave:.ed25519")
+
+      assert html =~ "followed"
+      assert pos(html, "newest words") < pos(html, dave)
+      assert pos(html, dave) < pos(html, "oldest words")
+    end
+
+    test "events stay on Public — other tabs keep the thread-only scope", %{conn: conn} do
+      now = 1_700_000_000_000
+      me = "@me:.ed25519"
+
+      msgs = [
+        ssb_msg("%root-mine.sha256", me, now - 5_000, %{
+          "type" => "post",
+          "text" => "my own words"
+        }),
+        ssb_msg("%follow-dave.sha256", "@alice:.ed25519", now - 1_000, %{
+          "type" => "contact",
+          "contact" => "@dave:.ed25519"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs, now: now, self_id: me))
+      dave = URI.encode_www_form("@dave:.ed25519")
+
+      assert html =~ "my own words"
+      assert html =~ dave
+
+      html = render_click(view, "view", %{"v" => "participating"})
+      assert html =~ "my own words"
+      refute html =~ dave
+    end
+
+    test "a newer follow replaces the loaded follow row for that author", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      first = [
+        ssb_msg("%follow-bob.sha256", "@alice:.ed25519", now - 5_000, %{
+          "type" => "contact",
+          "contact" => "@bob:.ed25519"
+        })
+      ]
+
+      second = [
+        ssb_msg("%follow-carol.sha256", "@alice:.ed25519", now - 1_000, %{
+          "type" => "contact",
+          "contact" => "@carol:.ed25519"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      bob = URI.encode_www_form("@bob:.ed25519")
+      carol = URI.encode_www_form("@carol:.ed25519")
+
+      html = notify(view, feed_payload(first, now: now))
+      assert html =~ bob
+      assert count(html, "followed") == 1
+
+      html = notify(view, feed_payload(second, now: now))
+      refute html =~ bob
+      assert html =~ carol
+      assert count(html, "followed") == 1
+    end
+  end
+
+  defp ssb_msg(key, author, ts, content) do
+    %{"key" => key, "value" => %{"author" => author, "timestamp" => ts, "content" => content}}
+  end
+
+  # A Timeline payload as finalize/1 broadcasts it — the window rows come
+  # straight from the same builder the engine uses.
+  defp feed_payload(msgs, opts) do
+    now = Keyword.fetch!(opts, :now)
+    self_id = Keyword.get(opts, :self_id)
+
+    %{
+      feed: HighWire.Timeline.build_feed(msgs, self_id, %{}, now),
+      messages: [],
+      reply_counts: %{},
+      like_counts: %{},
+      my_likes: [],
+      index: %{},
+      follows: [],
+      self_id: self_id,
+      profiles: %{},
+      suggestions: []
+    }
+  end
+
+  defp notify(view, payload) do
+    send(view.pid, {HighWire.Timeline, :updated, payload})
+    render(view)
+  end
+
+  defp pos(html, needle) do
+    case :binary.match(html, needle) do
+      {idx, _} -> idx
+      :nomatch -> flunk("expected #{inspect(needle)} in the feed HTML")
+    end
+  end
+
+  defp count(html, needle) do
+    html |> String.split(needle) |> length() |> Kernel.-(1)
+  end
 end
