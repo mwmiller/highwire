@@ -43,19 +43,6 @@
   --warn-text: #fbbf24;
   --bad-text: #f87171;
 
-  /* Playground editor colours. Custom properties rather than Tailwind
-     utilities because CodeMirror paints its own DOM from a JS theme and can
-     only read what is already on the cascade. */
-  --ed-bg: #0f172a;
-  --ed-fg: #f1f5f9;
-  --ed-muted: #64748b;
-  --ed-caret: #f1f5f9;
-  --ed-gutter: #64748b;
-  --ed-selection: #60a5fa66;
-  --ed-active: #1e293b;
-  --ed-match: #1e40af;
-  --ed-border: #334155;
-
   /* Markdown bodies (.md-body). */
   --md-strong: #ffffff;
   --md-code-bg: #1d2025;
@@ -93,16 +80,6 @@
   --info-text: #0369a1;
   --warn-text: #b45309;
   --bad-text: #b91c1c;
-
-  --ed-bg: #ffffff;
-  --ed-fg: #0f172a;
-  --ed-muted: #94a3b8;
-  --ed-caret: #0f172a;
-  --ed-gutter: #64748b;
-  --ed-selection: #fde68a99;
-  --ed-active: #f8fafc;
-  --ed-match: #fef3c7;
-  --ed-border: #e2e8f0;
 
   --md-strong: #09090b;
   --md-code-bg: #f4f4f5;
@@ -158,35 +135,9 @@
     @apply pl-2;
     @apply mb-2;
   }
-  .tighter {
-    @apply m-0 p-0;
-  }
-  .content-wrap {
-    @apply overflow-y-auto max-h-screen m-2 px-2;
-  }
   body {
     scrollbar-gutter: stable;
   }
-}
-
-@layer components {
-  /* Horizontally scrollable button strips (explorebar nav) scroll without
-     drawing a scrollbar, so the strip keeps its height in the sticky bar. */
-  .scrollbar-hide {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-  .scrollbar-hide::-webkit-scrollbar {
-    display: none;
-  }
-}
-
-/* The rail's ⇥ is a file input kept out of sight with .sr-only, so its own
-   focus ring would be a sliver nobody can see. Ring the label instead: that
-   is what a keyboard user is actually pointed at. */
-#wasm-dropin:focus-within {
-  outline: 2px solid var(--border-focus);
-  outline-offset: 2px;
 }
 
 /* Post/description bodies rendered by HighWire.Markdown (mdex/comrak). */

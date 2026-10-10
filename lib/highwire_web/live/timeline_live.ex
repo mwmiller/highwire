@@ -15,8 +15,7 @@ defmodule HighWireWeb.TimelineLive do
   `/post/:key`. The app opens straight to this feed. The Public tab's
   composer at the top of the feed publishes through the engine's
   `publish` RPC (`Timeline.publish/1`), with local validation for blank
-  drafts and an offline engine. Swallows the Tauri menu/resize/escape
-  events so the shell's bridge never crashes the mount.
+  drafts and an offline engine.
   """
 
   use HighWireWeb, :live_view
@@ -247,11 +246,6 @@ defmodule HighWireWeb.TimelineLive do
         {:noreply, socket}
     end
   end
-
-  # MenuBridge pushes these; unmatched events would crash the view.
-  def handle_event("menu", _params, socket), do: {:noreply, socket}
-  def handle_event("window-resize", _params, socket), do: {:noreply, socket}
-  def handle_event("escape", _params, socket), do: {:noreply, socket}
 
   def handle_event("tab-active", _params, socket) do
     Timeline.set_activity(self(), true)

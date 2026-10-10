@@ -3,15 +3,12 @@ defmodule HighWireWeb.TimelineLiveTest do
 
   import Phoenix.LiveViewTest
 
-  test "timeline renders and handles the menu bridge event", %{conn: conn} do
-    {:ok, view, html} = live(conn, "/")
+  test "timeline renders", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/")
 
     assert html =~ "Timeline"
     # sidecar disabled under test
     assert html =~ "SSB engine disabled"
-
-    render_hook(view, "menu", %{})
-    render_hook(view, "window-resize", %{})
   end
 
   test "tab activity events toggle timeline polling", %{conn: conn} do

@@ -1,8 +1,6 @@
 defmodule HighWireWeb.Live do
   @moduledoc """
-  Landing view: engine status and data directory. Also swallows the
-  Tauri menu/resize events so the shell's bridge never crashes the mount
-  before its views exist.
+  Landing view: engine status and data directory.
   """
   use HighWireWeb, :live_view
 
@@ -14,13 +12,6 @@ defmodule HighWireWeb.Live do
      |> assign(:version, HighWire.version())
      |> assign(:home_dir, HighWire.home_dir())}
   end
-
-  @impl true
-  def handle_event("menu", _params, socket), do: {:noreply, socket}
-  def handle_event("window-resize", _params, socket), do: {:noreply, socket}
-  # Reserved for closing overlays/panels; nothing open yet, but the
-  # MenuBridge pushes it and an unmatched event would crash the view.
-  def handle_event("escape", _params, socket), do: {:noreply, socket}
 
   @impl true
   def render(assigns) do

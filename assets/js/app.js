@@ -24,9 +24,6 @@ import "phoenix_html"
 import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
-import {AppRunner} from "./app_runner.js"
-import {CodeEditorHook} from "./code_editor.js"
-import {WasmDropin} from "./wasm_dropin.js"
 
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 
@@ -49,83 +46,6 @@ let InfiniteScroll = {
   },
   destroyed() {
     if (this.observer) this.observer.disconnect()
-  }
-}
-
-// Bridges native (Tauri) menu and window events with the LiveView.
-let MenuBridge = {
-  mounted() {
-    // pushEvent rejects when the socket is down (server restarting,
-    // between reconnects). Menu/resize/escape can all fire at any time —
-    // including then — so every push either supplies the onReply callback
-    // (which swallows the rejection) or catches it explicitly.
-    this.safePush = (event, payload) => {
-      let pushed
-      try {
-        pushed = this.pushEvent(event, payload, () => {})
-      } catch (_) {
-        return
-      }
-      if (pushed && typeof pushed.catch === "function") pushed.catch(() => {})
-    }
-
-    this.el.addEventListener("phx:window-init", (e) => {
-      const {width, height} = e.detail
-      if (window.__TAURI__) {
-        window.__TAURI__.core.invoke("set_window_size", {width, height})
-      }
-    })
-
-    if (window.__TAURI__) {
-      window.__TAURI__.event.listen("highwire-menu", (event) => {
-        this.safePush("menu", event.payload)
-      })
-
-      window.__TAURI__.event.listen("highwire-resize", (event) => {
-        this.safePush("window-resize", event.payload)
-      })
-    }
-
-    this.handleEvent("export-save", ({content, filename}) => {
-      if (window.__TAURI__) {
-        window.highwireSave(content, filename)
-      } else {
-        const blob = new Blob([content], {type: "application/octet-stream"})
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = url
-        a.download = filename
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        URL.revokeObjectURL(url)
-      }
-    })
-
-    // Pushed by the server whenever the view or entry changes. The scroll
-    // containers are morphed in place rather than replaced, so the browser
-    // would otherwise keep the previous offset and drop the reader mid-entry.
-    this.handleEvent("reset-scroll", () => {
-      document.querySelectorAll(".content-wrap").forEach((el) => {
-        el.scrollTop = 0
-      })
-    })
-
-    // Pushed by the server when a compose panel closes, so focus lands back on
-    // the trigger that opened it instead of being dropped on <body>. The id is
-    // resolved here because the trigger may not be rendered at all (a panel can
-    // be forced open by the entry being viewed), in which case there is
-    // nothing to return to and this is a no-op.
-    this.handleEvent("focus-compose-trigger", ({id}) => {
-      const trigger = document.getElementById(id)
-      if (trigger) trigger.focus()
-    })
-
-    this.el.ownerDocument.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        this.safePush("escape", {})
-      }
-    })
   }
 }
 
@@ -292,18 +212,9 @@ let TabActivity = {
   }
 }
 
-window.highwireSave = async function(content, defaultName) {
-  if (!window.__TAURI__) return null
-  const { save } = window.__TAURI__.dialog
-  const path = await save({ defaultPath: defaultName })
-  if (!path) return null
-  await window.__TAURI__.core.invoke("write_file", { path, content })
-  return path
-}
-
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: {MenuBridge, InfiniteScroll, Prefs, OpenPost, TabActivity, AppRunner, CodeEditor: CodeEditorHook, WasmDropin}
+  hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity}
 })
 
 // Show progress bar on live navigation and form submits

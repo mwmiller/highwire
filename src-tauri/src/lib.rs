@@ -8,9 +8,8 @@ use std::process::{Command as StdCommand, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::json;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
-use tauri::{Emitter, Manager, RunEvent, Window};
+use tauri::{Manager, RunEvent};
 
 #[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
@@ -171,16 +170,6 @@ fn sweep_sidecar_engine() {
 const BACKEND_URL: &str = "http://localhost:24042";
 const BACKEND_ADDR: &str = "127.0.0.1:24042";
 
-#[tauri::command]
-fn set_window_size(window: Window, width: f64, height: f64) {
-    let _ = window.set_size(tauri::LogicalSize::new(width, height));
-}
-
-#[tauri::command]
-fn write_file(path: String, content: String) -> Result<(), String> {
-    std::fs::write(&path, content).map_err(|e| e.to_string())
-}
-
 fn build_menu(app: &tauri::App) -> tauri::Result<()> {
     let handle = app.handle();
 
@@ -189,17 +178,6 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
         .build(handle)?;
     let prefs = MenuItemBuilder::with_id("prefs", "Preferences")
         .accelerator("CmdOrCtrl+,")
-        .build(handle)?;
-    let oases = MenuItemBuilder::with_id("oases", "Oases")
-        .accelerator("CmdOrCtrl+O")
-        .build(handle)?;
-    let unshown = MenuItemBuilder::with_id("unshown", "Unshown")
-        .accelerator("CmdOrCtrl+U")
-        .build(handle)?;
-    // The playground is where a new app starts, so it takes the shortcut a
-    // "New" item would otherwise hold.
-    let playground = MenuItemBuilder::with_id("playground", "Playground")
-        .accelerator("CmdOrCtrl+N")
         .build(handle)?;
     let profile = MenuItemBuilder::with_id("profile", "My Profile")
         .accelerator("CmdOrCtrl+Shift+P")
@@ -255,10 +233,6 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
         .build()?;
     let go = SubmenuBuilder::new(handle, "Go")
         .item(&dashboard)
-        .separator()
-        .item(&oases)
-        .item(&unshown)
-        .item(&playground)
         .separator()
         .item(&profile)
         .build()?;
@@ -375,9 +349,6 @@ pub fn run() {
     let backend_pid: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     let exit_pid = backend_pid.clone();
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![set_window_size, write_file])
         .setup(move |app| {
             build_menu(app)?;
             // Spawn synchronously so the PID is recorded before any event
@@ -394,72 +365,35 @@ pub fn run() {
 
             Ok(())
         })
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            "dashboard" => {
-                let _ = app.emit_to("main", "highwire-menu", json!({ "view": "dashboard" }));
-            }
-            "prefs" => {
-                let _ = app.emit_to(
-                    "main",
-                    "highwire-menu",
-                    json!({ "view": "prefs", "entry": "none" }),
-                );
-            }
-            "oases" => {
-                let _ = app.emit_to(
-                    "main",
-                    "highwire-menu",
-                    json!({ "view": "oases", "entry": "none" }),
-                );
-            }
-            "unshown" => {
-                let _ = app.emit_to(
-                    "main",
-                    "highwire-menu",
-                    json!({ "view": "unshown", "entry": "all" }),
-                );
-            }
-            // A blank draft, the same destination as the listings header's
-            // New app button, so it is a navigation with history behind it.
-            "playground" => {
-                let _ = app.emit_to(
-                    "main",
-                    "highwire-menu",
-                    json!({ "view": "playground", "entry": "all" }),
-                );
-            }
-            "profile" => {
-                let _ = app.emit_to("main", "highwire-menu", json!({ "value": "origin" }));
-            }
-            "reload" => {
+        .on_menu_event(|app, event| {
+            // Menu navigation drives the webview directly: the LiveView
+            // only needs a URL, and a full navigation keeps history working
+            // in both directions.
+            let navigate = |path: &str| {
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.reload();
+                    let _ = window.eval(format!("window.location.href = \"{path}\""));
                 }
+            };
+            match event.id().as_ref() {
+                "dashboard" => navigate("/dashboard"),
+                "prefs" => navigate("/settings"),
+                "profile" => navigate("/profile"),
+                "reload" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.reload();
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                "emoji" => show_character_palette(),
+                _ => {}
             }
-            #[cfg(target_os = "macos")]
-            "emoji" => show_character_palette(),
-            _ => {}
         })
         .on_window_event(|window, event| {
-            match event {
-                tauri::WindowEvent::Resized(size) => {
-                    let scale = window.scale_factor().unwrap_or(1.0);
-                    let logical = size.to_logical::<f64>(scale);
-                    let _ = window.emit(
-                        "highwire-resize",
-                        json!({
-                            "width": logical.width.to_string(),
-                            "height": logical.height.to_string()
-                        }),
-                    );
-                }
-                // Closing the app window quits the app (and thus kills the
-                // backend) even on macOS, where the default is to keep the
-                // process alive without windows.
-                tauri::WindowEvent::Destroyed => {
-                    window.app_handle().exit(0);
-                }
-                _ => {}
+            // Closing the app window quits the app (and thus kills the
+            // backend) even on macOS, where the default is to keep the
+            // process alive without windows.
+            if let tauri::WindowEvent::Destroyed = event {
+                window.app_handle().exit(0);
             }
         })
         .build(tauri::generate_context!())

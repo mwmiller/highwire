@@ -42,7 +42,6 @@ defmodule HighWireWeb.Router do
     pipe_through :browser
 
     live_dashboard "/dashboard",
-      metrics: HighWireWeb.Telemetry,
-      on_mount: HighWireWeb.LiveDashboardHooks
+      metrics: HighWireWeb.Telemetry
   end
 end
