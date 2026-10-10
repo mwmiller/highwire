@@ -1,7 +1,7 @@
 defmodule HighWireWeb.BlobControllerTest do
   @moduledoc """
   The avatar/image serving layer: `/blob/<hex>` resolves through
-  HighWire's cache, then Patchwork's store (copy-on-read), then a
+  HighWire's cache, then the engine's own blob store, then a
   generated framed placeholder — and `/identicon/<hex>` serves the
   deterministic Excon identicon for feeds without an avatar image.
   Everything lives under the test home (`~/.highwire-test`), so these
@@ -18,15 +18,15 @@ defmodule HighWireWeb.BlobControllerTest do
     hex = :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
     cache = Path.join(Blob.cache_root(), hex)
     gen = Path.join([Blob.cache_root(), "gen", hex])
-    source = Blob.source_path(hex)
+    store = Blob.store_path(hex)
 
     on_exit(fn ->
       File.rm(cache)
       File.rm(gen)
-      File.rm(source)
+      if store, do: File.rm(store)
     end)
 
-    %{hex: hex, cache: cache, gen: gen, source: source}
+    %{hex: hex, cache: cache, gen: gen, store: store}
   end
 
   test "serves bytes already in HighWire's cache", %{conn: conn, hex: hex, cache: cache} do
@@ -40,35 +40,36 @@ defmodule HighWireWeb.BlobControllerTest do
     assert get_resp_header(conn, "cache-control") == ["public, max-age=60"]
   end
 
-  test "a store hit is copied into the cache, then served from it", %{
+  test "a hit in the engine's own store is served directly, without copying", %{
     conn: conn,
     hex: hex,
     cache: cache,
-    source: source
+    store: store
   } do
-    File.mkdir_p!(Path.dirname(source))
-    File.write!(source, @jpeg)
+    File.mkdir_p!(Path.dirname(store))
+    File.write!(store, @jpeg)
     refute File.exists?(cache)
 
     conn = get(conn, "/blob/#{hex}")
     assert response(conn, 200) == @jpeg
     assert media_type(conn) == "image/jpeg"
-    assert File.read!(cache) == @jpeg
+    # the store is the source of truth — nothing is duplicated into the cache
+    refute File.exists?(cache)
 
-    # from now on the cache answers even without the source file
-    File.rm!(source)
+    # once the store stops holding it, the placeholder takes over
+    File.rm!(store)
     conn = get(build_conn(), "/blob/#{hex}")
-    assert response(conn, 200) == @jpeg
+    assert media_type(conn) == "image/svg+xml"
   end
 
   test "a zero-byte store file falls through to the placeholder", %{
     conn: conn,
     hex: hex,
     cache: cache,
-    source: source
+    store: store
   } do
-    File.mkdir_p!(Path.dirname(source))
-    File.write!(source, "")
+    File.mkdir_p!(Path.dirname(store))
+    File.write!(store, "")
 
     conn = get(conn, "/blob/#{hex}")
 

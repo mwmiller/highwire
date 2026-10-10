@@ -2,12 +2,14 @@ defmodule HighWireWeb.BlobController do
   @moduledoc """
   Serves blobs by hex key: `GET /blob/<64-hex>`.
 
-  Resolution order (copy-on-read):
+  Resolution order:
 
-    1. `~/.highwire/images/<hex>` — HighWire's own cache
-    2. `~/.ssb/blobs/sha256/<h[:2]>/<h[2:]>` — Patchwork's store,
-       read-only: on a hit the bytes are copied into the cache and from
-       then on served from there
+    1. `~/.highwire/images/<hex>` — HighWire's own cache (generated
+       placeholders, plus copies made while the old store was still a
+       source)
+    2. `<home>/.ssberl/blobs/<HH>/<rest>` — the engine's own blob
+       store: everything HighWire serves was imported or replicated
+       into it, and the old JS-client store (`~/.ssb`) is never opened
     3. a generated Excon `:framed` identicon (keyed by the hex, cached
        under `images/gen/`) — a placeholder in the same framed format as
        feed avatars while the real bytes are being wanted over the wire.
@@ -99,11 +101,9 @@ defmodule HighWireWeb.BlobController do
       File.regular?(cache) ->
         {:file, cache}
 
-      File.regular?(source = Blob.source_path(hex)) and File.stat!(source).size > 0 ->
-        case cache_copy(source, cache) do
-          :ok -> {:file, cache}
-          :error -> {:file, source}
-        end
+      is_binary(store = Blob.store_path(hex)) and File.regular?(store) and
+          File.stat!(store).size > 0 ->
+        {:file, store}
 
       File.regular?(gen) ->
         {:file, gen}
@@ -148,23 +148,6 @@ defmodule HighWireWeb.BlobController do
   end
 
   defp cool_salt(_salted, _hash), do: nil
-
-  # Cache the bytes of a Patchwork-store hit under ~/.highwire; the
-  # source store is only ever read. Any failure just serves the source.
-  defp cache_copy(source, cache) do
-    tmp = cache <> ".tmp-#{System.unique_integer([:positive])}"
-
-    copied =
-      File.mkdir_p(Path.dirname(cache)) == :ok and File.cp(source, tmp) == :ok and
-        File.rename(tmp, cache) == :ok
-
-    if copied do
-      :ok
-    else
-      File.rm(tmp)
-      :error
-    end
-  end
 
   defp content_type(path) do
     case File.open(path, [:read], &IO.binread(&1, 16)) do

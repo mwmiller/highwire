@@ -3,7 +3,7 @@ import Config
 # Tests must be hermetic: never read or write the user's real ~/.highwire.
 config :highwire,
   application_dir: Path.expand("~/.highwire-test"),
-  blob_source: Path.expand("~/.highwire-test/blobs/sha256")
+  blob_store: Path.expand("~/.highwire-test/.ssberl/blobs")
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
