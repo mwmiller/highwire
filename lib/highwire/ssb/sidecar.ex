@@ -14,7 +14,9 @@ defmodule HighWire.SSB.Sidecar do
 
     The spawn's OS pid and port are recorded in `<home>/sidecar.json` so
     a crashed boot can find (and attach to) its own leftover engine on
-    the next start instead of stacking another one.
+    the next start instead of stacking another one — and a shutdown
+    stops even an attached engine it owns, so nothing HighWire started
+    outlives it.
 
     Status: `:disabled | :starting | :ready | :down`. Callers poll
     `status/0` and retry; nothing here blocks.
@@ -214,10 +216,14 @@ defmodule HighWire.SSB.Sidecar do
     {:noreply, %{state | status: :starting}}
   end
 
-  def handle_info({:probe_result, {:attach, port}}, state) do
+  def handle_info({:probe_result, {:attach, port, owner}}, state) do
     Logger.info("sidecar: attached to existing erlbutt on 127.0.0.1:#{port}")
     ensure_dialer(port)
-    {:noreply, %{state | status: :ready, listen_port: port, attempts: 0}}
+
+    # Take ownership when the pidfile names this engine: terminate/2
+    # kills state.os_pid, so an attached leftover we spawned earlier is
+    # stopped on shutdown instead of living on forever.
+    {:noreply, %{state | status: :ready, listen_port: port, os_pid: owner, attempts: 0}}
   end
 
   def handle_info({:probe_result, {:spawn, mode}}, state) do
@@ -279,9 +285,11 @@ defmodule HighWire.SSB.Sidecar do
 
   # -- probing -----------------------------------------------------------
 
-  # {:attach, port} — a HighWire erlbutt (or our own leftover) answers
-  # SHS+whoami with the local keypair. {:spawn, :free | :busy} — the
-  # configured port's disposition for a fresh spawn.
+  # {:attach, port, owner} — a HighWire erlbutt (or our own leftover)
+  # answers SHS+whoami with the local keypair; owner is that engine's
+  # os pid when the live pidfile names this very port (it is ours and a
+  # shutdown must stop it), nil for a foreign engine. {:spawn, :free |
+  # :busy} — the configured port's disposition for a fresh spawn.
   defp probe do
     cfg = config_port()
     leftover = read_pidfile()
@@ -296,7 +304,18 @@ defmodule HighWire.SSB.Sidecar do
         if tcp_open?(cfg), do: {:spawn, :busy}, else: {:spawn, :free}
 
       port ->
-        {:attach, port}
+        {:attach, port, owner_pid(port, leftover)}
+    end
+  end
+
+  @doc false
+  def owner_pid(port, leftover) do
+    case leftover do
+      %{"os_pid" => pid, "port" => ^port} when is_integer(pid) ->
+        if os_alive?(pid), do: pid, else: nil
+
+      _ ->
+        nil
     end
   end
 

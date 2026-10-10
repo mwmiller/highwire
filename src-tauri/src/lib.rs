@@ -6,7 +6,7 @@ use std::os::unix::process::CommandExt;
 use std::os::windows::process::CommandExt;
 use std::process::{Command as StdCommand, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
@@ -15,20 +15,156 @@ use tauri::{Emitter, Manager, RunEvent, Window};
 #[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
+// Shutdown: TERM the backend's group first so the BEAM halts through
+// its normal shutdown (Sidecar.terminate stops the engine it spawned),
+// and hard-kill only what survives the grace period. The engine is its
+// own process group and may predate this run, so a sweep over the
+// sidecar pidfile finishes the job however the backend died.
 #[cfg(unix)]
 fn kill_backend(pid: i32) {
     unsafe {
-        libc::kill(-pid, libc::SIGKILL);
+        libc::kill(-pid, libc::SIGTERM);
+    }
+    if !wait_group_gone(pid, 5_000) {
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    sweep_sidecar_engine();
+}
+
+#[cfg(unix)]
+fn wait_group_gone(pgid: i32, timeout_ms: u64) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+
+    loop {
+        if unsafe { libc::kill(-pgid, 0) } != 0 {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
 #[cfg(windows)]
 fn kill_backend(pid: i32) {
+    taskkill(&["/PID", &pid.to_string(), "/T", "/F"]);
+    sweep_sidecar_engine();
+}
+
+#[cfg(windows)]
+fn taskkill(args: &[&str]) {
     let _ = StdCommand::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+}
+
+// <home>/sidecar.json — the sidecar's record of the engine it owns.
+// HIGHWIRE_HOME mirrors config/runtime.exs; anything unreadable just
+// skips the sweep.
+fn sidecar_pidfile() -> Option<std::path::PathBuf> {
+    let raw = std::env::var("HIGHWIRE_HOME").unwrap_or_else(|_| "~/.highwire".to_string());
+
+    let home = match raw.strip_prefix("~/") {
+        Some(rest) => std::path::PathBuf::from(std::env::var("HOME").ok()?).join(rest),
+        None => std::path::PathBuf::from(raw),
+    };
+
+    Some(home.join("sidecar.json"))
+}
+
+fn sidecar_engine_pid(path: &std::path::Path) -> Option<i32> {
+    let body = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&body).ok()?;
+    json.get("os_pid")?.as_i64().map(|pid| pid as i32)
+}
+
+// The pidfile can outlive its engine (and pids get reused) — only a
+// process that still looks like the Erlang VM gets a signal. Mirrors
+// the sidecar's beam?/1 check.
+#[cfg(unix)]
+fn looks_like_engine(pid: i32) -> bool {
+    match StdCommand::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let comm = String::from_utf8_lossy(&out.stdout);
+            comm.contains("beam") || comm.contains("/erl")
+        }
+        _ => false,
+    }
+}
+
+#[cfg(windows)]
+fn looks_like_engine(pid: i32) -> bool {
+    match StdCommand::new("tasklist")
+        .args(["/FO", "CSV", "/NH", "/FI", &format!("PID eq {pid}")])
+        .output()
+    {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout).to_lowercase();
+            text.contains("beam") || text.contains("erl")
+        }
+        Err(_) => false,
+    }
+}
+
+// A graceful backend shutdown removes the pidfile itself; what is left
+// here is either a backend that died abruptly or an engine from an
+// earlier run — TERM, give it the same grace, then KILL what is left.
+#[cfg(unix)]
+fn sweep_sidecar_engine() {
+    let Some(path) = sidecar_pidfile() else {
+        return;
+    };
+    let Some(pid) = sidecar_engine_pid(&path) else {
+        return;
+    };
+
+    if !looks_like_engine(pid) {
+        return;
+    }
+
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(5_000);
+
+    loop {
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            break;
+        }
+        if Instant::now() >= deadline {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[cfg(windows)]
+fn sweep_sidecar_engine() {
+    let Some(path) = sidecar_pidfile() else {
+        return;
+    };
+    let Some(pid) = sidecar_engine_pid(&path) else {
+        return;
+    };
+
+    if looks_like_engine(pid) {
+        taskkill(&["/PID", &pid.to_string(), "/T", "/F"]);
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 // The Elixir (Burrito) backend serves the LiveView on this port.
