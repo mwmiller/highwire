@@ -19,6 +19,8 @@ defmodule HighWireWeb.PostLive do
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Nav
 
+  import HighWireWeb.Components.Time, only: [rel_time: 1]
+
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket), do: Phoenix.PubSub.subscribe(HighWire.PubSub, Timeline.topic())
@@ -184,18 +186,6 @@ defmodule HighWireWeb.PostLive do
     case msg["value"]["timestamp"] do
       t when is_number(t) -> round(t)
       _ -> 0
-    end
-  end
-
-  defp rel_time(t) when is_number(t) do
-    diff = System.system_time(:millisecond) - t
-
-    cond do
-      diff < 60_000 -> "just now"
-      diff < 3_600_000 -> "#{div(diff, 60_000)}m ago"
-      diff < 86_400_000 -> "#{div(diff, 3_600_000)}h ago"
-      diff < 604_800_000 -> "#{div(diff, 86_400_000)}d ago"
-      true -> t |> DateTime.from_unix!(:millisecond) |> Calendar.strftime("%b %d, %Y")
     end
   end
 

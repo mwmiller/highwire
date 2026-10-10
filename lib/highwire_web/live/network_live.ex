@@ -19,6 +19,8 @@ defmodule HighWireWeb.NetworkLive do
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Nav
 
+  import HighWireWeb.Components.Time, only: [rel_time: 1]
+
   @impl true
   def mount(_params, _session, socket) do
     tick_timer =
@@ -240,21 +242,5 @@ defmodule HighWireWeb.NetworkLive do
 
   defp blob_rev(network) do
     network["blobRev"] || 0
-  end
-
-  defp rel_time(nil), do: "never"
-  defp rel_time(0), do: "never"
-
-  defp rel_time(t) when is_number(t) do
-    diff = System.system_time(:millisecond) - t
-
-    cond do
-      diff < 0 -> "just now"
-      diff < 60_000 -> "just now"
-      diff < 3_600_000 -> "#{div(diff, 60_000)}m ago"
-      diff < 86_400_000 -> "#{div(diff, 3_600_000)}h ago"
-      diff < 604_800_000 -> "#{div(diff, 86_400_000)}d ago"
-      true -> t |> DateTime.from_unix!(:millisecond) |> Calendar.strftime("%b %d, %Y")
-    end
   end
 end
