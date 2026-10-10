@@ -176,6 +176,9 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
     let timeline = MenuItemBuilder::with_id("timeline", "Timeline")
         .accelerator("CmdOrCtrl+1")
         .build(handle)?;
+    let network = MenuItemBuilder::with_id("network", "Network")
+        .accelerator("CmdOrCtrl+2")
+        .build(handle)?;
     let dashboard = MenuItemBuilder::with_id("dashboard", "Dashboard")
         .accelerator("CmdOrCtrl+D")
         .build(handle)?;
@@ -236,6 +239,7 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
         .build()?;
     let go = SubmenuBuilder::new(handle, "Go")
         .item(&timeline)
+        .item(&network)
         .separator()
         .item(&dashboard)
         .separator()
@@ -382,6 +386,7 @@ pub fn run() {
             };
             match event.id().as_ref() {
                 "timeline" => navigate("/"),
+                "network" => navigate("/network"),
                 "dashboard" => navigate("/dashboard"),
                 "prefs" => navigate("/settings"),
                 "profile" => navigate("/profile"),

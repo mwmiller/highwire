@@ -36,9 +36,13 @@ tag-triggered release workflow (`.github/workflows/release.yml`).
 - Profile activity renders newest-first (ordering is done in the UI).
 - One identity per `HIGHWIRE_HOME`; there is no in-app account
   switching.
-- The native menu's Go items (Timeline ⌘1, Dashboard ⌘D, My Profile
-  ⌘⇧P) and Preferences ⌘, navigate the webview; the window remembers
-  its size and position across launches.
+- The Network page (`/network`) is the general place to manage
+  dialing: the network profile switcher, the dialer's enable/disable
+  and dial-now controls, the live connections, the `conn.json`
+  address book, and the recent dial attempts. The native menu's Go
+  items (Timeline ⌘1, Network ⌘2, Dashboard ⌘D, My Profile ⌘⇧P) and
+  Preferences ⌘, navigate the webview; the window remembers its size
+  and position across launches.
 
 **Engine**
 

@@ -83,9 +83,10 @@ defmodule HighWire.Timeline do
 
   @doc """
   The sidecar's `gossip.peers` connection report — live peer ids, dialer
-  state, candidate counts, recent dial attempts — or nil when the engine
-  is down (or erlbutt predates the RPC). Polled every 10s by the server;
-  the dashboard reads it synchronously.
+  state, candidate counts, recent dial attempts — merged with the
+  `admin.peers.known` address book under `"knownPeers"`, or nil when
+  the engine is down (or erlbutt predates the RPCs). Polled every 10s
+  by the server; the /network dashboard reads it synchronously.
   """
   @spec network() :: map() | nil
   def network do
@@ -513,7 +514,7 @@ defmodule HighWire.Timeline do
   defp fetch_network(client) do
     if is_pid(client) and Process.alive?(client) do
       case Client.call(client, ["gossip", "peers"], [], 2_000) do
-        {:ok, net} when is_map(net) -> net
+        {:ok, net} when is_map(net) -> Map.put(net, "knownPeers", fetch_known_peers(client))
         _ -> nil
       end
     else
@@ -521,6 +522,19 @@ defmodule HighWire.Timeline do
     end
   catch
     _, _ -> nil
+  end
+
+  # admin.peers.known — the conn.json address book — rides the same
+  # 10s network refresh so the /network dashboard renders it with the
+  # live report. Engines predating the admin namespace answer a method
+  # error; the book simply stays empty.
+  defp fetch_known_peers(client) do
+    case Client.call(client, ["admin", "peers", "known"], [], 2_000) do
+      {:ok, peers} when is_list(peers) -> Enum.filter(peers, &is_map/1)
+      _ -> []
+    end
+  catch
+    _, _ -> []
   end
 
   # stats.whoToFollow — active feeds we do not follow, ranked by

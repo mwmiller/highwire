@@ -9,9 +9,14 @@ defmodule HighWire do
   `HIGHWIRE_HOME` environment variable to put it elsewhere.
   """
 
-  @version "0.1.0"
-
-  def version, do: @version
+  # The app version from mix.exs (the .app spec's vsn) — never a
+  # second hardcoded copy that drifts at release time.
+  def version do
+    case Application.spec(:highwire, :vsn) do
+      nil -> "unknown"
+      vsn -> to_string(vsn)
+    end
+  end
 
   def home_dir do
     :highwire

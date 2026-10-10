@@ -26,7 +26,7 @@ defmodule HighWire.SSB.Sidecar do
 
   require Logger
 
-  alias HighWire.SSB.{Client, Keys, Network}
+  alias HighWire.SSB.{Admin, Client, Keys, Network}
 
   def config, do: Application.get_env(:highwire, :ssb, [])
 
@@ -218,7 +218,7 @@ defmodule HighWire.SSB.Sidecar do
 
   def handle_info({:probe_result, {:attach, port, owner}}, state) do
     Logger.info("sidecar: attached to existing erlbutt on 127.0.0.1:#{port}")
-    ensure_dialer(port)
+    ensure_dialer()
 
     # Take ownership when the pidfile names this engine: terminate/2
     # kills state.os_pid, so an attached leftover we spawned earlier is
@@ -247,7 +247,7 @@ defmodule HighWire.SSB.Sidecar do
         case String.trim(line) do
           "HW_SIDECAR_READY" ->
             Logger.info("sidecar: erlbutt ready on 127.0.0.1:#{st.listen_port}")
-            ensure_dialer(st.listen_port)
+            ensure_dialer()
             %{st | status: :ready, attempts: 0}
 
           "HW_SIDECAR_FAIL" <> detail ->
@@ -386,59 +386,15 @@ defmodule HighWire.SSB.Sidecar do
   # fired once the engine answers: an upstream build without the admin
   # dialer API must not crash the sidecar (log at debug instead), and a
   # slow or wedged engine must not stall the readiness transition.
-  defp ensure_dialer(port) do
+  # The one-shot SHS dance lives in HighWire.SSB.Admin, shared with the
+  # Network page's dialer controls.
+  defp ensure_dialer do
     spawn(fn ->
-      # Same reason the probe traps: Client.start_link links, and an
-      # SHS/init crash would otherwise kill this worker mid-flight.
-      Process.flag(:trap_exit, true)
-      dialer_enable(port)
-    end)
-  end
-
-  defp dialer_enable(port) do
-    result = dialer_rpc(port)
-
-    case result do
-      {:ok, _} -> Logger.info("sidecar: peer dialer enabled")
-      other -> Logger.debug("sidecar: dialer enable skipped: #{inspect(other)}")
-    end
-  end
-
-  defp dialer_rpc(port) do
-    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
-
-    try do
-      with true <- File.exists?(secret),
-           {:ok, client} <-
-             Client.start_link(
-               port: port,
-               remote_pk: Keys.load!(secret).public,
-               net_id: Base.decode64!(net_id()),
-               keys: Keys.load!(secret)
-             ) do
-        call =
-          try do
-            Client.call(client, ["admin", "dialer", "enable"], [], 3_000)
-          catch
-            kind, reason -> {:error, {kind, reason}}
-          end
-
-        _ =
-          try do
-            Client.stop(client)
-          catch
-            _, _ -> :ok
-          end
-
-        call
-      else
-        _ -> {:error, :unreachable}
+      case Admin.dialer_enable() do
+        {:ok, _} -> Logger.info("sidecar: peer dialer enabled")
+        other -> Logger.debug("sidecar: dialer enable skipped: #{inspect(other)}")
       end
-    rescue
-      e -> {:error, e}
-    catch
-      kind, reason -> {:error, {kind, reason}}
-    end
+    end)
   end
 
   defp retry(state) do

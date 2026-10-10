@@ -2,10 +2,11 @@ defmodule HighWireWeb.Components.Nav do
   @moduledoc """
   The shared left rail: the crab mark (linking to the timeline) with
   the settings gear beside it, and — pinned to the bottom — the current
-  network badge, which links to the network section of settings. Pages
-  add their own content to the rail through the default slot; pages
-  that pass none get the same wide frame, so the column never jumps
-  between pages.
+  network badge, which links to the network page (`/network`) — the
+  general place to manage dialing and the network profile. Pages add
+  their own content to the rail through the default slot; pages that
+  pass none get the same wide frame, so the column never jumps between
+  pages.
   """
 
   use Phoenix.Component
@@ -46,9 +47,9 @@ defmodule HighWireWeb.Components.Nav do
       </div>
       {render_slot(@inner_block)}
       <.link
-        navigate="/settings"
-        title={"Network: #{Network.label(Network.current())} — click to change"}
-        aria-label="Network settings"
+        navigate="/network"
+        title={"Network: #{Network.label(Network.current())} — click to manage"}
+        aria-label="Network"
         class={[
           "mt-auto block border-t border-edge py-2 text-center text-[10px] font-medium uppercase",
           "tracking-wide transition hover:text-paper",
