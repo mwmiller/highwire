@@ -203,16 +203,10 @@ defmodule HighWireWeb.SettingsLive do
 
           <p class="mt-3 text-sm text-dim">Engine: {status_text(@net_status)}</p>
 
-          <p :if={@network == :mainnet} class="mt-4 text-sm text-bad">
-            Connected to Mainnet: receiving and replicating from mainnet peers is active,
-            but posting, replying, liking and following are disabled while Patchwork still
-            publishes this identity — two writers would fork the feed.
-          </p>
-
           <p :if={@network == :custom} class="mt-4 text-sm text-bad">
             Unknown network id in overrides.cfg
-            (<span class="font-mono text-xs">{Network.current_id()}</span>) — posting is
-            disabled. Switch to Development to continue.
+            (<span class="font-mono text-xs">{Network.current_id()}</span>) — this is not a
+            network HighWire knows. Switch to Development or Mainnet.
           </p>
 
           <div phx-hook="Prefs" id="prefs">

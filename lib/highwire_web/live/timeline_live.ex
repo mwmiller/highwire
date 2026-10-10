@@ -360,9 +360,6 @@ defmodule HighWireWeb.TimelineLive do
 
   defp publish_error(:offline), do: "SSB engine offline."
 
-  defp publish_error(:mainnet_read_only),
-    do: "Publishing is disabled while connected to Mainnet — Patchwork still writes this feed."
-
   defp publish_error(reason) when is_binary(reason), do: reason
   defp publish_error(%{"message" => msg}) when is_binary(msg), do: msg
   defp publish_error(_reason), do: "Publish failed — the engine refused the message."

@@ -149,9 +149,6 @@ defmodule HighWireWeb.PostLive do
 
   defp reply_error(:offline), do: "Not connected to the local SSB engine yet."
 
-  defp reply_error(:mainnet_read_only),
-    do: "Replying is disabled while connected to Mainnet — Patchwork still writes this feed."
-
   defp reply_error(_reason), do: "Reply failed — the engine refused the message."
 
   defp liked?(assigns, key), do: key in assigns.my_likes

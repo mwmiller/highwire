@@ -21,10 +21,8 @@ defmodule HighWire.SSB.Network do
   the server side accepts either, so flipping back never loses inbound
   contact mid-transition.
 
-  Posting is only permitted on the development network. Until the
-  one-writer situation on mainnet is resolved (Patchwork still publishes
-  this identity), `publishable?/0` stays false there and every publish
-  path in the app refuses.
+  Publishing is the same on every network: the switch is about whom
+  you talk to, not whether this identity may write.
   """
 
   require Logger
@@ -71,14 +69,6 @@ defmodule HighWire.SSB.Network do
   def current_id do
     overrides_network_id() || app_env_id() || @dev_id
   end
-
-  @doc """
-  Publishing is allowed only on the development network. On mainnet the
-  identity still has a second writer (Patchwork), and two writers fork
-  the feed for good — refuse until that is resolved.
-  """
-  @spec publishable?() :: boolean()
-  def publishable?, do: current() == :dev
 
   @doc """
   Switch the primary network in `overrides.cfg`, keeping the other

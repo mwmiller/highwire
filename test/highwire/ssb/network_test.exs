@@ -47,7 +47,6 @@ defmodule HighWire.SSB.NetworkTest do
   test "no overrides file falls back to the development profile" do
     assert Network.current() == :dev
     assert Network.current_id() == @dev
-    assert Network.publishable?()
   end
 
   test "set/1 writes a consultable file and round-trips" do
@@ -59,7 +58,6 @@ defmodule HighWire.SSB.NetworkTest do
 
     assert Network.current() == :mainnet
     assert Network.current_id() == @mainnet
-    refute Network.publishable?()
 
     assert :ok = Network.set(:dev)
 
@@ -68,7 +66,6 @@ defmodule HighWire.SSB.NetworkTest do
     assert get(terms, :extra_network_ids) == [String.to_charlist(@mainnet)]
 
     assert Network.current() == :dev
-    assert Network.publishable?()
   end
 
   test "set/1 preserves unrelated terms already in the file", %{tmp: _tmp} do
@@ -82,13 +79,12 @@ defmodule HighWire.SSB.NetworkTest do
     assert get(terms, :network_id) == String.to_charlist(@mainnet)
   end
 
-  test "an unknown network id in the file selects no profile and blocks posting" do
+  test "an unknown network id in the file selects no profile" do
     File.mkdir_p!(Path.dirname(Network.path()))
     File.write!(Network.path(), "{network_id,\"bm90LWEtcmVhbC1uZXR3b3Jr\"}.\n")
 
     assert Network.current() == :custom
     assert Network.current_id() == "bm90LWEtcmVhbC1uZXR3b3Jr"
-    refute Network.publishable?()
   end
 
   test "a corrupt overrides file is ignored, then repaired by set/1" do
@@ -96,19 +92,20 @@ defmodule HighWire.SSB.NetworkTest do
     File.write!(Network.path(), "this is not erlang {{{\n")
 
     assert Network.current() == :dev
-    assert Network.publishable?()
 
     assert :ok = Network.set(:mainnet)
     assert Network.current() == :mainnet
   end
 
-  test "timeline publishes only on the development network" do
+  test "timeline publish is network-agnostic — the engine answers or it is offline" do
     assert {:error, :offline} = Timeline.publish("hello")
 
+    # On mainnet the call used to refuse before reaching the engine;
+    # now every profile falls through to the same engine path.
     assert :ok = Network.set(:mainnet)
-    assert {:error, :mainnet_read_only} = Timeline.publish("hello")
-    assert {:error, :mainnet_read_only} = Timeline.like("%some=.sha256")
-    assert {:error, :mainnet_read_only} = Timeline.follow("@some=.ed25519")
+    assert {:error, :offline} = Timeline.publish("hello")
+    assert {:error, :offline} = Timeline.like("%some=.sha256")
+    assert {:error, :offline} = Timeline.follow("@some=.ed25519")
 
     assert :ok = Network.set(:dev)
     assert {:error, :offline} = Timeline.publish("hello")
