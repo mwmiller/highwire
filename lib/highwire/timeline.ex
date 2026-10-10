@@ -60,6 +60,10 @@ defmodule HighWire.Timeline do
 
   @topic "timeline"
 
+  # First-paint: once this many feed streams have reported, broadcast
+  # what has arrived instead of waiting for every stream (up to 400).
+  @first_paint_feeds 40
+
   def topic, do: @topic
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -339,7 +343,9 @@ defmodule HighWire.Timeline do
       active: %{},
       gen: 0,
       network_timer: nil,
-      reload_timer: nil
+      reload_timer: nil,
+      profile_fetching?: false,
+      done_count: 0
     }
 
     if Sidecar.enabled?() do
@@ -953,6 +959,20 @@ defmodule HighWire.Timeline do
     end
   end
 
+  # The async profile pass: merge into whatever payload is current and
+  # re-broadcast so names and avatars fill in without a full reload.
+  def handle_info({:profiles_fetched, fetched}, state) do
+    state = %{state | profile_fetching?: false}
+
+    if map_size(fetched) == 0 do
+      {:noreply, state}
+    else
+      payload = %{state.messages | profiles: Map.merge(state.messages.profiles, fetched)}
+      Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
+      {:noreply, %{state | messages: payload}}
+    end
+  end
+
   def handle_info(_other, state), do: {:noreply, state}
 
   # -- flow --------------------------------------------------------------
@@ -963,7 +983,7 @@ defmodule HighWire.Timeline do
       map_size(state.pending) != 0 -> state
       state.follows == [] -> state
       not (is_pid(state.client) and Process.alive?(state.client)) -> state
-      true -> %{state | pending: open_feeds(state), acc: []}
+      true -> %{state | pending: open_feeds(state), acc: [], done_count: 0}
     end
   catch
     _, _ -> state
@@ -1050,17 +1070,44 @@ defmodule HighWire.Timeline do
         {:noreply, state}
 
       {_feed, pending} ->
-        state = %{state | pending: pending}
+        state = %{state | pending: pending, done_count: state.done_count + 1}
 
-        if map_size(pending) == 0 do
-          {:noreply, finalize(state)}
-        else
-          {:noreply, state}
+        cond do
+          map_size(pending) == 0 ->
+            {:noreply, finalize(state)}
+
+          # First load only: paint once a sliver of the window is in,
+          # rather than waiting on all 400 streams. The final payload
+          # replaces this one wholesale.
+          state.status != :ok and state.done_count == @first_paint_feeds ->
+            {:noreply, broadcast_preliminary(state)}
+
+          true ->
+            {:noreply, state}
         end
     end
   end
 
   defp finalize(state) do
+    {payload, missing, base, post_refs} = build_payload(state)
+
+    Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
+
+    state = %{state | status: :ok, messages: payload, acc: [], pending: %{}, done_count: 0}
+    kick_profile_fetch(state, missing, base, post_refs)
+  end
+
+  # First-paint snapshot: same payload, nothing cleared — feeds are
+  # still streaming and the final pass rebuilds it wholesale.
+  defp broadcast_preliminary(state) do
+    {payload, _missing, _base, _refs} = build_payload(state)
+
+    Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
+
+    %{state | status: :ok, messages: payload}
+  end
+
+  defp build_payload(state) do
     now = System.system_time(:millisecond)
     acc = state.acc
 
@@ -1088,13 +1135,8 @@ defmodule HighWire.Timeline do
     ids = Enum.uniq(profile_ids(feed, state.follows) ++ sugg_ids)
     known = Map.get(state.messages, :profiles, %{})
     missing = Enum.reject(ids, &Map.has_key?(known, &1))
-
-    profiles =
-      known
-      |> Map.take(ids)
-      |> Map.merge(fetch_profiles(state.client, missing))
-
-    want_missing_blobs(state.client, post_image_refs(acc) ++ image_refs(profiles))
+    base = Map.take(known, ids)
+    post_refs = post_image_refs(acc)
 
     payload = %{
       feed: feed,
@@ -1106,14 +1148,47 @@ defmodule HighWire.Timeline do
       index: index,
       follows: state.follows,
       self_id: state.self_id,
-      profiles: profiles,
+      profiles: base,
       blob_rev: state.blob_rev,
       suggestions: suggestions
     }
 
-    Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
+    {payload, missing, base, post_refs}
+  end
 
-    %{state | status: :ok, messages: payload, acc: [], pending: %{}}
+  # Names and blob wants run after the payload is out: the feed must not
+  # wait on hundreds of avatar round trips. One worker at a time — a
+  # finalize while it runs skips, and the pass after it finishes rechecks
+  # whatever is still missing.
+  defp kick_profile_fetch(%{profile_fetching?: true} = state, _missing, _base, _refs),
+    do: state
+
+  defp kick_profile_fetch(state, [], _base, _refs), do: state
+
+  defp kick_profile_fetch(state, missing, base, post_refs) do
+    if is_pid(state.client) and Process.alive?(state.client) do
+      client = state.client
+      parent = self()
+
+      spawn(fn ->
+        try do
+          t0 = System.monotonic_time(:millisecond)
+          fetched = fetch_profiles(client, missing)
+          want_missing_blobs(client, post_refs ++ image_refs(Map.merge(base, fetched)))
+          took = System.monotonic_time(:millisecond) - t0
+          Logger.debug("timeline: #{map_size(fetched)} profiles + wants in #{took}ms")
+          send(parent, {:profiles_fetched, fetched})
+        catch
+          kind, reason ->
+            Logger.debug("timeline: profile worker failed: #{inspect({kind, reason})}")
+            send(parent, {:profiles_fetched, %{}})
+        end
+      end)
+
+      %{state | profile_fetching?: true}
+    else
+      state
+    end
   end
 
   # -- profiles -----------------------------------------------------------
@@ -1128,15 +1203,27 @@ defmodule HighWire.Timeline do
     |> Enum.take(600)
   end
 
-  defp fetch_profiles(nil, _ids), do: %{}
-
+  # Concurrent across ids: the muxrpc client pipelines in-flight requests
+  # over one connection, so 8-wide turns a serial crawl into a couple of
+  # round-trip groups. A dead client or a timeout drops that id only.
   defp fetch_profiles(client, ids) do
-    Enum.reduce_while(ids, %{}, fn id, acc ->
-      case avatar_of(client, id) do
-        {:ok, profile} -> {:cont, Map.put(acc, id, profile)}
-        :error -> {:cont, acc}
-        :stop -> {:halt, acc}
-      end
+    ids
+    |> Task.async_stream(
+      fn id ->
+        case avatar_of(client, id) do
+          {:ok, profile} -> {id, profile}
+          _other -> nil
+        end
+      end,
+      max_concurrency: 8,
+      ordered: false,
+      timeout: 5_000,
+      on_timeout: :kill_task
+    )
+    |> Enum.reduce(%{}, fn
+      {:ok, {id, profile}}, acc when not is_nil(profile) -> Map.put(acc, id, profile)
+      {:ok, nil}, acc -> acc
+      {:exit, _reason}, acc -> acc
     end)
   end
 

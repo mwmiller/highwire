@@ -80,7 +80,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(:peers, Timeline.network())
       |> assign(q: "", expanded: MapSet.new(), view: :public)
       |> assign(compose: "", compose_error: nil)
-      |> assign(paged: %{})
+      |> assign(paged: %{}, page_inflight: MapSet.new())
       |> assign(active: true, peers_timer: peers_timer)
       |> maybe_load_page()
       |> merge_paged()
@@ -120,6 +120,32 @@ defmodule HighWireWeb.TimelineLive do
       end
 
     {:noreply, schedule_labels_tick(socket)}
+  end
+
+  # Cursor pages load off the render path: maybe_load_page/1 plants a
+  # shell entry (which merge_paged/1 fills from the window immediately)
+  # and the engine's answer — or its absence — lands here.
+  def handle_info({:page_loaded, view, resume, page}, socket) do
+    entry =
+      socket.assigns.paged
+      |> Map.get(view, %{rows: [], resume: nil, more: false})
+      |> append_page(page.rows)
+      |> Map.put(:resume, page.resume)
+      |> Map.put(:more, page.more)
+      |> Map.put(:loaded?, true)
+
+    socket =
+      socket
+      |> assign(:page_inflight, MapSet.delete(socket.assigns.page_inflight, {view, resume}))
+      |> assign(:paged, Map.put(socket.assigns.paged, view, merge_into(view, entry, socket)))
+
+    {:noreply, merge_paged(socket)}
+  end
+
+  def handle_info({:page_failed, view, resume}, socket) do
+    # Clear the in-flight mark; the next payload retries the load.
+    {:noreply,
+     assign(socket, :page_inflight, MapSet.delete(socket.assigns.page_inflight, {view, resume}))}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -183,7 +209,7 @@ defmodule HighWireWeb.TimelineLive do
         if Atom.to_string(key) == v, do: key
       end)
 
-    {:noreply, socket |> assign(:view, view) |> maybe_load_page()}
+    {:noreply, socket |> assign(:view, view) |> maybe_load_page() |> merge_paged()}
   end
 
   def handle_event("expand", %{"key" => key}, socket) do
@@ -205,9 +231,15 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   def handle_event("load-more", _params, socket) do
-    case Map.get(socket.assigns.paged, socket.assigns.view) do
+    view = socket.assigns.view
+
+    case Map.get(socket.assigns.paged, view) do
       %{more: true, resume: resume} when is_integer(resume) ->
-        {:noreply, fetch_page(socket, socket.assigns.view, resume)}
+        if MapSet.member?(socket.assigns.page_inflight, {view, resume}) do
+          {:noreply, socket}
+        else
+          {:noreply, request_page(socket, view, resume)}
+        end
 
       _ ->
         {:noreply, socket}
@@ -250,25 +282,52 @@ defmodule HighWireWeb.TimelineLive do
   # kept per view so switching back restores the loaded rows. The engine's
   # flat window rides along, so follow/about events are in the tab from
   # first paint and after a view switch.
-  defp maybe_load_page(%{assigns: %{status: status, view: view, paged: paged}} = socket) do
-    if connected?(socket) and status == :ok and not Map.has_key?(paged, view) do
-      fetch_page(socket, view, nil)
-    else
-      socket
+  # The cursor page loads off the render path. Until it arrives the tab
+  # renders from a shell entry, which merge_paged/1 fills with window
+  # rows right away — mount and tab switches never wait on the engine.
+  defp maybe_load_page(
+         %{assigns: %{status: status, view: view, paged: paged, page_inflight: inflight}} = socket
+       ) do
+    cond do
+      not (connected?(socket) and status == :ok) ->
+        socket
+
+      MapSet.member?(inflight, {view, nil}) ->
+        socket
+
+      true ->
+        case Map.fetch(paged, view) do
+          {:ok, %{loaded?: true}} ->
+            socket
+
+          {:ok, _shell} ->
+            request_page(socket, view, nil)
+
+          :error ->
+            shell = %{rows: [], resume: nil, more: false, loaded?: false}
+
+            socket
+            |> assign(:paged, Map.put(paged, view, shell))
+            |> request_page(view, nil)
+        end
     end
   end
 
-  defp fetch_page(socket, view, resume) do
-    page = Timeline.feed(view, resume)
+  defp request_page(socket, view, resume) do
+    owner = self()
 
-    entry =
-      socket.assigns.paged
-      |> Map.get(view, %{rows: [], resume: nil, more: false})
-      |> append_page(page.rows)
-      |> Map.put(:resume, page.resume)
-      |> Map.put(:more, page.more)
+    spawn(fn ->
+      message =
+        try do
+          {:page_loaded, view, resume, Timeline.feed(view, resume)}
+        catch
+          _kind, _reason -> {:page_failed, view, resume}
+        end
 
-    assign(socket, paged: Map.put(socket.assigns.paged, view, merge_into(view, entry, socket)))
+      send(owner, message)
+    end)
+
+    assign(socket, :page_inflight, MapSet.put(socket.assigns.page_inflight, {view, resume}))
   end
 
   # Cursor pages append at the tail, deduped in favour of the page row:
