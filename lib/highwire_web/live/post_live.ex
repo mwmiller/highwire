@@ -32,6 +32,7 @@ defmodule HighWireWeb.PostLive do
        not_found: false,
        profiles: %{},
        like_counts: %{},
+       likes_by: %{},
        my_likes: [],
        self_id: nil,
        status: :disabled,
@@ -61,6 +62,7 @@ defmodule HighWireWeb.PostLive do
         blob_rev: Map.get(payload, :blob_rev, 0),
         profiles: Map.get(payload, :profiles, socket.assigns.profiles),
         like_counts: Map.get(payload, :like_counts, socket.assigns.like_counts),
+        likes_by: Map.get(payload, :likes_by, socket.assigns.likes_by),
         my_likes: Map.get(payload, :my_likes, socket.assigns.my_likes),
         self_id: Map.get(payload, :self_id, socket.assigns.self_id)
       )
@@ -85,6 +87,7 @@ defmodule HighWireWeb.PostLive do
       not_found: post == nil,
       profiles: Map.get(payload, :profiles, %{}),
       like_counts: Map.get(payload, :like_counts, %{}),
+      likes_by: Map.get(payload, :likes_by, %{}),
       my_likes: Map.get(payload, :my_likes, []),
       self_id: Map.get(payload, :self_id),
       blob_rev: Map.get(payload, :blob_rev, 0)
@@ -214,7 +217,15 @@ defmodule HighWireWeb.PostLive do
     likes = if assigns.root, do: Map.get(assigns.like_counts, assigns.root["key"], 0), else: 0
     root_liked = is_map(assigns.root) and liked?(assigns, assigns.root["key"])
 
-    assigns = assign(assigns, likes: likes, root_liked: root_liked)
+    root_likers =
+      if assigns.root, do: Map.get(assigns.likes_by, assigns.root["key"], []), else: []
+
+    assigns =
+      assign(assigns,
+        likes: likes,
+        root_liked: root_liked,
+        root_likers: Enum.take(root_likers, 4)
+      )
 
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
@@ -277,18 +288,32 @@ defmodule HighWireWeb.PostLive do
                     <span :if={length(@replies) > 0}>
                       {length(@replies)} {if length(@replies) == 1, do: "reply", else: "replies"}
                     </span>
-                    <button
-                      type="button"
-                      phx-click="like"
-                      phx-value-key={@root["key"]}
-                      class={[
-                        "flex items-center gap-1 transition-colors hover:text-paper",
-                        @root_liked and "font-medium text-accent"
-                      ]}
-                      title={if(@root_liked, do: "Unlike", else: "Like")}
-                    >
-                      ❤ <span :if={@likes > 0}>{@likes}</span>
-                    </button>
+                    <div class="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        phx-click="like"
+                        phx-value-key={@root["key"]}
+                        class={[
+                          "transition-colors hover:text-paper",
+                          @root_liked and "font-medium text-accent"
+                        ]}
+                        title={if(@root_liked, do: "Unlike", else: "Like")}
+                      >
+                        ❤
+                      </button>
+                      <span
+                        :for={liker <- @root_likers}
+                        title={display_name(liker, @profiles)}
+                        class="inline-flex"
+                      >
+                        <Avatar.avatar
+                          id={liker}
+                          size={16}
+                          image={image_of(liker, @profiles)}
+                          rev={@blob_rev}
+                        />
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -342,22 +367,31 @@ defmodule HighWireWeb.PostLive do
                   {raw(Markdown.to_html(text(reply), blob_rev: @blob_rev))}
                 </div>
 
-                <div class="mt-1.5">
+                <div class="mt-1.5 flex items-center gap-1.5">
                   <button
                     type="button"
                     phx-click="like"
                     phx-value-key={reply["key"]}
                     class={[
-                      "flex items-center gap-1 text-xs text-dim transition-colors hover:text-paper",
+                      "text-xs text-dim transition-colors hover:text-paper",
                       reply["key"] in @my_likes and "font-medium text-accent"
                     ]}
                     title={if(reply["key"] in @my_likes, do: "Unlike", else: "Like")}
                   >
                     ❤
-                    <span :if={Map.get(@like_counts, reply["key"], 0) > 0}>
-                      {Map.get(@like_counts, reply["key"], 0)}
-                    </span>
                   </button>
+                  <span
+                    :for={liker <- Enum.take(Map.get(@likes_by, reply["key"], []), 4)}
+                    title={display_name(liker, @profiles)}
+                    class="inline-flex"
+                  >
+                    <Avatar.avatar
+                      id={liker}
+                      size={16}
+                      image={image_of(liker, @profiles)}
+                      rev={@blob_rev}
+                    />
+                  </span>
                 </div>
               </div>
             </div>

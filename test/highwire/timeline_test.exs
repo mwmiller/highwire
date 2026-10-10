@@ -133,6 +133,30 @@ defmodule HighWire.TimelineTest do
 
       assert Timeline.likes_state(msgs) == %{}
     end
+
+    test "like_authors lists positive voters newest-first, retractions out" do
+      msgs = [
+        vote("a1", "%v1", 1_000, %{"vote" => %{"link" => "%t", "value" => 1}}),
+        vote("a2", "%v2", 2_000, %{"vote" => %{"link" => "%t", "value" => 1}}),
+        # a1 takes it back — the voter disappears from the list.
+        vote("a1", "%v3", 3_000, %{"vote" => %{"link" => "%t", "value" => 0}}),
+        vote("a3", "%v4", 4_000, %{"vote" => %{"link" => "%u", "value" => 1}})
+      ]
+
+      assert Timeline.likes_state(msgs) |> Timeline.like_authors() == %{
+               "%t" => ["a2"],
+               "%u" => ["a3"]
+             }
+    end
+
+    test "like_authors orders voters by vote recency" do
+      older = vote("a1", "%v1", 1_000, %{"vote" => %{"link" => "%t", "value" => 1}})
+      newer = vote("a2", "%v2", 2_000, %{"vote" => %{"link" => "%t", "value" => 1}})
+
+      likes = Timeline.likes_state([older, newer])
+
+      assert Timeline.like_authors(likes) == %{"%t" => ["a2", "a1"]}
+    end
   end
 
   describe "build_feed/4" do

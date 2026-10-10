@@ -30,6 +30,8 @@ defmodule HighWire.Timeline do
                         capped at 200
     * `:reply_counts` — `%{root_key => n}` from post messages
     * `:like_counts`  — `%{message_key => n}` from vote messages
+    * `:likes_by`     — `%{message_key => [author_id]}` the positive
+                        voters per target, most recent voter first
     * `:index`        — `%{message_key => author_id}` for the full pass
     * `:follows`      — the account's follow list (includes self)
     * `:self_id`      — the account's own feed id
@@ -308,6 +310,7 @@ defmodule HighWire.Timeline do
       messages: [],
       reply_counts: %{},
       like_counts: %{},
+      likes_by: %{},
       my_likes: [],
       index: %{},
       follows: [],
@@ -1102,6 +1105,7 @@ defmodule HighWire.Timeline do
       messages: messages,
       reply_counts: reply_counts,
       like_counts: like_counts,
+      likes_by: like_authors(likes),
       my_likes: my_likes(likes, state.self_id),
       index: index,
       follows: state.follows,
@@ -1491,6 +1495,21 @@ defmodule HighWire.Timeline do
     Enum.reduce(likes, %{}, fn {link, by_author}, counts ->
       n = Enum.count(by_author, fn {_author, {_ts, value}} -> is_number(value) and value > 0 end)
       if n > 0, do: Map.put(counts, link, n), else: counts
+    end)
+  end
+
+  # The same votes as like_counts/1, but as the liker ids themselves,
+  # newest voter first — the feed shows who liked, not how many.
+  @doc false
+  def like_authors(likes) do
+    Enum.reduce(likes, %{}, fn {link, by_author}, acc ->
+      authors =
+        by_author
+        |> Enum.filter(fn {_author, {_ts, value}} -> is_number(value) and value > 0 end)
+        |> Enum.sort_by(fn {author, {ts, _}} -> {ts, author} end, :desc)
+        |> Enum.map(&elem(&1, 0))
+
+      if authors == [], do: acc, else: Map.put(acc, link, authors)
     end)
   end
 

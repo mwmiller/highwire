@@ -156,6 +156,34 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ carol
       assert count(html, "followed") == 1
     end
+
+    test "posts show who liked them instead of a count", %{conn: conn} do
+      now = 1_700_000_000_000
+      liker = "@dana:.ed25519"
+
+      msgs = [
+        ssb_msg("%root-liked.sha256", "@alice:.ed25519", now - 5_000, %{
+          "type" => "post",
+          "text" => "the thing"
+        }),
+        ssb_msg("%vote-dana.sha256", liker, now - 1_000, %{
+          "type" => "vote",
+          "vote" => %{"link" => "%root-liked.sha256", "value" => 1, "expression" => "like"}
+        })
+      ]
+
+      payload =
+        feed_payload(msgs, now: now)
+        |> Map.put(:profiles, %{liker => %{name: "Dana", image: nil}})
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, payload)
+
+      # the liker is named on their avatar...
+      assert html =~ "Dana"
+      # ...and the bare tally is gone.
+      refute html =~ "❤ <span"
+    end
   end
 
   defp ssb_msg(key, author, ts, content) do
@@ -167,13 +195,16 @@ defmodule HighWireWeb.TimelineLiveTest do
   defp feed_payload(msgs, opts) do
     now = Keyword.fetch!(opts, :now)
     self_id = Keyword.get(opts, :self_id)
+    likes = HighWire.Timeline.likes_state(msgs)
+    counts = HighWire.Timeline.like_counts(likes)
 
     %{
-      feed: HighWire.Timeline.build_feed(msgs, self_id, %{}, now),
+      feed: HighWire.Timeline.build_feed(msgs, self_id, counts, now),
       messages: [],
       reply_counts: %{},
-      like_counts: %{},
-      my_likes: [],
+      like_counts: counts,
+      likes_by: HighWire.Timeline.like_authors(likes),
+      my_likes: HighWire.Timeline.my_likes(likes, self_id),
       index: %{},
       follows: [],
       self_id: self_id,

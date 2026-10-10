@@ -52,6 +52,7 @@ defmodule HighWireWeb.TimelineLive do
     messages: [],
     reply_counts: %{},
     like_counts: %{},
+    likes_by: %{},
     my_likes: [],
     index: %{},
     follows: [],
@@ -382,7 +383,8 @@ defmodule HighWireWeb.TimelineLive do
           index: assigns.index,
           profiles: assigns.profiles,
           rev: assigns.blob_rev,
-          my_likes: assigns.my_likes
+          my_likes: assigns.my_likes,
+          likes_by: assigns.likes_by
         }
       )
 
@@ -588,6 +590,8 @@ defmodule HighWireWeb.TimelineLive do
   defp post_row(assigns) do
     raw_text = text(assigns.row.msg)
 
+    likers = Map.get(assigns.ctx.likes_by || %{}, like_target(assigns.row), [])
+
     assigns =
       assigns
       |> assign(:author, author_of(assigns.row.msg))
@@ -596,6 +600,8 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(:private?, Map.get(assigns.row, :private?, false))
       |> assign(:like_target, like_target(assigns.row))
       |> assign(:liked, like_target(assigns.row) in assigns.ctx.my_likes)
+      |> assign(:likers, Enum.take(likers, 4))
+      |> assign(:liker_more, max(length(likers) - 4, 0))
       |> assign(
         :body_html,
         if(raw_text != "",
@@ -647,19 +653,26 @@ defmodule HighWireWeb.TimelineLive do
 
         <div class="mt-1.5 flex items-center gap-4 text-xs text-dim">
           <span :if={@row.replies > 0}>{@row.replies} replies</span>
-          <button
-            :if={@like_target}
-            type="button"
-            phx-click="like"
-            phx-value-key={@like_target}
-            class={[
-              "flex items-center gap-1 transition-colors hover:text-paper",
-              @liked and "font-medium text-accent"
-            ]}
-            title={if(@liked, do: "Unlike", else: "Like")}
-          >
-            ❤ <span :if={@row.likes > 0}>{@row.likes}</span>
-          </button>
+          <div :if={@like_target} class="flex items-center gap-1.5">
+            <button
+              type="button"
+              phx-click="like"
+              phx-value-key={@like_target}
+              class={["transition-colors hover:text-paper", @liked and "font-medium text-accent"]}
+              title={if(@liked, do: "Unlike", else: "Like")}
+            >
+              ❤
+            </button>
+            <span :for={liker <- @likers} title={display_name(liker, @ctx)} class="inline-flex">
+              <Avatar.avatar
+                id={liker}
+                size={16}
+                image={image_of(liker, @ctx.profiles)}
+                rev={@ctx.rev}
+              />
+            </span>
+            <span :if={@liker_more > 0} class="text-[11px] text-faint">+{@liker_more}</span>
+          </div>
         </div>
 
         <div :if={@row.recent != []} class="mt-2 space-y-1.5 border-l border-edge pl-3">
@@ -832,6 +845,7 @@ defmodule HighWireWeb.TimelineLive do
     |> assign(:messages, Map.get(payload, :messages, []))
     |> assign(:reply_counts, payload.reply_counts)
     |> assign(:like_counts, payload.like_counts)
+    |> assign(:likes_by, Map.get(payload, :likes_by, %{}))
     |> assign(:my_likes, Map.get(payload, :my_likes, []))
     |> assign(:index, payload.index)
     |> assign(:self_id, payload.self_id)
@@ -847,6 +861,7 @@ defmodule HighWireWeb.TimelineLive do
     |> assign(:messages, @empty_payload.messages)
     |> assign(:reply_counts, @empty_payload.reply_counts)
     |> assign(:like_counts, @empty_payload.like_counts)
+    |> assign(:likes_by, @empty_payload.likes_by)
     |> assign(:my_likes, @empty_payload.my_likes)
     |> assign(:index, @empty_payload.index)
     |> assign(:self_id, nil)
