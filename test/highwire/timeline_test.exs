@@ -288,4 +288,49 @@ defmodule HighWire.TimelineTest do
       assert st2.contacts_primed?
     end
   end
+
+  describe "root_row" do
+    test "stores recent replies newest-first so the template's reverse reads chronologically" do
+      root = msg("@a=.ed25519", "%root=.sha256", 1_000, %{"type" => "post", "text" => "hi"})
+      old = msg("@a=.ed25519", "%old=.sha256", 2_000, %{"type" => "post", "text" => "one"})
+      mid = msg("@b=.ed25519", "%mid=.sha256", 3_000, %{"type" => "post", "text" => "two"})
+      new = msg("@c=.ed25519", "%new=.sha256", 4_000, %{"type" => "post", "text" => "three"})
+
+      # the engine returns the newest few OLDEST FIRST
+      item = %{
+        "key" => root["key"],
+        "value" => root["value"],
+        "timestamp" => 1_000,
+        "totalReplies" => 3,
+        "latestReplies" => [old, mid, new]
+      }
+
+      row = Timeline.root_row(item, nil, 10_000, false)
+
+      assert Enum.map(row.recent, & &1["key"]) == ["%new=.sha256", "%mid=.sha256", "%old=.sha256"]
+      assert row.replies == 3
+      # activity follows the newest reply, not the root's own time
+      assert row.activity == 4_000
+    end
+
+    test "caps recent at the newest three" do
+      root = msg("@a=.ed25519", "%root=.sha256", 1_000, %{"type" => "post", "text" => "hi"})
+
+      replies =
+        for {n, ts} <- [{1, 2_000}, {2, 3_000}, {3, 4_000}, {4, 5_000}],
+            do: msg("@a=.ed25519", "%r#{n}=.sha256", ts, %{"type" => "post", "text" => "r"})
+
+      item = %{
+        "key" => root["key"],
+        "value" => root["value"],
+        "timestamp" => 1_000,
+        "totalReplies" => 4,
+        "latestReplies" => replies
+      }
+
+      row = Timeline.root_row(item, nil, 10_000, false)
+
+      assert Enum.map(row.recent, & &1["key"]) == ["%r4=.sha256", "%r3=.sha256", "%r2=.sha256"]
+    end
+  end
 end

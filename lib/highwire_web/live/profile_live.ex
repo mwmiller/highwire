@@ -32,7 +32,8 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:resume, nil)
      |> assign(:follows, [])
      |> assign(:self_id, nil)
-     |> assign(:more, false)}
+     |> assign(:more, false)
+     |> schedule_labels_tick()}
   end
 
   @impl true
@@ -59,7 +60,21 @@ defmodule HighWireWeb.ProfileLive do
      )}
   end
 
+  # Relative timestamps on the profile must keep aging while it sits
+  # open; touching an assign re-renders the rel_time labels.
+  def handle_info(:labels_tick, socket) do
+    {:noreply,
+     socket
+     |> assign(:labels_tick, System.system_time(:millisecond))
+     |> schedule_labels_tick()}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
+
+  defp schedule_labels_tick(socket) do
+    if connected?(socket), do: Process.send_after(self(), :labels_tick, 30_000)
+    socket
+  end
 
   @impl true
   def handle_event("load-more", _params, socket) do

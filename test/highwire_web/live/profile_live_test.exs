@@ -38,4 +38,15 @@ defmodule HighWireWeb.ProfileLiveTest do
     # engine off: no follow control is offered
     refute html =~ "toggle-follow"
   end
+
+  test "the label tick re-renders so relative times keep aging", %{conn: conn} do
+    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+
+    send(view.pid, :labels_tick)
+    assert render(view) =~ "Posts"
+
+    state = :sys.get_state(view.pid)
+    assert is_integer(state.socket.assigns.labels_tick)
+  end
 end

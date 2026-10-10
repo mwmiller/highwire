@@ -1414,14 +1414,19 @@ defmodule HighWire.Timeline do
   # A `roots` view item (thread summary + rollup extras) shaped exactly
   # like a feed row, so the timeline renders it with the same
   # components. private? marks it for the private badge.
-  defp root_row(item, self_id, now, private?) do
+  @doc false
+  def root_row(item, self_id, now, private?) do
     msg = %{
       "key" => item["key"],
       "value" => item["value"],
       "timestamp" => item["timestamp"]
     }
 
-    recent = item["latestReplies"] |> List.wrap() |> Enum.take(3)
+    # Engine contract: latestReplies SELECTS the newest few but RETURNS
+    # them oldest-first (rollups render in list order). Feed rows store
+    # recent newest-first and the template reverses for display, so flip
+    # here or the thread renders backwards — and keep the newest cap.
+    recent = item["latestReplies"] |> List.wrap() |> Enum.reverse() |> Enum.take(3)
     replies = item["totalReplies"] || 0
     author = msg["value"]["author"]
 
