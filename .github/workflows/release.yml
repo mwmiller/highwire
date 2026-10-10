@@ -1,23 +1,30 @@
 name: Release
 
-# Tag push → three native builds (no cross-compiling: each runner builds
+# Tag push → five native builds (no cross-compiling: each runner builds
 # its own Burrito backend with BURRITO_TARGET, so the enacl NIF links
 # against the host), bundles the Tauri shell around it, and attaches the
 # installers to the GitHub release for that tag.
 #
-#   macos-14   → HighWire.app + .dmg      (backend: aarch64-apple-darwin)
-#   ubuntu-22.04 → .deb + .AppImage       (backend: x86_64-unknown-linux-gnu)
-#   windows-2022 → NSIS -setup.exe        (backend: x86_64-pc-windows-msvc)
+#   macos-14       → HighWire.app + .dmg   (backend: aarch64-apple-darwin)
+#   macos-15-intel → HighWire.app + .dmg   (backend: x86_64-apple-darwin;
+#                    the last x86_64 macOS image on Actions, EOL Aug 2027)
+#   ubuntu-22.04     → .deb + .rpm + .AppImage (backend: x86_64-unknown-linux-gnu)
+#   ubuntu-22.04-arm → .deb + .rpm + .AppImage (backend: aarch64-unknown-linux-gnu)
+#   windows-2022   → NSIS -setup.exe       (backend: x86_64-pc-windows-msvc)
 #
 # Known gaps: the Windows enacl build needs sodium.dll beside the
 # backend at runtime (that job is expected to need more work). The
 # erlbutt engine IS embedded — this workflow builds its prod profile
 # with bundled ERTS into priv/erlbutt, and the sidecar prefers that
 # copy's own erts over any system Erlang.
+#
+# Also runnable by hand (workflow_dispatch) as a build-only dry run:
+# all matrix legs build and upload artifacts, publish is tag-only.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -34,11 +41,23 @@ jobs:
             triple: aarch64-apple-darwin
             sidecar: highwire-backend-aarch64-apple-darwin
             tauri_conf: ""
+          - os: macos-15-intel
+            burrito_target: macos_intel
+            backend: highwire_macos_intel
+            triple: x86_64-apple-darwin
+            sidecar: highwire-backend-x86_64-apple-darwin
+            tauri_conf: ""
           - os: ubuntu-22.04
             burrito_target: linux
             backend: highwire_linux
             triple: x86_64-unknown-linux-gnu
             sidecar: highwire-backend-x86_64-unknown-linux-gnu
+            tauri_conf: tauri.linux.conf.json
+          - os: ubuntu-22.04-arm
+            burrito_target: linux_arm
+            backend: highwire_linux_arm
+            triple: aarch64-unknown-linux-gnu
+            sidecar: highwire-backend-aarch64-unknown-linux-gnu
             tauri_conf: tauri.linux.conf.json
           - os: windows-2022
             burrito_target: windows
@@ -353,12 +372,16 @@ jobs:
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/windows/*.exe
           if-no-files-found: error
 
+  # Tag-only: a workflow_dispatch dry run exercises every build leg
+  # without touching the GitHub release.
   publish:
+    if: github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-latest
     steps:

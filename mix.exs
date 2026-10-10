@@ -27,7 +27,9 @@ defmodule HighWire.MixProject do
         burrito: [
           targets: [
             macos: [os: :darwin, cpu: :aarch64],
+            macos_intel: [os: :darwin, cpu: :x86_64],
             linux: [os: :linux, cpu: :x86_64],
+            linux_arm: [os: :linux, cpu: :aarch64],
             windows: [os: :windows, cpu: :x86_64]
           ]
         ]
