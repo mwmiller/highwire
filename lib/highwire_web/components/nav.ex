@@ -1,11 +1,11 @@
 defmodule HighWireWeb.Components.Nav do
   @moduledoc """
-  The shared left rail: the crab mark and application name (linking to
-  the timeline) with the settings gear beside it, and — pinned to the
-  bottom — the current network badge, which links to the network
-  section of settings. Pages add their own content to the rail through
-  the default slot. Pages that pass no content get a narrow
-  mark-only rail instead of an empty column.
+  The shared left rail: the crab mark (linking to the timeline) with
+  the settings gear beside it, and — pinned to the bottom — the current
+  network badge, which links to the network section of settings. Pages
+  add their own content to the rail through the default slot; pages
+  that pass none get the same wide frame, so the column never jumps
+  between pages.
   """
 
   use Phoenix.Component
@@ -19,44 +19,23 @@ defmodule HighWireWeb.Components.Nav do
 
   @doc """
   Renders the rail frame. Anything given as content is placed below the
-  header inside the same panel; without content the rail collapses to
-  a slim mark/gear column so the page keeps the space.
+  header inside the same panel.
   """
   slot :inner_block, doc: "Rail content below the header"
 
   def rail(assigns) do
-    assigns = assign(assigns, compact?: assigns[:inner_block] in [nil, []])
-
     ~H"""
-    <aside class={[
-      "shrink-0 overflow-y-auto border-r border-edge bg-panel",
-      @compact? && "flex w-16 flex-col",
-      !@compact? && "flex w-56 flex-col"
-    ]}>
-      <div class={[
-        "flex h-11 shrink-0 items-center border-b border-edge",
-        @compact? && "w-full justify-center",
-        !@compact? && "w-full justify-between px-4"
-      ]}>
+    <aside class="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-edge bg-panel">
+      <div class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4">
         <.link
-          :if={@compact?}
           navigate="/"
           title="Timeline"
           aria-label="Timeline"
-          class="flex items-center justify-center"
+          class="flex items-center text-paper"
         >
           <img src={~p"/images/highwire-crab-mark.svg"} alt="" class="h-7 w-7" />
         </.link>
         <.link
-          :if={!@compact?}
-          navigate="/"
-          title="Timeline"
-          class="flex items-center gap-2 font-bold tracking-tight text-paper"
-        >
-          <img src={~p"/images/highwire-crab-mark.svg"} alt="" class="h-6 w-6" /> HighWire
-        </.link>
-        <.link
-          :if={!@compact?}
           navigate="/settings"
           title="Settings"
           aria-label="Settings"
@@ -65,15 +44,6 @@ defmodule HighWireWeb.Components.Nav do
           <.gear />
         </.link>
       </div>
-      <.link
-        :if={@compact?}
-        navigate="/settings"
-        title="Settings"
-        aria-label="Settings"
-        class="flex w-full justify-center py-3 text-dim transition hover:text-paper"
-      >
-        <.gear />
-      </.link>
       {render_slot(@inner_block)}
       <.link
         navigate="/settings"
@@ -86,15 +56,11 @@ defmodule HighWireWeb.Components.Nav do
           Network.current() != :mainnet && "text-dim"
         ]}
       >
-        {if @compact?, do: short_label(Network.current()), else: Network.label(Network.current())}
+        {Network.label(Network.current())}
       </.link>
     </aside>
     """
   end
-
-  defp short_label(:dev), do: "Dev"
-  defp short_label(:mainnet), do: "Main"
-  defp short_label(_other), do: "?"
 
   defp gear(assigns) do
     ~H"""
