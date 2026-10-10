@@ -8,9 +8,25 @@ on loopback, packaged as a desktop app with Tauri, driving a local
 HighWire does not sign messages itself: publishing goes through
 erlbutt's `publish` method, which owns canonical JSON and signing.
 
-## Status
+## Download
 
-State of the `v0.1.0` line:
+Grab an installer from the
+[latest release](https://github.com/mwmiller/highwire/releases/latest):
+
+| Platform | Artifact |
+| --- | --- |
+| macOS (Apple Silicon) | `HighWire_<v>_aarch64.dmg` |
+| macOS (Intel) | `HighWire_<v>_x64.dmg` |
+| Debian/Ubuntu | `HighWire_<v>_amd64.deb` |
+| Fedora/openSUSE | `HighWire-<v>-1.x86_64.rpm` |
+| Other Linux | `HighWire_<v>_amd64.AppImage` |
+| Linux ARM64 | `_arm64.deb` / `.aarch64.rpm` / `_aarch64.AppImage` |
+| Windows | `HighWire_<v>_x64-setup.exe` |
+
+The macOS builds are notarized. All artifacts are produced by the
+tag-triggered release workflow (`.github/workflows/release.yml`).
+
+## Status
 
 **Application**
 
@@ -20,6 +36,9 @@ State of the `v0.1.0` line:
 - Profile activity renders newest-first (ordering is done in the UI).
 - One identity per `HIGHWIRE_HOME`; there is no in-app account
   switching.
+- The native menu's Go items (Timeline ⌘1, Dashboard ⌘D, My Profile
+  ⌘⇧P) and Preferences ⌘, navigate the webview; the window remembers
+  its size and position across launches.
 
 **Engine**
 
@@ -32,16 +51,17 @@ State of the `v0.1.0` line:
 - Publish round-trip — sign, store, read back — verified against a
   bundled-engine build.
 
-**Build and packaging** (`.github/workflows/release.yml`, tag `v0.1.0`)
+**Build and packaging**
 
-- Linux: workflow passes and produces the app bundle.
-- macOS: builds and codesigns; notarization fails because the Apple
-  credentials in the repo secrets are not valid. It needs an
-  app-specific password from appleid.apple.com.
-- Windows: vcpkg resolves libsodium; the engine build stalls fetching
-  rebar3's plugin from hex.pm (bounded at 15 minutes, exit 124). Open.
-- No GitHub release is published. The publish job runs only after all
-  three OS builds pass.
+- Tag push runs five native builds on free public runners — macOS
+  (arm64 + Intel), Linux (x86_64 + ARM64), Windows — each bundling
+  its own Burrito backend, then publishes the installers to the
+  GitHub release for that tag. The workflow is also runnable by hand
+  (workflow_dispatch) as a build-only dry run.
+- Known gap: the Windows enacl build needs `sodium.dll` beside the
+  backend at runtime.
+- The Intel macOS leg rides `macos-15-intel`, the last x86_64 image
+  on GitHub Actions (EOL Aug 2027).
 
 ## Data and identity
 

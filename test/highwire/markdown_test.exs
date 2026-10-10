@@ -89,6 +89,7 @@ defmodule HighWire.MarkdownTest do
 
   test "external links open in a new tab; local links stay in-app" do
     assert Markdown.to_html("[a](https://x.test)") =~ ~s(target="_blank")
+    assert Markdown.to_html("[a](http://x.test)") =~ ~s(target="_blank")
     refute Markdown.to_html("[a](/profile?id=%40x)") =~ "target"
   end
 

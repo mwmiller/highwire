@@ -173,6 +173,9 @@ const BACKEND_ADDR: &str = "127.0.0.1:24042";
 fn build_menu(app: &tauri::App) -> tauri::Result<()> {
     let handle = app.handle();
 
+    let timeline = MenuItemBuilder::with_id("timeline", "Timeline")
+        .accelerator("CmdOrCtrl+1")
+        .build(handle)?;
     let dashboard = MenuItemBuilder::with_id("dashboard", "Dashboard")
         .accelerator("CmdOrCtrl+D")
         .build(handle)?;
@@ -232,6 +235,8 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
         .item(&quit)
         .build()?;
     let go = SubmenuBuilder::new(handle, "Go")
+        .item(&timeline)
+        .separator()
         .item(&dashboard)
         .separator()
         .item(&profile)
@@ -349,6 +354,7 @@ pub fn run() {
     let backend_pid: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     let exit_pid = backend_pid.clone();
     tauri::Builder::default()
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(move |app| {
             build_menu(app)?;
             // Spawn synchronously so the PID is recorded before any event
@@ -375,6 +381,7 @@ pub fn run() {
                 }
             };
             match event.id().as_ref() {
+                "timeline" => navigate("/"),
                 "dashboard" => navigate("/dashboard"),
                 "prefs" => navigate("/settings"),
                 "profile" => navigate("/profile"),
