@@ -1105,8 +1105,28 @@ defmodule HighWireWeb.TimelineLive do
   defp other_label(msg) do
     case content(msg) do
       c when map_size(c) == 0 -> "sent a private message"
+      %{"type" => "channel"} = c -> channel_label(c)
+      %{"type" => "about"} -> "updated their profile"
       %{"type" => type} when is_binary(type) -> "sent a #{type} message"
       _ -> "sent a message"
     end
   end
+
+  # Subscription toggles get a sentence of their own: "sent a channel
+  # message" hid both the channel and which way the toggle went.
+  defp channel_label(%{"channel" => channel, "subscribed" => subscribed})
+       when is_binary(channel) and is_boolean(subscribed) do
+    name = channel |> String.trim() |> String.trim_leading("#")
+
+    if name == "" do
+      "toggled a channel subscription"
+    else
+      "#{channel_verb(subscribed)} ##{name}"
+    end
+  end
+
+  defp channel_label(_), do: "toggled a channel subscription"
+
+  defp channel_verb(true), do: "subscribed to"
+  defp channel_verb(false), do: "unsubscribed from"
 end

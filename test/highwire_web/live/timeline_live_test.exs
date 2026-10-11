@@ -208,6 +208,54 @@ defmodule HighWireWeb.TimelineLiveTest do
       # ...and the bare tally is gone.
       refute html =~ "❤ <span"
     end
+
+    test "channel subscriptions say which channel and which way", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%sub-core.sha256", "@alice:.ed25519", now - 2_000, %{
+          "type" => "channel",
+          "channel" => "core",
+          "subscribed" => true
+        }),
+        ssb_msg("%unsub-rant.sha256", "@alice:.ed25519", now - 1_000, %{
+          "type" => "channel",
+          "channel" => "#rant",
+          "subscribed" => false
+        }),
+        ssb_msg("%sub-nochannel.sha256", "@alice:.ed25519", now - 500, %{
+          "type" => "channel",
+          "subscribed" => true
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs, now: now))
+
+      assert html =~ "subscribed to #core"
+      # a leading # is not doubled when the message already carries one
+      assert html =~ "unsubscribed from #rant"
+      refute html =~ "sent a channel message"
+      # a toggle that names no channel still reads as a toggle
+      assert html =~ "toggled a channel subscription"
+    end
+
+    test "about updates read as profile updates", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%about-alice.sha256", "@alice:.ed25519", now - 1_000, %{
+          "type" => "about",
+          "name" => "Alice"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs, now: now))
+
+      assert html =~ "updated their profile"
+      refute html =~ "sent a about"
+    end
   end
 
   defp ssb_msg(key, author, ts, content) do
