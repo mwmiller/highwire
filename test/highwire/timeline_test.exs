@@ -494,6 +494,40 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  describe "ensure_profiles" do
+    defp ensure_state(overrides) do
+      Map.merge(
+        %{
+          client: nil,
+          profile_fetching?: false,
+          profile_wants: MapSet.new(),
+          messages: %{profiles: %{"@known=.ed25519" => %{name: "Known"}}}
+        },
+        Map.new(overrides)
+      )
+    end
+
+    test "parks unknown ids and leaves profiled and malformed ones alone" do
+      {:noreply, st} =
+        Timeline.handle_cast(
+          {:ensure_profiles, ["@known=.ed25519", "@fresh=.ed25519", "not-a-feed"]},
+          ensure_state([])
+        )
+
+      assert st.profile_wants == MapSet.new(["@fresh=.ed25519"])
+    end
+
+    test "unions with wants already parked; no client means no worker" do
+      {:noreply, st} =
+        Timeline.handle_cast({:ensure_profiles, ["@one=.ed25519"]}, ensure_state([]))
+
+      {:noreply, st} = Timeline.handle_cast({:ensure_profiles, ["@two=.ed25519"]}, st)
+
+      assert st.profile_wants == MapSet.new(["@one=.ed25519", "@two=.ed25519"])
+      assert st.profile_fetching? == false
+    end
+  end
+
   describe "root_row" do
     test "stores recent replies newest-first so the template's reverse reads chronologically" do
       root = msg("@a=.ed25519", "%root=.sha256", 1_000, %{"type" => "post", "text" => "hi"})

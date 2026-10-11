@@ -141,6 +141,24 @@ defmodule HighWire.Timeline do
   def profile(_), do: nil
 
   @doc """
+  Ask the Timeline to ensure profiles exist for these ids.
+
+  The payload only covers window participants and follows, so views
+  rendering rows outside that set — cursor pages, contact chips,
+  likers — call this for whatever they are about to show. Ids are
+  parked in `profile_wants` and picked up by the next fetch cycle
+  (immediately when a fetch is idle and the engine is up), retried
+  until they land, and cleared once fetched.
+  """
+  @spec ensure_profiles([binary()]) :: :ok
+  def ensure_profiles(ids) when is_list(ids) do
+    case Process.whereis(__MODULE__) do
+      nil -> :ok
+      pid -> GenServer.cast(pid, {:ensure_profiles, ids})
+    end
+  end
+
+  @doc """
   One page of an identity's threads (`patchwork.profile.roots`), newest
   root published first — used by the profile page so its feed scrolls
   without bound instead of stopping at a fixed window, in chronological
@@ -364,6 +382,7 @@ defmodule HighWire.Timeline do
       network_timer: nil,
       reload_timer: nil,
       profile_fetching?: false,
+      profile_wants: MapSet.new(),
       done_count: 0
     }
 
@@ -441,6 +460,20 @@ defmodule HighWire.Timeline do
 
   def handle_cast({:set_activity, pid, false}, state) do
     {:noreply, drop_active(state, pid)}
+  end
+
+  def handle_cast({:ensure_profiles, ids}, state) do
+    known = state |> Map.get(:messages, %{}) |> Map.get(:profiles, %{})
+
+    wants =
+      ids
+      |> Enum.filter(&(is_binary(&1) and String.starts_with?(&1, "@")))
+      |> Enum.reject(&Map.has_key?(known, &1))
+      |> MapSet.new()
+      |> MapSet.union(Map.get(state, :profile_wants, MapSet.new()))
+
+    state = Map.put(state, :profile_wants, wants)
+    {:noreply, kick_wanted_profiles(state)}
   end
 
   defp put_active(state, pid) do
@@ -1083,6 +1116,16 @@ defmodule HighWire.Timeline do
   def handle_info({:profiles_fetched, fetched}, state) do
     state = %{state | profile_fetching?: false}
 
+    # Fetched ids leave the wants set; ids the fetch missed stay
+    # parked for the next finalize or ensure to retry. (No re-kick
+    # here: a hard-failing id would hot-loop the fetch worker.)
+    wants =
+      state
+      |> Map.get(:profile_wants, MapSet.new())
+      |> MapSet.difference(MapSet.new(Map.keys(fetched)))
+
+    state = Map.put(state, :profile_wants, wants)
+
     if map_size(fetched) == 0 do
       {:noreply, state}
     else
@@ -1373,7 +1416,11 @@ defmodule HighWire.Timeline do
     suggestions = Map.get(state, :suggestions, [])
     sugg_ids = for s <- suggestions, is_binary(s["id"]), do: s["id"]
 
-    ids = Enum.uniq(profile_ids(feed, state.follows) ++ sugg_ids)
+    # Parked ensure_profiles ids ride along, so every finalize also
+    # retries whatever the window never asked for and the fetch missed.
+    wants = state |> Map.get(:profile_wants, MapSet.new()) |> MapSet.to_list()
+
+    ids = Enum.uniq(profile_ids(feed, state.follows) ++ sugg_ids ++ wants)
     known = Map.get(state.messages, :profiles, %{})
     missing = Enum.reject(ids, &Map.has_key?(known, &1))
     base = Map.take(known, ids)
@@ -1430,6 +1477,24 @@ defmodule HighWire.Timeline do
     else
       state
     end
+  end
+
+  # An ensure_profiles arrived: fetch now if a worker is idle. When one
+  # is already running it is not interrupted — build_payload unions the
+  # wants into its missing list, so the pass after it finishes retries
+  # whatever the wants still hold.
+  defp kick_wanted_profiles(%{profile_fetching?: true} = state), do: state
+
+  defp kick_wanted_profiles(state) do
+    known = state |> Map.get(:messages, %{}) |> Map.get(:profiles, %{})
+
+    wanted =
+      state
+      |> Map.get(:profile_wants, MapSet.new())
+      |> MapSet.to_list()
+      |> Enum.reject(&Map.has_key?(known, &1))
+
+    kick_profile_fetch(state, wanted, Map.take(known, wanted), [])
   end
 
   # -- profiles -----------------------------------------------------------

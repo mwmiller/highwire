@@ -256,6 +256,27 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ "updated their profile"
       refute html =~ "sent a about"
     end
+
+    test "rendered rows ask Timeline to profile authors no payload carried", %{conn: conn} do
+      now = 1_700_000_000_000
+      author = "@pagedauthor=.ed25519"
+
+      msgs = [
+        ssb_msg("%root-paged.sha256", author, now - 1_000, %{
+          "type" => "post",
+          "text" => "from an older page"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      # The payload carries no profiles map entry for the author.
+      notify(view, feed_payload(msgs, now: now))
+
+      # The request lands on the supervised Timeline as a parked want —
+      # the same path cursor-page rows use once the engine is up.
+      wants = :sys.get_state(HighWire.Timeline).profile_wants
+      assert MapSet.member?(wants, author)
+    end
   end
 
   describe "composer mentions" do

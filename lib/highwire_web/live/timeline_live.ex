@@ -398,7 +398,40 @@ defmodule HighWireWeb.TimelineLive do
         {view, merge_into(view, entry, socket)}
       end)
 
-    assign(socket, paged: paged)
+    socket
+    |> assign(paged: paged)
+    |> request_missing_profiles()
+  end
+
+  # Cursor pages, chips and likers land outside the window payload's
+  # profile coverage, so whatever the rows now render that no payload
+  # ever shipped a profile for goes back to the Timeline as an ensure.
+  # Without this the older you page, the more rows sit on identicons.
+  defp request_missing_profiles(socket) do
+    known = Map.get(socket.assigns, :profiles, %{})
+    likes_by = Map.get(socket.assigns, :likes_by, %{})
+
+    missing =
+      socket.assigns.paged
+      |> Map.values()
+      |> Enum.flat_map(&Map.get(&1, :rows, []))
+      |> Enum.flat_map(&row_profile_ids(&1, likes_by))
+      |> Enum.reject(&Map.has_key?(known, &1))
+      |> Enum.uniq()
+
+    if missing != [] do
+      Timeline.ensure_profiles(missing)
+    end
+
+    socket
+  end
+
+  defp row_profile_ids(row, likes_by) do
+    likers = Map.get(likes_by, like_target(row), [])
+
+    [author_of(row.msg), Map.get(row, :participants, []), Map.get(row, :followed, []), likers]
+    |> List.flatten()
+    |> Enum.filter(&(is_binary(&1) and String.starts_with?(&1, "@")))
   end
 
   # Private rows come from the decrypted feed; the public window never
@@ -965,7 +998,11 @@ defmodule HighWireWeb.TimelineLive do
   # -- payload / assigns -------------------------------------------------
 
   defp assign_payload(socket, %{feed: feed} = payload) do
-    profiles = Map.get(payload, :profiles, %{})
+    # Accumulate: a cursor page may have asked Timeline for profiles
+    # this payload never carried, and the next payload (status-only
+    # broadcasts carry no profiles) must not evict them.
+    profiles =
+      Map.merge(Map.get(socket.assigns, :profiles, %{}), Map.get(payload, :profiles, %{}))
 
     # Alphabetical by displayed name — the sidebar used to show raw
     # follow-graph order, which reads as random.
@@ -999,9 +1036,9 @@ defmodule HighWireWeb.TimelineLive do
     |> assign(:my_likes, @empty_payload.my_likes)
     |> assign(:index, @empty_payload.index)
     |> assign(:self_id, nil)
-    |> assign(:profiles, %{})
+    |> assign(:profiles, Map.get(socket.assigns, :profiles, %{}))
     |> assign(:blob_rev, 0)
-    |> assign(:sidebar_contacts, [])
+    |> assign(:sidebar_contacts, Map.get(socket.assigns, :sidebar_contacts, []))
     |> assign(:suggestions, @empty_payload.suggestions)
   end
 
