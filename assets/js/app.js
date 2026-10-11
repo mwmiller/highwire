@@ -212,9 +212,158 @@ let TabActivity = {
   }
 }
 
+// Composer mentions: typing @ or ~ before a word opens the popup the
+// server renders from mention-query. Picking splices the feed id into
+// the draft here in the browser — string indices stay UTF-16-safe
+// locally — and pushes the new body via compose-draft so the server's
+// draft matches immediately (the textarea's phx-debounce would lag).
+let Mentions = {
+  mounted() {
+    this.query = null
+
+    this.onInput = () => this.scan()
+    this.onBlur = () => this.close()
+    this.onKeyDown = (e) => this.keydown(e)
+
+    this.el.addEventListener("input", this.onInput)
+    this.el.addEventListener("click", this.onInput)
+    this.el.addEventListener("blur", this.onBlur)
+    this.el.addEventListener("keydown", this.onKeyDown)
+
+    // Keep focus — and the caret — in the textarea when a popup row
+    // is clicked: mousedown would blur us and close the list first.
+    this.onMouseDown = (e) => {
+      if (e.target.closest("[data-mention-option]")) e.preventDefault()
+    }
+    this.onClick = (e) => {
+      const opt = e.target.closest("[data-mention-option]")
+      if (!opt) return
+      e.preventDefault()
+      const idx = this.options().indexOf(opt)
+      if (idx >= 0) this.pick(idx)
+    }
+
+    document.addEventListener("mousedown", this.onMouseDown)
+    document.addEventListener("click", this.onClick)
+  },
+
+  destroyed() {
+    this.el.removeEventListener("input", this.onInput)
+    this.el.removeEventListener("click", this.onInput)
+    this.el.removeEventListener("blur", this.onBlur)
+    this.el.removeEventListener("keydown", this.onKeyDown)
+    document.removeEventListener("mousedown", this.onMouseDown)
+    document.removeEventListener("click", this.onClick)
+  },
+
+  // The @ or ~ token ending at the caret: which sigil, where the token
+  // starts, and what has been typed after it.
+  token() {
+    const caret = this.el.selectionStart ?? 0
+    const before = this.el.value.slice(0, caret)
+    const m = /(?:^|\s)([@~])([^\s@~]*)$/.exec(before)
+    if (!m) return null
+    return {q: m[2], start: before.length - m[2].length - 1, end: caret}
+  },
+
+  scan() {
+    const t = this.token()
+    if (!t) {
+      this.close()
+      return
+    }
+    if (t.q === this.query) return
+    this.query = t.q
+    try {
+      this.pushEvent("mention-query", {q: t.q}, () => {})
+    } catch (_) {}
+  },
+
+  close() {
+    if (this.query === null) return
+    this.query = null
+    try {
+      this.pushEvent("mention-close", {}, () => {})
+    } catch (_) {}
+  },
+
+  options() {
+    return Array.from(document.querySelectorAll("#mention-list [data-mention-option]"))
+  },
+
+  activeIndex(opts) {
+    const active = document.querySelector("#mention-list [data-mention-option][data-active]")
+    return active ? opts.indexOf(active) : -1
+  },
+
+  setActive(opts, idx) {
+    opts.forEach((o, i) => {
+      if (i === idx) {
+        o.setAttribute("data-active", "")
+        o.classList.add("bg-panel2")
+      } else {
+        o.removeAttribute("data-active")
+        o.classList.remove("bg-panel2")
+      }
+    })
+  },
+
+  keydown(e) {
+    if (e.key === "Escape") {
+      if (this.query !== null) {
+        e.preventDefault()
+        this.close()
+      }
+      return
+    }
+
+    // Moving the caret out of the token retires the popup.
+    if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+      if (!this.token()) this.close()
+      return
+    }
+
+    const opts = this.options()
+    if (opts.length === 0) return
+
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault()
+      let idx = this.activeIndex(opts)
+      if (e.key === "ArrowDown") idx = idx < 0 ? 0 : (idx + 1) % opts.length
+      else idx = idx <= 0 ? opts.length - 1 : idx - 1
+      this.setActive(opts, idx)
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault()
+      const idx = this.activeIndex(opts)
+      this.pick(idx >= 0 ? idx : 0)
+    }
+  },
+
+  pick(idx) {
+    const t = this.token()
+    const opts = this.options()
+    if (!t || idx < 0 || idx >= opts.length) {
+      this.close()
+      return
+    }
+
+    const id = opts[idx].dataset.id
+    const value = this.el.value.slice(0, t.start) + id + " " + this.el.value.slice(t.end)
+    const caret = t.start + id.length + 1
+
+    this.el.value = value
+    this.el.setSelectionRange(caret, caret)
+    this.close()
+
+    try {
+      this.pushEvent("compose-draft", {body: value}, () => {})
+    } catch (_) {}
+  }
+}
+
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity}
+  hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions}
 })
 
 // Show progress bar on live navigation and form submits

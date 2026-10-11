@@ -258,6 +258,45 @@ defmodule HighWireWeb.TimelineLiveTest do
     end
   end
 
+  describe "composer mentions" do
+    test "the popup suggests follows and profiles, and closes cleanly", %{conn: conn} do
+      now = 1_700_000_000_000
+      alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+
+      {:ok, view, html} = live(conn, "/")
+      assert html =~ "phx-hook=\"Mentions\""
+
+      payload =
+        feed_payload([], now: now)
+        |> Map.put(:follows, [alice])
+        |> Map.put(:profiles, %{alice => %{name: "Alice Smith", image: nil}})
+
+      notify(view, payload)
+
+      # a typed prefix matches on display name...
+      html = render_click(view, "mention-query", %{"q" => "ali"})
+      assert html =~ "id=\"mention-list\""
+      assert html =~ "Alice Smith"
+      assert html =~ "data-id=\"" <> alice <> "\""
+
+      # ...a bare sigil lists everyone known...
+      html = render_click(view, "mention-query", %{"q" => ""})
+      assert html =~ "Alice Smith"
+
+      # ...an id fragment matches too (typing a short id)...
+      html = render_click(view, "mention-query", %{"q" => "vkdmlsu"})
+      assert html =~ "Alice Smith"
+
+      # ...and no match retires the popup rather than rendering an
+      # empty box.
+      html = render_click(view, "mention-query", %{"q" => "zzzz"})
+      refute html =~ "id=\"mention-list\""
+
+      html = render_click(view, "mention-close", %{})
+      refute html =~ "id=\"mention-list\""
+    end
+  end
+
   defp ssb_msg(key, author, ts, content) do
     %{"key" => key, "value" => %{"author" => author, "timestamp" => ts, "content" => content}}
   end

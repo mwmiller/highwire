@@ -81,6 +81,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(:peers, Timeline.network())
       |> assign(q: "", expanded: MapSet.new(), view: :public)
       |> assign(compose: "", compose_error: nil)
+      |> assign(mention_suggestions: [])
       |> assign(paged: %{}, page_inflight: MapSet.new())
       |> assign(active: true, peers_timer: peers_timer)
       |> maybe_load_page()
@@ -162,6 +163,18 @@ defmodule HighWireWeb.TimelineLive do
   # poll round-trip.
   def handle_event("compose-draft", %{"body" => body}, socket) do
     {:noreply, assign(socket, compose: body)}
+  end
+
+  # The composer's mention popup: the Mentions hook saw a token started
+  # with @ or ~ before the caret and sends what follows the sigil. The
+  # hook splices the picked feed id into the draft locally (indices stay
+  # UTF-16-safe in the browser) and pushes the new body via compose-draft.
+  def handle_event("mention-query", %{"q" => q}, socket) when is_binary(q) do
+    {:noreply, assign(socket, :mention_suggestions, mention_candidates(socket, q))}
+  end
+
+  def handle_event("mention-close", _params, socket) do
+    {:noreply, assign(socket, :mention_suggestions, [])}
   end
 
   def handle_event("publish", %{"body" => body}, socket) do
@@ -263,6 +276,41 @@ defmodule HighWireWeb.TimelineLive do
     if socket.assigns.peers_timer, do: Process.cancel_timer(socket.assigns.peers_timer)
 
     {:noreply, socket |> assign(:active, false) |> assign(:peers_timer, nil)}
+  end
+
+  # The mention popup's candidates: follows first (already sorted as
+  # the sidebar's names), then anyone whose profile the window carries.
+  # A bare @ or ~ lists them all; matches run display name first, then
+  # the id itself so a typed short id lands too. Capped so the popup
+  # never becomes a second feed.
+  defp mention_candidates(socket, q) do
+    profiles = Map.get(socket.assigns, :profiles, %{})
+    follows = Map.get(socket.assigns, :sidebar_contacts, [])
+    query = String.downcase(q)
+
+    follows
+    |> Kernel.++(Map.keys(profiles))
+    |> Enum.filter(&(is_binary(&1) and String.starts_with?(&1, "@")))
+    |> Enum.uniq()
+    |> Enum.map(&{&1, display_name(&1, profiles)})
+    |> Enum.map(fn {id, name} -> {id, name, mention_score(name, id, query)} end)
+    |> Enum.reject(fn {_id, _name, score} -> score == :miss end)
+    |> Enum.sort_by(fn {id, name, score} -> {score, String.downcase(name), id} end)
+    |> Enum.take(8)
+    |> Enum.map(fn {id, name, _score} -> {id, name} end)
+  end
+
+  defp mention_score(_name, _id, ""), do: 0
+
+  defp mention_score(name, id, query) do
+    down_name = String.downcase(name)
+
+    cond do
+      String.starts_with?(down_name, query) -> 1
+      String.contains?(down_name, query) -> 2
+      String.contains?(String.downcase(id), query) -> 3
+      true -> :miss
+    end
   end
 
   defp schedule_peers(socket) do
@@ -552,14 +600,42 @@ defmodule HighWireWeb.TimelineLive do
                 class="mt-0.5 shrink-0"
               />
               <div class="min-w-0 flex-1">
-                <textarea
-                  id="compose-body"
-                  name="body"
-                  phx-debounce="300"
-                  placeholder="Write a post…"
-                  rows="3"
-                  class="w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
-                >{@compose}</textarea>
+                <div class="relative">
+                  <textarea
+                    id="compose-body"
+                    name="body"
+                    phx-hook="Mentions"
+                    phx-debounce="300"
+                    placeholder="Write a post… (@ or ~ mentions)"
+                    rows="3"
+                    class="w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
+                  >{@compose}</textarea>
+                  <div
+                    :if={@mention_suggestions != []}
+                    id="mention-list"
+                    class="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded border border-edge bg-panel shadow-lg"
+                  >
+                    <button
+                      :for={{id, name} <- @mention_suggestions}
+                      type="button"
+                      data-mention-option
+                      data-id={id}
+                      class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-panel2"
+                    >
+                      <Avatar.avatar
+                        id={id}
+                        size={16}
+                        image={image_of(id, @profiles)}
+                        rev={@blob_rev}
+                        class="shrink-0"
+                      />
+                      <span class="truncate text-paper">{name}</span>
+                      <span class="ml-auto shrink-0 font-mono text-[10px] text-faint">
+                        {Ident.short_id(id)}
+                      </span>
+                    </button>
+                  </div>
+                </div>
                 <p :if={@compose_error} role="alert" class="mt-1 text-xs text-bad">
                   {@compose_error}
                 </p>
