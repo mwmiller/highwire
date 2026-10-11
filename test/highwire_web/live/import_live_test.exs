@@ -63,6 +63,8 @@ defmodule HighWireWeb.ImportLiveTest do
       html = render_face(:import_pending, @consent_info)
 
       assert html =~ "Bring your old feed along"
+      # every page wears the shared left rail, the gate included
+      assert html =~ ~s(title="Settings")
       assert html =~ "@publ1c.ed25519"
       assert html =~ "4.0 MB of messages"
       assert html =~ "present — they come too"

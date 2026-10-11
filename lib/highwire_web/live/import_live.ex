@@ -19,6 +19,7 @@ defmodule HighWireWeb.ImportLive do
   use HighWireWeb, :live_view
 
   alias HighWire.SSB.{Import, Sidecar}
+  alias HighWireWeb.Components.Nav
 
   # One dot is one 5000 messages, and the converter prints the first at
   # zero — so dots on screen overstate by exactly one.
@@ -66,141 +67,147 @@ defmodule HighWireWeb.ImportLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex min-h-screen items-center justify-center bg-app px-6 py-12 text-ink">
-      <div class="w-full max-w-xl">
-        <div :if={@mode == :import_pending} class="space-y-5">
-          <div>
-            <img src={~p"/images/highwire-crab.svg"} alt="" class="h-16 w-16 rounded-2xl" />
-            <h1 class="mt-4 text-2xl font-bold text-paper">Bring your old feed along</h1>
-            <p class="mt-2 text-sm text-sub">
-              HighWire found an existing Secure Scuttlebutt store from another client.
-              Take it over — identity, history, blobs — or start with a clean one.
+    <div class="flex h-screen overflow-hidden bg-app text-ink">
+      <Nav.rail>
+        <h1 class="sr-only">Import</h1>
+      </Nav.rail>
+
+      <section class="flex flex-1 items-center justify-center overflow-y-auto px-6 py-12">
+        <div class="w-full max-w-xl">
+          <div :if={@mode == :import_pending} class="space-y-5">
+            <div>
+              <img src={~p"/images/highwire-crab.svg"} alt="" class="h-16 w-16 rounded-2xl" />
+              <h1 class="mt-4 text-2xl font-bold text-paper">Bring your old feed along</h1>
+              <p class="mt-2 text-sm text-sub">
+                HighWire found an existing Secure Scuttlebutt store from another client.
+                Take it over — identity, history, blobs — or start with a clean one.
+              </p>
+            </div>
+
+            <dl class="divide-y divide-edge-soft rounded-lg border border-edge bg-panel px-4 text-sm">
+              <div class="flex items-baseline justify-between gap-4 py-2.5">
+                <dt class="shrink-0 text-dim">Account</dt>
+                <dd class="min-w-0 break-all text-right font-mono text-paper">{@info[:id]}</dd>
+              </div>
+              <div class="flex items-baseline justify-between gap-4 py-2.5">
+                <dt class="shrink-0 text-dim">Store</dt>
+                <dd class="min-w-0 break-all text-right font-mono text-xs text-sub">
+                  {Import.js_home()}
+                </dd>
+              </div>
+              <div class="flex items-baseline justify-between gap-4 py-2.5">
+                <dt class="shrink-0 text-dim">History</dt>
+                <dd class="text-right text-paper">
+                  {if is_integer(@info[:log_size]),
+                    do: "#{human_size(@info[:log_size])} of messages",
+                    else: "identity only — no history log found"}
+                </dd>
+              </div>
+              <div class="flex items-baseline justify-between gap-4 py-2.5">
+                <dt class="shrink-0 text-dim">Blobs</dt>
+                <dd class="text-right text-paper">
+                  {if @info[:blobs], do: "present — they come too", else: "none found"}
+                </dd>
+              </div>
+            </dl>
+
+            <p class="rounded-lg border border-edge bg-panel p-3 text-sm text-warn">
+              Quit the old client before importing. Two programs publishing from one
+              identity fork your feed — permanently, signed, and unrecoverable.
+            </p>
+
+            <div class="flex flex-wrap gap-3">
+              <button type="button" class="btn btn-primary" phx-click="accept">
+                Import it
+              </button>
+              <button type="button" class="btn" phx-click="decline">Start fresh</button>
+            </div>
+          </div>
+
+          <div :if={@mode == :importing} class="space-y-5">
+            <div>
+              <h1 class="text-2xl font-bold text-paper">Converting your history</h1>
+              <p class="mt-2 text-sm text-sub">
+                Reading the old store and rebuilding it for this engine. Keep the old
+                client closed; HighWire starts when it finishes.
+              </p>
+            </div>
+
+            <dl class="divide-y divide-edge-soft rounded-lg border border-edge bg-panel px-4 text-sm">
+              <div class="flex items-baseline justify-between gap-4 py-2.5">
+                <dt class="shrink-0 text-dim">Elapsed</dt>
+                <dd class="text-right font-mono text-paper">{elapsed(@info)}</dd>
+              </div>
+              <div
+                :if={is_integer(@info[:log_size])}
+                class="flex items-baseline justify-between gap-4 py-2.5"
+              >
+                <dt class="shrink-0 text-dim">Converting</dt>
+                <dd class="text-right text-paper">{human_size(@info[:log_size])}</dd>
+              </div>
+              <div class="flex items-baseline justify-between gap-4 py-2.5">
+                <dt class="shrink-0 text-dim">Read so far</dt>
+                <dd class="text-right text-paper">
+                  {cond do
+                    @info[:counts] -> "#{commas(@info[:counts].messages)} messages"
+                    @info[:dots] -> "≈ #{commas(est_messages(@info[:dots]))} messages"
+                    true -> "starting…"
+                  end}
+                </dd>
+              </div>
+              <div :if={@info[:counts]} class="flex items-baseline justify-between gap-4 py-2.5">
+                <dt class="shrink-0 text-dim">Feeds</dt>
+                <dd class="text-right text-paper">{commas(@info[:counts].feeds)}</dd>
+              </div>
+            </dl>
+
+            <p :if={@info[:tail]} class="break-all font-mono text-xs text-faint">
+              {@info[:tail]}
             </p>
           </div>
 
-          <dl class="divide-y divide-edge-soft rounded-lg border border-edge bg-panel px-4 text-sm">
-            <div class="flex items-baseline justify-between gap-4 py-2.5">
-              <dt class="shrink-0 text-dim">Account</dt>
-              <dd class="min-w-0 break-all text-right font-mono text-paper">{@info[:id]}</dd>
+          <div :if={@mode == :import_failed} class="space-y-5">
+            <div>
+              <h1 class="text-2xl font-bold text-paper">The import stopped</h1>
+              <p class="mt-2 text-sm text-sub">
+                Nothing finished, and the old store was not touched. Trying again re-runs
+                the whole import; starting fresh mints a new identity instead.
+              </p>
             </div>
-            <div class="flex items-baseline justify-between gap-4 py-2.5">
-              <dt class="shrink-0 text-dim">Store</dt>
-              <dd class="min-w-0 break-all text-right font-mono text-xs text-sub">
-                {Import.js_home()}
-              </dd>
-            </div>
-            <div class="flex items-baseline justify-between gap-4 py-2.5">
-              <dt class="shrink-0 text-dim">History</dt>
-              <dd class="text-right text-paper">
-                {if is_integer(@info[:log_size]),
-                  do: "#{human_size(@info[:log_size])} of messages",
-                  else: "identity only — no history log found"}
-              </dd>
-            </div>
-            <div class="flex items-baseline justify-between gap-4 py-2.5">
-              <dt class="shrink-0 text-dim">Blobs</dt>
-              <dd class="text-right text-paper">
-                {if @info[:blobs], do: "present — they come too", else: "none found"}
-              </dd>
-            </div>
-          </dl>
 
-          <p class="rounded-lg border border-edge bg-panel p-3 text-sm text-warn">
-            Quit the old client before importing. Two programs publishing from one
-            identity fork your feed — permanently, signed, and unrecoverable.
-          </p>
-
-          <div class="flex flex-wrap gap-3">
-            <button type="button" class="btn btn-primary" phx-click="accept">
-              Import it
-            </button>
-            <button type="button" class="btn" phx-click="decline">Start fresh</button>
-          </div>
-        </div>
-
-        <div :if={@mode == :importing} class="space-y-5">
-          <div>
-            <h1 class="text-2xl font-bold text-paper">Converting your history</h1>
-            <p class="mt-2 text-sm text-sub">
-              Reading the old store and rebuilding it for this engine. Keep the old
-              client closed; HighWire starts when it finishes.
+            <p class="rounded-lg border border-edge bg-panel p-3 text-sm text-bad">
+              {@info[:error] || "The importer failed without saying why."}
             </p>
-          </div>
 
-          <dl class="divide-y divide-edge-soft rounded-lg border border-edge bg-panel px-4 text-sm">
-            <div class="flex items-baseline justify-between gap-4 py-2.5">
-              <dt class="shrink-0 text-dim">Elapsed</dt>
-              <dd class="text-right font-mono text-paper">{elapsed(@info)}</dd>
-            </div>
-            <div
-              :if={is_integer(@info[:log_size])}
-              class="flex items-baseline justify-between gap-4 py-2.5"
-            >
-              <dt class="shrink-0 text-dim">Converting</dt>
-              <dd class="text-right text-paper">{human_size(@info[:log_size])}</dd>
-            </div>
-            <div class="flex items-baseline justify-between gap-4 py-2.5">
-              <dt class="shrink-0 text-dim">Read so far</dt>
-              <dd class="text-right text-paper">
-                {cond do
-                  @info[:counts] -> "#{commas(@info[:counts].messages)} messages"
-                  @info[:dots] -> "≈ #{commas(est_messages(@info[:dots]))} messages"
-                  true -> "starting…"
-                end}
-              </dd>
-            </div>
-            <div :if={@info[:counts]} class="flex items-baseline justify-between gap-4 py-2.5">
-              <dt class="shrink-0 text-dim">Feeds</dt>
-              <dd class="text-right text-paper">{commas(@info[:counts].feeds)}</dd>
-            </div>
-          </dl>
-
-          <p :if={@info[:tail]} class="break-all font-mono text-xs text-faint">
-            {@info[:tail]}
-          </p>
-        </div>
-
-        <div :if={@mode == :import_failed} class="space-y-5">
-          <div>
-            <h1 class="text-2xl font-bold text-paper">The import stopped</h1>
-            <p class="mt-2 text-sm text-sub">
-              Nothing finished, and the old store was not touched. Trying again re-runs
-              the whole import; starting fresh mints a new identity instead.
+            <p :if={@info[:tail]} class="break-all font-mono text-xs text-faint">
+              {@info[:tail]}
             </p>
+
+            <div class="flex flex-wrap gap-3">
+              <button type="button" class="btn btn-primary" phx-click="accept">
+                Try again
+              </button>
+              <button type="button" class="btn" phx-click="decline">Start fresh</button>
+            </div>
           </div>
 
-          <p class="rounded-lg border border-edge bg-panel p-3 text-sm text-bad">
-            {@info[:error] || "The importer failed without saying why."}
-          </p>
+          <div :if={@mode == :disabled} class="space-y-5">
+            <div>
+              <h1 class="text-2xl font-bold text-paper">Nothing to import into</h1>
+              <p class="mt-2 text-sm text-sub">
+                The SSB engine is disabled in this configuration, so there is no store
+                to bring an old feed into.
+              </p>
+            </div>
 
-          <p :if={@info[:tail]} class="break-all font-mono text-xs text-faint">
-            {@info[:tail]}
-          </p>
-
-          <div class="flex flex-wrap gap-3">
-            <button type="button" class="btn btn-primary" phx-click="accept">
-              Try again
-            </button>
-            <button type="button" class="btn" phx-click="decline">Start fresh</button>
-          </div>
-        </div>
-
-        <div :if={@mode == :disabled} class="space-y-5">
-          <div>
-            <h1 class="text-2xl font-bold text-paper">Nothing to import into</h1>
-            <p class="mt-2 text-sm text-sub">
-              The SSB engine is disabled in this configuration, so there is no store
-              to bring an old feed into.
-            </p>
+            <.link navigate="/" class="btn">Back to HighWire</.link>
           </div>
 
-          <.link navigate="/" class="btn">Back to HighWire</.link>
-        </div>
-
-        <%!-- Set only on the way out: the redirect that follows never
+          <%!-- Set only on the way out: the redirect that follows never
         renders this, but HEEx still wants a branch for it. --%>
-        <div :if={@mode == :gone} class="text-sm text-dim"></div>
-      </div>
+          <div :if={@mode == :gone} class="text-sm text-dim"></div>
+        </div>
+      </section>
     </div>
     """
   end

@@ -20,9 +20,10 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert render_hook(view, "tab-active", %{}) =~ "Timeline"
   end
 
-  test "about page still renders", %{conn: conn} do
+  test "about page still renders, with the shared left rail", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/about")
     assert html =~ "HighWire"
+    assert html =~ ~s(title="Settings")
   end
 
   test "the network chip is always in the header and links to the dialing page", %{conn: conn} do
