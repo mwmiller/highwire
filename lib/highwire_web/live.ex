@@ -19,9 +19,7 @@ defmodule HighWireWeb.Live do
   def render(assigns) do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail>
-        <h1 class="sr-only">HighWire</h1>
-      </Nav.rail>
+      <Nav.rail />
 
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-3xl p-6">

@@ -159,7 +159,7 @@ defmodule HighWireWeb.ProfileLive do
             image={@profile && @profile.image}
             rev={@blob_rev}
           />
-          <p class="mt-2 text-sm font-medium text-paper">
+          <p class="mt-2 truncate text-sm font-medium text-paper">
             {heading(@profile) || Ident.short_id(@id)}
           </p>
           <p class="mt-0.5 break-all font-mono text-[10px] text-dim">{@id}</p>

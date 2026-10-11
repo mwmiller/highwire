@@ -238,7 +238,7 @@ defmodule HighWireWeb.PostLive do
               image={image_of(who, @profiles)}
               rev={@blob_rev}
             />
-            <span class="truncate">{display_name(who, @profiles)}</span>
+            <span class="min-w-0 truncate">{display_name(who, @profiles)}</span>
             <span
               :if={who == @self_id}
               class="ml-auto shrink-0 text-[10px] uppercase text-faint"

@@ -527,7 +527,7 @@ defmodule HighWireWeb.TimelineLive do
               image={image_of(c, @profiles)}
               rev={@blob_rev}
             />
-            <span class="truncate">{display_name(c, @profiles)}</span>
+            <span class="min-w-0 truncate">{display_name(c, @profiles)}</span>
           </.link>
         </div>
 
@@ -550,7 +550,7 @@ defmodule HighWireWeb.TimelineLive do
               image={image_of(s["id"], @profiles)}
               rev={@blob_rev}
             />
-            <span class="truncate">{display_name(s["id"], @profiles)}</span>
+            <span class="min-w-0 truncate">{display_name(s["id"], @profiles)}</span>
             <span class="ml-auto shrink-0 text-[10px] text-faint">{s["activity"]}</span>
           </.link>
         </div>

@@ -26,7 +26,7 @@ defmodule HighWireWeb.Components.Nav do
 
   def rail(assigns) do
     ~H"""
-    <aside class="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-edge bg-panel">
+    <aside class="flex w-56 min-w-0 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-edge bg-panel">
       <div class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4">
         <.link
           navigate="/"
@@ -92,7 +92,7 @@ defmodule HighWireWeb.Components.Nav do
       navigate={@navigate}
       href={@href}
       title={@title}
-      class="flex items-center gap-2 px-4 py-1 text-xs text-muted transition hover:bg-raised hover:text-paper"
+      class="flex min-w-0 items-center gap-2 px-4 py-1 text-xs text-muted transition hover:bg-raised hover:text-paper"
     >
       {render_slot(@inner_block)}
     </.link>

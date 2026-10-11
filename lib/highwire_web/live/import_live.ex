@@ -68,9 +68,7 @@ defmodule HighWireWeb.ImportLive do
   def render(assigns) do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail>
-        <h1 class="sr-only">Import</h1>
-      </Nav.rail>
+      <Nav.rail />
 
       <section class="flex flex-1 items-center justify-center overflow-y-auto px-6 py-12">
         <div class="w-full max-w-xl">
