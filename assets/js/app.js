@@ -351,12 +351,10 @@ let Mentions = {
     const id = opt.dataset.id
     const name = opt.dataset.name || id
 
-    // The draft takes markdown that keeps the sigil the user opened
-    // with — @[Name](@id) or \~[Name](@id) — both render the sigil
-    // in front of a profile link, and the backslash stops a lone ~
-    // from opening ~…~ strikethrough in other SSB clients.
-    const mention =
-      (t.sigil === "~" ? "\\~" : "@") + "[" + this.escapeMd(name) + "](" + id + ") "
+    // The draft takes markdown with the sigil inside the brackets —
+    // [@Name](@id) / [~Name](@id) — so the rendered mention reads
+    // @Name or ~Name, wholly linked to the identity view.
+    const mention = "[" + t.sigil + this.escapeMd(name) + "](" + id + ") "
     const value = this.el.value.slice(0, t.start) + mention + this.el.value.slice(t.end)
     const caret = t.start + mention.length
 

@@ -64,28 +64,23 @@ defmodule HighWire.MarkdownTest do
     assert html =~ ~s(<a href="/profile?id=#{URI.encode_www_form(id)}">)
   end
 
-  test "composer markdown mentions render the user's sigil over a profile link" do
+  test "composer markdown mentions render the user's sigil inside the link" do
     id = "@DgsA6kZleyiuliE8SeUDtF3Slw3f92tUaT2xjH5cNg8=.ed25519"
     href = ~s(href="/profile?id=#{URI.encode_www_form(id)}")
 
-    # @[Name](@id): the @ sits in front of the linked name.
-    html = Markdown.to_html("@[Alice](#{id})")
-    assert html =~ "@" <> "<a " <> href
-    assert html =~ ">Alice</a>"
+    # The sigil rides inside the brackets: [@Name](@id) and
+    # [~Name](@id) link the whole "sigil + name" text to the profile.
+    assert Markdown.to_html("[@Alice](#{id})") =~ ~s(<a #{href}>@Alice</a>)
+    assert Markdown.to_html("[~Alice](#{id})") =~ ~s(<a #{href}>~Alice</a>)
 
-    # \~[Name](@id): same shape for the ~ starter — the backslash is
-    # consumed by the parser, the sigil stays visible, and a paragraph
-    # with several such mentions never opens ~…~ strikethrough.
-    html = Markdown.to_html("\\~[Alice](#{id}) and \\~[Bob](#{id})")
-    assert html =~ "~<a " <> href
-    assert html =~ ">Alice</a>"
-    assert html =~ ">Bob</a>"
+    # A paragraph full of ~ mentions never opens ~…~ strikethrough.
+    html = Markdown.to_html("[~Alice](#{id}) and [~Bob](#{id})")
+    assert html =~ ">~Bob</a>"
     refute html =~ "<del>"
 
     # A display name with a bracket survives the link text intact
     # (the composer escapes it before it reaches the draft).
-    html = Markdown.to_html("@[A\\]B](#{id})")
-    assert html =~ ">A]B</a>"
+    assert Markdown.to_html("[@A\\]B](#{id})") =~ ">@A]B</a>"
   end
 
   test "%message refs resolve to the post viewer, bare or as link targets" do
