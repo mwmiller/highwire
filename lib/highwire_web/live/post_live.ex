@@ -239,6 +239,12 @@ defmodule HighWireWeb.PostLive do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
       <Nav.rail>
+        <div class="pb-1 pt-4">
+          <Nav.rail_link navigate="/" title="Back to the timeline">
+            Timeline
+          </Nav.rail_link>
+        </div>
+
         <Nav.rail_label>In this thread</Nav.rail_label>
 
         <div :if={@root}>
