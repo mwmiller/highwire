@@ -412,6 +412,33 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) ageLabels()
 })
 
+// Slash puts the caret in the feed search box unless the user is
+// already typing somewhere; Escape empties it and leaves. The
+// dispatched input event bubbles to the form's phx-change, so the
+// server's @q resets with the value instead of keeping stale results.
+const feedSearchInput = () => document.querySelector("#feed-search input")
+
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    const t = e.target
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return
+    const input = feedSearchInput()
+    if (!input) return
+    e.preventDefault()
+    input.focus()
+    input.select()
+    return
+  }
+
+  if (e.key === "Escape") {
+    const input = feedSearchInput()
+    if (!input || document.activeElement !== input) return
+    input.value = ""
+    input.dispatchEvent(new Event("input", {bubbles: true}))
+    input.blur()
+  }
+})
+
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
   hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions}
