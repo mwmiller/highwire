@@ -35,6 +35,33 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "HighWire"
   end
 
+  test "the network chip is always in the header and links to the dialing page", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/")
+
+    # engine disabled under test — the chip still renders, with
+    # status-appropriate copy instead of vanishing
+    assert html =~ "Engine off"
+    assert html =~ ~s(href="/network")
+  end
+
+  test "the contacts rail never sits empty", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/")
+    assert html =~ "No contacts yet"
+  end
+
+  test "reply snippets render markdown as its text, not its source" do
+    msg = %{
+      "value" => %{"content" => %{"text" => "**loud** take\n> quoted [link](http://x.test)"}}
+    }
+
+    preview = HighWireWeb.TimelineLive.snippet(msg, %{rev: 0})
+
+    refute preview =~ "**"
+    refute preview =~ "]("
+    assert preview =~ "loud take"
+    assert preview =~ "quoted link"
+  end
+
   test "composer renders on the Public tab and tracks drafts", %{conn: conn} do
     {:ok, view, html} = live(conn, "/")
 

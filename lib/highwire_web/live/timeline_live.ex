@@ -453,6 +453,9 @@ defmodule HighWireWeb.TimelineLive do
           Contacts
         </div>
         <div class="pb-4">
+          <p :if={@sidebar_contacts == []} class="px-4 py-1 text-xs italic text-faint">
+            No contacts yet — open a profile to follow someone.
+          </p>
           <.link
             :for={c <- @sidebar_contacts}
             navigate={profile_href(c)}
@@ -518,21 +521,16 @@ defmodule HighWireWeb.TimelineLive do
             <.feed_tab :for={{v, label} <- @right_views} v={v} label={label} current={@view} />
           </nav>
           <.link
-            :if={n = peer_count(@peers)}
             navigate="/network"
-            title="Connections"
+            title="Network — connections and dialing"
             class={[
               "flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs transition",
-              n > 0 and "text-ok hover:bg-raised",
-              n == 0 and "text-dim hover:bg-raised hover:text-paper"
+              "hover:bg-raised",
+              peer_tone(@peers, @status)
             ]}
           >
-            <span class={[
-              "h-1.5 w-1.5 rounded-full",
-              n > 0 and "bg-dot-ok",
-              n == 0 and "bg-dot"
-            ]}></span>
-            {n} peer{if n == 1, do: "", else: "s"}
+            <span class={["h-1.5 w-1.5 rounded-full", peer_dot(@peers, @status)]}></span>
+            {peer_label(@peers, @status)}
           </.link>
         </header>
 
@@ -739,7 +737,7 @@ defmodule HighWireWeb.TimelineLive do
             <span class="shrink-0 text-xs font-medium text-muted">
               {display_name(author_of(reply), @ctx)}
             </span>
-            <span class="truncate text-xs text-sub">{snippet(reply)}</span>
+            <span class="truncate text-xs text-sub">{snippet(reply, @ctx)}</span>
             <span class="ml-auto shrink-0 text-[11px] text-faint">
               {rel_time(ts(reply))}
             </span>
@@ -960,8 +958,36 @@ defmodule HighWireWeb.TimelineLive do
 
   # nil while the engine report is unavailable (old erlbutt / down) —
   # the chip hides rather than claims anything.
-  defp peer_count(nil), do: nil
+  # The header network chip is the timeline's always-visible way into
+  # /network: the live peer count when a report exists, a status-aware
+  # fallback otherwise. It never hides — a hidden chip is exactly when
+  # users need the dialing page most.
   defp peer_count(network) when is_map(network), do: length(network["connections"] || [])
+
+  defp peer_label(nil, :connecting), do: "Connecting…"
+  defp peer_label(nil, :disabled), do: "Engine off"
+  defp peer_label(nil, _status), do: "Network"
+
+  defp peer_label(peers, _status) do
+    n = peer_count(peers)
+    "#{n} peer#{if n == 1, do: "", else: "s"}"
+  end
+
+  defp peer_dot(nil, :connecting), do: "bg-dot-info animate-pulse"
+  defp peer_dot(nil, :disabled), do: "bg-dot-bad"
+  defp peer_dot(nil, _status), do: "bg-dot"
+
+  defp peer_dot(peers, _status) do
+    if peer_count(peers) > 0, do: "bg-dot-ok", else: "bg-dot"
+  end
+
+  defp peer_tone(nil, :connecting), do: "text-info"
+  defp peer_tone(nil, :disabled), do: "text-bad"
+  defp peer_tone(nil, _status), do: "text-dim"
+
+  defp peer_tone(peers, _status) do
+    if peer_count(peers) > 0, do: "text-ok", else: "text-dim"
+  end
 
   # -- message helpers ---------------------------------------------------
 
@@ -982,10 +1008,22 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
-  defp snippet(msg) do
+  # One-line plain preview of a recent reply. The markdown renders
+  # first — so **bold**, > quotes and [links](…) preview as their text
+  # instead of their source — then tags drop out, entities decode, and
+  # the line clamps. Public (with @doc false) for direct tests.
+  @doc false
+  def snippet(msg, ctx \\ %{rev: nil}) do
     msg
     |> text()
     |> String.replace(@image_re, "[image]")
+    |> Markdown.to_html(blob_rev: Map.get(ctx, :rev))
+    |> String.replace(~r/<[^>]*>/, " ")
+    |> String.replace("&lt;", "<")
+    |> String.replace("&gt;", ">")
+    |> String.replace("&quot;", "\"")
+    |> String.replace("&#x27;", "'")
+    |> String.replace("&amp;", "&")
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
     |> String.slice(0, 120)
