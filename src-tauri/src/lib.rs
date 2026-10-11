@@ -237,13 +237,14 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
         .separator()
         .item(&quit)
         .build()?;
+    let go_settings = MenuItemBuilder::with_id("prefs", "Settings").build(handle)?;
     let go = SubmenuBuilder::new(handle, "Go")
         .item(&timeline)
+        .item(&profile)
         .item(&network)
+        .item(&go_settings)
         .separator()
         .item(&dashboard)
-        .separator()
-        .item(&profile)
         .build()?;
     let view = SubmenuBuilder::new(handle, "View").item(&reload).build()?;
     let window = SubmenuBuilder::new(handle, "Window")

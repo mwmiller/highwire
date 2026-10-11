@@ -96,6 +96,16 @@ defmodule HighWireWeb.NetworkLiveTest do
       refute html =~ "Recent dials"
       refute html =~ "Connections"
     end
+
+    test "the rail only jump-links sections that render", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/network")
+
+      assert html =~ ~s(href="#which-network")
+      assert html =~ ~s(href="#dialer")
+      refute html =~ ~s(href="#connections")
+      refute html =~ ~s(href="#known-peers")
+      refute html =~ ~s(href="#dials")
+    end
   end
 
   # The engine cannot run under test, so the report-present half of the
@@ -189,6 +199,22 @@ defmodule HighWireWeb.NetworkLiveTest do
       assert html =~ "No peers connected."
       assert html =~ "The address book is empty"
       assert html =~ "Nothing dialed yet."
+    end
+
+    test "the rail jump-links every rendered section" do
+      html =
+        render_with_report(%{
+          "enabled" => true,
+          "connections" => [],
+          "knownPeers" => [],
+          "dialTry" => []
+        })
+
+      assert html =~ ~s(href="#which-network")
+      assert html =~ ~s(href="#dialer")
+      assert html =~ ~s(href="#connections")
+      assert html =~ ~s(href="#known-peers")
+      assert html =~ ~s(href="#dials")
     end
   end
 

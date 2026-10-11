@@ -295,7 +295,14 @@ defmodule HighWireWeb.NetworkLive do
       phx-hook="TabActivity"
       class="flex h-screen overflow-hidden bg-app text-ink"
     >
-      <Nav.rail />
+      <Nav.rail>
+        <Nav.rail_label>On this page</Nav.rail_label>
+        <Nav.rail_link href="#which-network">Which network</Nav.rail_link>
+        <Nav.rail_link href="#dialer">Dialer</Nav.rail_link>
+        <Nav.rail_link :if={@report != nil} href="#connections">Connections</Nav.rail_link>
+        <Nav.rail_link :if={@report != nil} href="#known-peers">Known peers</Nav.rail_link>
+        <Nav.rail_link :if={@report != nil} href="#dials">Recent dials</Nav.rail_link>
+      </Nav.rail>
 
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-10">
@@ -310,7 +317,10 @@ defmodule HighWireWeb.NetworkLive do
           <%!-- Which network — the profile switcher. All network
           concerns live on this one page. --%>
           <section class="mt-6">
-            <h2 class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint">
+            <h2
+              id="which-network"
+              class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint"
+            >
               Which network
             </h2>
 
@@ -354,7 +364,10 @@ defmodule HighWireWeb.NetworkLive do
           <%!-- Dialer: live state from the report, controls through the
           engine's admin namespace. --%>
           <section class="mt-8">
-            <h2 class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint">
+            <h2
+              id="dialer"
+              class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint"
+            >
               Dialer
             </h2>
 
@@ -417,7 +430,10 @@ defmodule HighWireWeb.NetworkLive do
             <%!-- Patchwork's "connected pubs" affordance: one row per live
             peer, each with its own status dot — never a lone global claim. --%>
             <section>
-              <h2 class="text-sm font-semibold uppercase tracking-wider text-faint">
+              <h2
+                id="connections"
+                class="text-sm font-semibold uppercase tracking-wider text-faint"
+              >
                 Connections · {connections_header(@report)}
               </h2>
 
@@ -451,7 +467,7 @@ defmodule HighWireWeb.NetworkLive do
             </section>
 
             <section>
-              <h2 class="text-sm font-semibold uppercase tracking-wider text-faint">
+              <h2 id="known-peers" class="text-sm font-semibold uppercase tracking-wider text-faint">
                 Known peers · {length(@report["knownPeers"] || [])}
               </h2>
 
@@ -490,7 +506,7 @@ defmodule HighWireWeb.NetworkLive do
             </section>
 
             <section>
-              <h2 class="text-sm font-semibold uppercase tracking-wider text-faint">
+              <h2 id="dials" class="text-sm font-semibold uppercase tracking-wider text-faint">
                 Recent dials
               </h2>
 
