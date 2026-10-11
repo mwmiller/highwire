@@ -64,6 +64,11 @@ defmodule HighWire.Timeline do
   # what has arrived instead of waiting for every stream (up to 400).
   @first_paint_feeds 40
 
+  # Store-wide contact drain: a completed pass is not repeated on the
+  # next reload — only after this long (the per-feed window already
+  # carries recent follows; the drain back-fills old follow rows).
+  @drain_refresh_ms :timer.minutes(15)
+
   def topic, do: @topic
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -341,6 +346,8 @@ defmodule HighWire.Timeline do
       contact_ref: nil,
       contact_buf: [],
       contact_msgs: [],
+      drain_client: nil,
+      last_drain_at: nil,
       follows: [],
       pending: %{},
       acc: [],
@@ -980,7 +987,8 @@ defmodule HighWire.Timeline do
 
   def handle_info({Client, ref, {:error, reason}}, %{contact_ref: ref} = state) do
     Logger.debug("timeline: contact drain failed: #{inspect(reason)}")
-    {:noreply, %{state | contact_ref: nil, contact_buf: []}}
+    state = stop_drain_client(%{state | contact_ref: nil, contact_buf: []})
+    {:noreply, state}
   end
 
   def handle_info(:rebroadcast, state) do
@@ -1048,6 +1056,12 @@ defmodule HighWire.Timeline do
   # the client died under us (sidecar restart, socket drop): reconnect
   def handle_info({:EXIT, pid, _reason}, %{client: pid} = state) do
     reconnect(%{state | client: nil})
+  end
+
+  # the dedicated drain connection died mid-pass: drop the dangling
+  # ref so the next reload can re-dial instead of blocking the drain.
+  def handle_info({:EXIT, pid, _reason}, %{drain_client: pid} = state) do
+    {:noreply, %{state | drain_client: nil, contact_ref: nil, contact_buf: []}}
   end
 
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
@@ -1146,18 +1160,89 @@ defmodule HighWire.Timeline do
   # skips reopening it, and the drain's :done/:error clears the ref.
   defp open_windows(state) do
     state = %{state | pending: open_feeds(state), acc: []}
+    maybe_open_drain(state)
+  catch
+    _, _ -> state
+  end
 
-    if state.contact_ref == nil and is_pid(state.client) and Process.alive?(state.client) do
-      case Client.stream(state.client, ["messagesByType"], [%{"type" => "contact"}], self()) do
-        {:ok, ref} -> %{state | contact_ref: ref, contact_buf: []}
-        _ -> state
-      end
+  # The drain streams the entire contact table (200k+ items, tens of
+  # seconds). On the shared client those ordered box-stream frames sit
+  # ahead of every cursor page and starve it past the 10s page timeout
+  # — tabs fall back to window-only rows. So the drain gets its own SHS
+  # connection, and a completed pass is not repeated until
+  # @drain_refresh_ms later.
+  defp maybe_open_drain(state) do
+    if state.contact_ref == nil and drain_due?(state) do
+      open_drain(state)
     else
       state
     end
   catch
     _, _ -> state
   end
+
+  defp open_drain(state) do
+    {client, state} = drain_endpoint(state)
+
+    with true <- is_pid(client),
+         {:ok, ref} <- Client.stream(client, ["messagesByType"], [%{"type" => "contact"}], self()) do
+      %{state | contact_ref: ref, contact_buf: []}
+    else
+      _ -> state
+    end
+  catch
+    _, _ -> state
+  end
+
+  defp drain_due?(%{last_drain_at: nil}), do: true
+
+  defp drain_due?(%{last_drain_at: at}) do
+    System.monotonic_time(:millisecond) - at > @drain_refresh_ms
+  end
+
+  # An already-open dedicated connection wins; tests (drain_connection:
+  # false) and a failed dial fall back to the main client — correct in
+  # both cases: the fake client answers stream calls directly, and the
+  # main client still works, just with the starvation caveat.
+  defp drain_endpoint(state) do
+    cond do
+      is_pid(state.drain_client) and Process.alive?(state.drain_client) ->
+        {state.drain_client, state}
+
+      Keyword.get(Sidecar.config(), :drain_connection, true) == false ->
+        {state.client, state}
+
+      not is_pid(state.client) ->
+        {nil, state}
+
+      true ->
+        dial_drain(state)
+    end
+  end
+
+  defp dial_drain(state) do
+    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
+
+    if File.exists?(secret) do
+      case start_client(secret) do
+        {:ok, client} -> {client, %{state | drain_client: client}}
+        _ -> {state.client, state}
+      end
+    else
+      {state.client, state}
+    end
+  end
+
+  # Best-effort teardown of the dedicated drain connection — a failed
+  # pass must not leak a half-open socket until Timeline restarts.
+  defp stop_drain_client(%{drain_client: pid} = state) when is_pid(pid) do
+    Client.stop(pid)
+    %{state | drain_client: nil}
+  catch
+    _, _ -> %{state | drain_client: nil}
+  end
+
+  defp stop_drain_client(state), do: state
 
   defp open_feeds(state) do
     max = Keyword.get(Sidecar.config(), :max_feeds, 400)
@@ -1237,7 +1322,8 @@ defmodule HighWire.Timeline do
       state
       | contact_ref: nil,
         contact_buf: [],
-        contact_msgs: state.contact_msgs ++ fresh
+        contact_msgs: state.contact_msgs ++ fresh,
+        last_drain_at: System.monotonic_time(:millisecond)
     }
 
     if fresh != [] and state.status == :ok and map_size(state.pending) == 0 do

@@ -18,7 +18,8 @@ defmodule HighWire.TimelineTest do
     msg(author, key, timestamp, Map.put(vote_props, "type", "vote"))
   end
 
-  # Answers Client.stream/4-shaped calls without a network; the
+  # Answers Client.stream/4-shaped calls without a network and records
+  # them, so tests can prove which connection a stream opened on; the
   # first contacts item boots the feed streams through this.
   defmodule FakeClient do
     @moduledoc false
@@ -26,12 +27,19 @@ defmodule HighWire.TimelineTest do
 
     def start_link(_), do: GenServer.start_link(__MODULE__, nil)
 
-    @impl true
-    def init(_), do: {:ok, nil}
+    def streams(client), do: GenServer.call(client, :streams)
 
     @impl true
-    def handle_call({:stream, _name, _args, _subscriber}, _from, state),
-      do: {:reply, {:ok, make_ref()}, state}
+    def init(_), do: {:ok, []}
+
+    @impl true
+    def handle_call({:stream, name, args, _subscriber}, _from, state) do
+      {:reply, {:ok, make_ref()}, [{name, args} | state]}
+    end
+
+    def handle_call(:streams, _from, state) do
+      {:reply, Enum.reverse(state), state}
+    end
   end
 
   describe "publish content builders" do
@@ -233,6 +241,8 @@ defmodule HighWire.TimelineTest do
           contact_ref: nil,
           contact_buf: [],
           contact_msgs: [],
+          drain_client: nil,
+          last_drain_at: nil,
           follows: [],
           self_id: "@me.ed25519",
           status: :connecting,
@@ -309,6 +319,8 @@ defmodule HighWire.TimelineTest do
           contact_ref: :contact_ref,
           contact_buf: [],
           contact_msgs: [],
+          drain_client: nil,
+          last_drain_at: nil,
           contacts_ref: nil,
           contacts_primed?: true,
           # @a is a follow id too, so the contact author's profile is
@@ -408,6 +420,77 @@ defmodule HighWire.TimelineTest do
       assert is_reference(st.contact_ref)
       assert map_size(st.pending) >= 1
       assert st.acc == []
+    end
+
+    test "the drain opens on its dedicated connection, never the shared one" do
+      main = start_supervised!(%{id: :fake_main, start: {FakeClient, :start_link, [nil]}})
+
+      dedicated =
+        start_supervised!(%{id: :fake_dedicated, start: {FakeClient, :start_link, [nil]}})
+
+      st = drain_state(contact_ref: nil, status: :ok, client: main, drain_client: dedicated)
+
+      {:noreply, st} = Timeline.handle_info({:reload, 0}, st)
+
+      assert is_reference(st.contact_ref)
+      assert st.drain_client == dedicated
+      assert FakeClient.streams(dedicated) == [{["messagesByType"], [%{"type" => "contact"}]}]
+
+      # the shared connection carries only the per-feed windows
+      assert FakeClient.streams(main) != []
+
+      assert Enum.all?(FakeClient.streams(main), fn {name, _args} ->
+               name != ["messagesByType"]
+             end)
+    end
+
+    test "a completed drain is not re-opened on the next reload" do
+      st =
+        drain_state(
+          contact_ref: nil,
+          status: :ok,
+          last_drain_at: System.monotonic_time(:millisecond)
+        )
+
+      {:noreply, st} = Timeline.handle_info({:reload, 0}, st)
+      assert st.contact_ref == nil
+    end
+
+    test "the drain re-opens once the refresh window has passed" do
+      stale = System.monotonic_time(:millisecond) - 16 * 60_000
+      st = drain_state(contact_ref: nil, status: :ok, last_drain_at: stale)
+
+      {:noreply, st} = Timeline.handle_info({:reload, 0}, st)
+      assert is_reference(st.contact_ref)
+    end
+
+    test "a completed pass stamps the refresh window" do
+      st = drain_state(status: :ok, pending: %{})
+
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, :done}, st)
+      assert is_integer(st.last_drain_at)
+    end
+
+    test "a stream error drops the buffer, keeps what merged, and rotates the connection" do
+      dedicated =
+        start_supervised!(%{id: :fake_error_client, start: {FakeClient, :start_link, [nil]}})
+
+      st = drain_state(contact_msgs: ["kept"], contact_buf: ["partial"], drain_client: dedicated)
+
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:error, :closed}}, st)
+      assert st.contact_ref == nil
+      assert st.contact_buf == []
+      assert st.contact_msgs == ["kept"]
+      assert st.drain_client == nil
+    end
+
+    test "drain connection death clears the dangling ref" do
+      st = drain_state(contact_ref: :contact_ref, contact_buf: ["partial"], drain_client: self())
+
+      {:noreply, st} = Timeline.handle_info({:EXIT, self(), :closed}, st)
+      assert st.drain_client == nil
+      assert st.contact_ref == nil
+      assert st.contact_buf == []
     end
   end
 

@@ -20,3 +20,7 @@ config :highwire, HighWireWeb.Endpoint,
 config :logger, level: :warning
 
 config :highwire, :ssb, enabled: false
+
+# The contact drain must never open its own SHS connection in tests —
+# there is no sidecar, and the real secret must never be dialed.
+config :highwire, :ssb, drain_connection: false
