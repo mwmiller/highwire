@@ -256,14 +256,14 @@ let Mentions = {
     document.removeEventListener("click", this.onClick)
   },
 
-  // The @ or ~ token ending at the caret: which sigil, where the token
-  // starts, and what has been typed after it.
+  // The @ or ~ token ending at the caret: which sigil opened it, where
+  // the token starts, and what has been typed after it.
   token() {
     const caret = this.el.selectionStart ?? 0
     const before = this.el.value.slice(0, caret)
     const m = /(?:^|\s)([@~])([^\s@~]*)$/.exec(before)
     if (!m) return null
-    return {q: m[2], start: before.length - m[2].length - 1, end: caret}
+    return {sigil: m[1], q: m[2], start: before.length - m[2].length - 1, end: caret}
   },
 
   scan() {
@@ -347,9 +347,18 @@ let Mentions = {
       return
     }
 
-    const id = opts[idx].dataset.id
-    const value = this.el.value.slice(0, t.start) + id + " " + this.el.value.slice(t.end)
-    const caret = t.start + id.length + 1
+    const opt = opts[idx]
+    const id = opt.dataset.id
+    const name = opt.dataset.name || id
+
+    // The draft takes markdown that keeps the sigil the user opened
+    // with — @[Name](@id) or \~[Name](@id) — both render the sigil
+    // in front of a profile link, and the backslash stops a lone ~
+    // from opening ~…~ strikethrough in other SSB clients.
+    const mention =
+      (t.sigil === "~" ? "\\~" : "@") + "[" + this.escapeMd(name) + "](" + id + ") "
+    const value = this.el.value.slice(0, t.start) + mention + this.el.value.slice(t.end)
+    const caret = t.start + mention.length
 
     this.el.value = value
     this.el.setSelectionRange(caret, caret)
@@ -358,6 +367,12 @@ let Mentions = {
     try {
       this.pushEvent("compose-draft", {body: value}, () => {})
     } catch (_) {}
+  },
+
+  // Link text: brackets or backslashes in a display name would break
+  // out of the […] markdown.
+  escapeMd(s) {
+    return s.replace(/([\\[\]])/g, "\\$1")
   }
 }
 
