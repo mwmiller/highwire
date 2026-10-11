@@ -39,7 +39,10 @@ tag-triggered release workflow (`.github/workflows/release.yml`).
 - The Network page (`/network`) is the general place to manage
   dialing: the network profile switcher, the dialer's enable/disable
   and dial-now controls, the live connections, the `conn.json`
-  address book, and the recent dial attempts. The native menu's Go
+  address book, and the recent dial attempts. When the engine build
+  predates `gossip.peers`, the page falls back to the admin
+  namespace — dialer status, connected peers, the address book — and
+  marks the report partial. The native menu's Go
   items (Timeline ⌘1, Network ⌘2, Dashboard ⌘D, My Profile ⌘⇧P) and
   Preferences ⌘, navigate the webview; the window remembers its size
   and position across launches.
@@ -50,8 +53,10 @@ tag-triggered release workflow (`.github/workflows/release.yml`).
   (`github.com/cmoid/erlbutt`) as a complete OTP release under
   `priv/erlbutt`, booted as a sidecar when the app starts.
 - First-run import of an existing JS-client `~/.ssb` store (secret,
-  flume `log.offset` history, blobs) is provided by erlbutt's
-  converter at boot. `~/.ssb` is only read, never written.
+  flume `log.offset` history, blobs) arrives on its own gated page:
+  the offer lists what was found and asks — Import it or Start
+  fresh — then shows the converter's progress and, if it fails, the
+  reason with a retry. `~/.ssb` is only read, never written.
 - Publish round-trip — sign, store, read back — verified against a
   bundled-engine build.
 
@@ -72,9 +77,9 @@ tag-triggered release workflow (`.github/workflows/release.yml`).
 Data lives in `~/.highwire` (override with `HIGHWIRE_HOME`) — as the
 destination of a complete first-run import. On first launch HighWire
 detects an existing `~/.ssb` (Patchwork, Poncho Wonky, and other
-JS-client installs) and imports the whole object store: your secret,
-the entire flume `log.offset` history, and every blob. `~/.ssb` is
-never written to.
+JS-client installs) and offers to take it over: your secret, the
+entire flume `log.offset` history, and every blob. Decline and it
+starts fresh instead. `~/.ssb` is never written to.
 
 After the cutover, retire (rename) the old client before HighWire
 publishes with that identity — per erlbutt's rule, two writers on one
