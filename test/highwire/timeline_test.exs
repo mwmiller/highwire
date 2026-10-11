@@ -230,9 +230,13 @@ defmodule HighWire.TimelineTest do
           client: start_supervised!(FakeClient),
           contacts_ref: :contacts_ref,
           contacts_primed?: false,
+          contact_ref: nil,
+          contact_buf: [],
+          contact_msgs: [],
           follows: [],
           self_id: "@me.ed25519",
           status: :connecting,
+          acc: [],
           pending: %{},
           reload_timer: nil,
           gen: 0
@@ -289,6 +293,124 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  describe "contact drain (messagesByType)" do
+    # Follow events sit outside the per-feed window and never enter the
+    # paged publicFeed — the store-wide drain is what keeps them on the
+    # timeline at all.
+    defp drain_state(overrides) do
+      post = msg("@me.ed25519", "%p=.sha256", 5_000, %{"type" => "post", "text" => "hi"})
+
+      follow =
+        msg("@a.ed25519", "%c=.sha256", 1_000, %{"type" => "contact", "contact" => "@b=.ed25519"})
+
+      Map.merge(
+        %{
+          client: start_supervised!(FakeClient),
+          contact_ref: :contact_ref,
+          contact_buf: [],
+          contact_msgs: [],
+          contacts_ref: nil,
+          contacts_primed?: true,
+          # @a is a follow id too, so the contact author's profile is
+          # never narrowed out of the payload between the two builds.
+          follows: ["@me.ed25519", "@a.ed25519"],
+          self_id: "@me.ed25519",
+          status: :loading,
+          acc: [post],
+          pending: %{},
+          messages: %{feed: [], profiles: %{"@me.ed25519" => %{}, "@a.ed25519" => %{}}},
+          blob_rev: 0,
+          gen: 0,
+          done_count: 0,
+          reload_timer: nil,
+          active: %{self() => make_ref()}
+        },
+        Map.new(overrides)
+      )
+      |> Map.put(:_post, post)
+      |> Map.put(:_follow, follow)
+    end
+
+    test "a drain landing after the feed payload rebuilds with follow rows, window intact" do
+      st = drain_state(pending: %{123 => "@me.ed25519"})
+
+      # the feed window finishes first: payload is final, no contacts yet
+      {:noreply, st} = Timeline.handle_info({Client, 123, :done}, st)
+      assert st.status == :ok
+      assert Enum.any?(st.messages.feed, &(&1.msg["key"] == "%p=.sha256"))
+      refute Enum.any?(st.messages.feed, &(&1.kind == :contact))
+
+      # then the drain lands
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:item, st._follow}}, st)
+      assert st.contact_buf == [st._follow]
+      assert st.contact_msgs == []
+
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, :done}, st)
+      assert st.contact_ref == nil
+      assert st.contact_msgs == [st._follow]
+
+      # the rebuild carries follow rows AND the window it already had
+      assert Enum.any?(st.messages.feed, &(&1.kind == :contact))
+      assert Enum.any?(st.messages.feed, &(&1.msg["key"] == "%p=.sha256"))
+    end
+
+    test "a drain finishing mid-stream merges quietly; the feed's own finalize carries it" do
+      st = drain_state(status: :ok, pending: %{123 => "@me.ed25519"})
+
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:item, st._follow}}, st)
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, :done}, st)
+
+      # merged, but no rebuild while the feed window is still streaming
+      assert st.contact_msgs == [st._follow]
+      assert st.messages.feed == []
+
+      # the feed's finalize pass picks the drain up
+      {:noreply, st} = Timeline.handle_info({Client, 123, :done}, st)
+      assert Enum.any?(st.messages.feed, &(&1.kind == :contact))
+      assert Enum.any?(st.messages.feed, &(&1.msg["key"] == "%p=.sha256"))
+    end
+
+    test "a repeat of an already-known contact neither accumulates nor rebroadcasts" do
+      st =
+        drain_state(
+          status: :ok,
+          pending: %{},
+          contact_msgs: [
+            st_follow =
+              msg("@a.ed25519", "%c=.sha256", 1_000, %{
+                "type" => "contact",
+                "contact" => "@b=.ed25519"
+              })
+          ],
+          messages: %{feed: [:untouched], profiles: %{}}
+        )
+
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:item, st_follow}}, st)
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, :done}, st)
+
+      assert st.contact_msgs == [st_follow]
+      assert st.messages.feed == [:untouched]
+    end
+
+    test "a stream error drops the buffer and keeps what already merged" do
+      st = drain_state(contact_msgs: ["kept"], contact_buf: ["partial"])
+
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:error, :closed}}, st)
+      assert st.contact_ref == nil
+      assert st.contact_buf == []
+      assert st.contact_msgs == ["kept"]
+    end
+
+    test "a reload opens the drain alongside the feed window" do
+      st = drain_state(contact_ref: nil, status: :ok)
+
+      {:noreply, st} = Timeline.handle_info({:reload, 0}, st)
+      assert is_reference(st.contact_ref)
+      assert map_size(st.pending) >= 1
+      assert st.acc == []
+    end
+  end
+
   describe "root_row" do
     test "stores recent replies newest-first so the template's reverse reads chronologically" do
       root = msg("@a=.ed25519", "%root=.sha256", 1_000, %{"type" => "post", "text" => "hi"})
@@ -331,6 +453,116 @@ defmodule HighWire.TimelineTest do
       row = Timeline.root_row(item, nil, 10_000, false)
 
       assert Enum.map(row.recent, & &1["key"]) == ["%r4=.sha256", "%r3=.sha256", "%r2=.sha256"]
+    end
+  end
+
+  # Answers Client.call/4 from a canned %{"gossip.peers" => reply}
+  # table; anything absent replies with a method-not-found error, the
+  # way an engine predating that RPC would.
+  defmodule NetworkClient do
+    @moduledoc false
+    use GenServer
+
+    def start(table) do
+      {:ok, pid} = GenServer.start_link(__MODULE__, table)
+      pid
+    end
+
+    @impl true
+    def init(table), do: {:ok, table}
+
+    @impl true
+    def handle_call({:call, name, _args}, _from, table) do
+      {:reply, Map.get(table, Enum.join(name, "."), {:error, :methodnotfound}), table}
+    end
+  end
+
+  describe "network report" do
+    test "a gossip.peers report rides in whole, with the address book merged" do
+      known = [%{"address" => "net:host:1~shs:key", "source" => "pub"}]
+
+      client =
+        NetworkClient.start(%{
+          "gossip.peers" =>
+            {:ok,
+             %{
+               "enabled" => true,
+               "cap" => 30,
+               "connections" => ["@a=.ed25519"],
+               "lanCandidates" => 2,
+               "autoconnectCandidates" => 5,
+               "dialTry" => [%{"addr" => "net:host:1~shs:key", "attempts" => 0}]
+             }},
+          "admin.peers.known" => {:ok, known}
+        })
+
+      assert report = Timeline.fetch_network(client)
+      assert report["enabled"] == true
+      assert report["cap"] == 30
+      assert report["connections"] == ["@a=.ed25519"]
+      assert report["lanCandidates"] == 2
+      assert report["knownPeers"] == known
+      refute Map.has_key?(report, "partial")
+    end
+
+    test "no gossip.peers: the report assembles from the admin namespace" do
+      client =
+        NetworkClient.start(%{
+          "admin.dialer.status" => {:ok, %{"enabled" => false}},
+          "admin.peers.connected" => {:ok, [%{"id" => "@x=.ed25519"}, %{"id" => 42}]},
+          "admin.peers.known" => {:ok, [%{"address" => "net:host:2~shs:key"}]}
+        })
+
+      assert report = Timeline.fetch_network(client)
+      assert report["enabled"] == false
+      assert report["connections"] == ["@x=.ed25519"]
+      assert report["knownPeers"] == [%{"address" => "net:host:2~shs:key"}]
+      assert report["dialTry"] == []
+      assert report["partial"] == true
+      refute Map.has_key?(report, "cap")
+      refute Map.has_key?(report, "lanCandidates")
+    end
+
+    test "the fallback tolerates a half-answer: dialer only" do
+      client = NetworkClient.start(%{"admin.dialer.status" => {:ok, %{"enabled" => true}}})
+
+      assert report = Timeline.fetch_network(client)
+      assert report["enabled"] == true
+      assert report["connections"] == []
+      assert report["knownPeers"] == []
+      assert report["partial"] == true
+    end
+
+    test "the fallback tolerates a half-answer: connected only" do
+      client =
+        NetworkClient.start(%{
+          "admin.dialer.status" => {:ok, %{}},
+          "admin.peers.connected" => {:ok, [%{"id" => "@y=.ed25519"}]}
+        })
+
+      assert report = Timeline.fetch_network(client)
+      assert report["connections"] == ["@y=.ed25519"]
+      refute Map.has_key?(report, "enabled")
+      assert report["partial"] == true
+    end
+
+    test "an engine that answers nothing yields no report at all" do
+      assert Timeline.fetch_network(NetworkClient.start(%{})) == nil
+    end
+
+    test "gossip answers but the address book fails: knownPeers goes empty" do
+      client = NetworkClient.start(%{"gossip.peers" => {:ok, %{"connections" => []}}})
+
+      assert report = Timeline.fetch_network(client)
+      assert report["knownPeers"] == []
+    end
+
+    test "no client (or a dead one) is no report" do
+      assert Timeline.fetch_network(nil) == nil
+
+      pid = NetworkClient.start(%{})
+      :ok = GenServer.stop(pid)
+      assert Timeline.fetch_network(pid) == nil
     end
   end
 end

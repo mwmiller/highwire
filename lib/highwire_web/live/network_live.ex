@@ -360,20 +360,24 @@ defmodule HighWireWeb.NetworkLive do
 
             <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
               <span class={[
-                @report != nil && @report["enabled"] && "text-ok",
-                @report != nil && !@report["enabled"] && "text-dim",
+                @report != nil && @report["enabled"] == true && "text-ok",
+                @report != nil && @report["enabled"] == false && "text-dim",
+                @report != nil && is_nil(@report["enabled"]) && "text-dim",
                 @report == nil && "text-dim"
               ]}>
                 {cond do
-                  @report == nil -> "auto-dial unknown"
+                  @report == nil or is_nil(@report["enabled"]) -> "auto-dial unknown"
                   @report["enabled"] -> "auto-dial on"
                   true -> "auto-dial off"
                 end}
               </span>
-              <span :if={@report != nil} class="text-dim">
+              <span :if={@report != nil and not is_nil(@report["lanCandidates"])} class="text-dim">
                 {@report["lanCandidates"]} on LAN
               </span>
-              <span :if={@report != nil} class="text-dim">
+              <span
+                :if={@report != nil and not is_nil(@report["autoconnectCandidates"])}
+                class="text-dim"
+              >
                 {@report["autoconnectCandidates"]} announced
               </span>
             </div>
@@ -406,7 +410,7 @@ defmodule HighWireWeb.NetworkLive do
 
           <p :if={@report == nil} class="mt-6 text-sm text-dim">
             No report from the local engine — it is starting up, disabled, or the
-            running erlbutt predates the <span class="font-mono">gossip.peers</span> RPC.
+            running erlbutt predates the admin RPCs this page reads.
           </p>
 
           <div :if={@report != nil} class="mt-8 space-y-8">
@@ -414,7 +418,7 @@ defmodule HighWireWeb.NetworkLive do
             peer, each with its own status dot — never a lone global claim. --%>
             <section>
               <h2 class="text-sm font-semibold uppercase tracking-wider text-faint">
-                Connections · {length(@report["connections"] || [])} / {@report["cap"]}
+                Connections · {connections_header(@report)}
               </h2>
 
               <div :if={@report["connections"] == []} class="mt-2 text-sm text-dim">
@@ -490,11 +494,13 @@ defmodule HighWireWeb.NetworkLive do
                 Recent dials
               </h2>
 
-              <div :if={@report["dialTry"] == []} class="mt-2 text-sm text-dim">
-                Nothing dialed yet.
+              <div :if={@report["dialTry"] in [nil, []]} class="mt-2 text-sm text-dim">
+                {if @report["partial"],
+                  do: "Nothing dialed yet — this engine build does not report dial history.",
+                  else: "Nothing dialed yet."}
               </div>
 
-              <div :if={@report["dialTry"] != []} class="mt-2 space-y-1">
+              <div :if={@report["dialTry"] not in [nil, []]} class="mt-2 space-y-1">
                 <div
                   :for={try_row <- @report["dialTry"] || []}
                   class="flex items-baseline gap-3 border-b border-edge-soft px-2 py-1.5 text-xs"
@@ -590,5 +596,16 @@ defmodule HighWireWeb.NetworkLive do
 
   defp blob_rev(report) do
     report["blobRev"] || 0
+  end
+
+  # One contiguous "1 / 8" header line — a fallback report may carry no
+  # cap, and the span used to render would split the text across lines.
+  defp connections_header(report) do
+    n = length(report["connections"] || [])
+
+    case report["cap"] do
+      cap when is_integer(cap) -> "#{n} / #{cap}"
+      _ -> "#{n}"
+    end
   end
 end

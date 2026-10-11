@@ -82,11 +82,17 @@ defmodule HighWire.Timeline do
   end
 
   @doc """
-  The sidecar's `gossip.peers` connection report — live peer ids, dialer
-  state, candidate counts, recent dial attempts — merged with the
+  The sidecar's connection report — live peer ids, dialer state,
+  candidate counts, recent dial attempts — merged with the
   `admin.peers.known` address book under `"knownPeers"`, or nil when
-  the engine is down (or erlbutt predates the RPCs). Polled every 10s
-  by the server; the /network dashboard reads it synchronously.
+  the engine is down (or erlbutt predates the RPCs).
+
+  `gossip.peers` is one report; erlbutt builds without it fall back to
+  assembling the same dashboard out of `admin.dialer.status` +
+  `admin.peers.connected` (candidate counts and dial history then come
+  back as absent/empty — they wait for the upstream `gossip.peers`
+  batch). Polled every 10s by the server; the /network dashboard reads
+  it synchronously.
   """
   @spec network() :: map() | nil
   def network do
@@ -332,6 +338,9 @@ defmodule HighWire.Timeline do
       self_id: nil,
       contacts_ref: nil,
       contacts_primed?: false,
+      contact_ref: nil,
+      contact_buf: [],
+      contact_msgs: [],
       follows: [],
       pending: %{},
       acc: [],
@@ -511,17 +520,80 @@ defmodule HighWire.Timeline do
   defp about_text(%{"link" => link}) when is_binary(link), do: link
   defp about_text(_), do: nil
 
-  defp fetch_network(client) do
+  # gossip.peers is the whole report in one call. Public (with @doc
+  # false) so tests can drive the assembly without a live engine.
+  @doc false
+  def fetch_network(client) do
     if is_pid(client) and Process.alive?(client) do
-      case Client.call(client, ["gossip", "peers"], [], 2_000) do
-        {:ok, net} when is_map(net) -> Map.put(net, "knownPeers", fetch_known_peers(client))
-        _ -> nil
+      case gossip_report(client) do
+        nil -> fallback_report(client)
+        net -> Map.put(net, "knownPeers", fetch_known_peers(client))
       end
     else
       nil
     end
   catch
     _, _ -> nil
+  end
+
+  defp gossip_report(client) do
+    case Client.call(client, ["gossip", "peers"], [], 2_000) do
+      {:ok, net} when is_map(net) -> net
+      _ -> nil
+    end
+  end
+
+  # An erlbutt without gossip.peers (upstream as of ace112d): build the
+  # same dashboard out of the admin namespace alone. Dialer state and
+  # live connections are present there; candidate counts and dial
+  # history are not, so the report omits them — "partial" marks it and
+  # the view renders what it gets. nil when neither RPC answers: no
+  # report beats a fabricated one.
+  defp fallback_report(client) do
+    {enabled, dialer_answered} =
+      case Client.call(client, ["admin", "dialer", "status"], [], 2_000) do
+        {:ok, %{"enabled" => value}} when is_boolean(value) -> {value, true}
+        {:ok, _other} -> {nil, true}
+        _ -> {nil, false}
+      end
+
+    {connections, connected_answered} = connected_ids(client)
+    known = fetch_known_peers(client)
+
+    if dialer_answered or connected_answered do
+      report = %{
+        "connections" => connections,
+        "knownPeers" => known,
+        "dialTry" => [],
+        "partial" => true
+      }
+
+      if is_nil(enabled), do: report, else: Map.put(report, "enabled", enabled)
+    else
+      nil
+    end
+  catch
+    _, _ -> nil
+  end
+
+  # admin.peers.connected answers one-entry [{id}] rows; unwrapped to
+  # the plain id list gossip.peers hands out.
+  defp connected_ids(client) do
+    case Client.call(client, ["admin", "peers", "connected"], [], 2_000) do
+      {:ok, rows} when is_list(rows) ->
+        ids =
+          Enum.flat_map(rows, fn
+            %{"id" => id} when is_binary(id) -> [id]
+            _ -> []
+          end)
+
+        {ids, true}
+
+      _ ->
+        {[], false}
+    end
+  catch
+    _, _ -> {[], false}
   end
 
   # admin.peers.known — the conn.json address book — rides the same
@@ -848,7 +920,7 @@ defmodule HighWire.Timeline do
       if follows == [] do
         {:noreply, finalize(state)}
       else
-        {:noreply, %{state | status: :loading, pending: open_feeds(state)}}
+        {:noreply, open_windows(%{state | status: :loading})}
       end
     else
       {:noreply, reload_soon(state)}
@@ -867,7 +939,7 @@ defmodule HighWire.Timeline do
       if state.follows == [] do
         {:noreply, finalize(state)}
       else
-        {:noreply, %{state | status: :loading, pending: open_feeds(state)}}
+        {:noreply, open_windows(%{state | status: :loading})}
       end
     end
   end
@@ -892,6 +964,23 @@ defmodule HighWire.Timeline do
   def handle_info({Client, ref, {:error, reason}}, %{blob_ls_ref: ref} = state) do
     Logger.debug("timeline: blobs.ls stream failed: #{inspect(reason)}")
     {:noreply, %{state | blob_ls_ref: nil}}
+  end
+
+  # messagesByType("contact"): the store-wide follow-event drain. The
+  # per-feed window only carries each author's last N messages and the
+  # paged publicFeed never carries contacts at all, so without this
+  # drain follow rows would age out of the timeline and disappear.
+  def handle_info({Client, ref, {:item, msg}}, %{contact_ref: ref} = state) do
+    {:noreply, %{state | contact_buf: [msg | state.contact_buf]}}
+  end
+
+  def handle_info({Client, ref, :done}, %{contact_ref: ref} = state) do
+    contact_drained(state)
+  end
+
+  def handle_info({Client, ref, {:error, reason}}, %{contact_ref: ref} = state) do
+    Logger.debug("timeline: contact drain failed: #{inspect(reason)}")
+    {:noreply, %{state | contact_ref: nil, contact_buf: []}}
   end
 
   def handle_info(:rebroadcast, state) do
@@ -997,7 +1086,7 @@ defmodule HighWire.Timeline do
       map_size(state.pending) != 0 -> state
       state.follows == [] -> state
       not (is_pid(state.client) and Process.alive?(state.client)) -> state
-      true -> %{state | pending: open_feeds(state), acc: [], done_count: 0}
+      true -> open_windows(%{state | done_count: 0})
     end
   catch
     _, _ -> state
@@ -1046,6 +1135,28 @@ defmodule HighWire.Timeline do
     )
   rescue
     e -> {:error, e}
+  end
+
+  # Open the per-follow window streams plus the store-wide contact
+  # drain. The drain is separate because contact messages never enter
+  # the paged publicFeed (silkpurse_threads classifies them `ignore`)
+  # and only the last `messages_per_feed` of each feed ever reach the
+  # window — without it, follow rows age out of the timeline and
+  # vanish. One drain at a time: a reload while one is still flying
+  # skips reopening it, and the drain's :done/:error clears the ref.
+  defp open_windows(state) do
+    state = %{state | pending: open_feeds(state), acc: []}
+
+    if state.contact_ref == nil and is_pid(state.client) and Process.alive?(state.client) do
+      case Client.stream(state.client, ["messagesByType"], [%{"type" => "contact"}], self()) do
+        {:ok, ref} -> %{state | contact_ref: ref, contact_buf: []}
+        _ -> state
+      end
+    else
+      state
+    end
+  catch
+    _, _ -> state
   end
 
   defp open_feeds(state) do
@@ -1102,13 +1213,38 @@ defmodule HighWire.Timeline do
     end
   end
 
+  # acc survives finalize: the contact drain can land after the feed
+  # payload is already final, and the rebuild needs the window that
+  # built it. The next reload resets acc anyway.
   defp finalize(state) do
     {payload, missing, base, post_refs} = build_payload(state)
 
     Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
 
-    state = %{state | status: :ok, messages: payload, acc: [], pending: %{}, done_count: 0}
+    state = %{state | status: :ok, messages: payload, pending: %{}, done_count: 0}
     kick_profile_fetch(state, missing, base, post_refs)
+  end
+
+  # The contact drain finished: fold the follow events into the
+  # store-wide list. If the feed payload is already final, rebuild so
+  # the rows show now instead of on the next reload; when feeds are
+  # still streaming, their own finalize pass picks the messages up.
+  defp contact_drained(state) do
+    known = MapSet.new(state.contact_msgs, & &1["key"])
+    fresh = Enum.reject(state.contact_buf, &MapSet.member?(known, &1["key"]))
+
+    state = %{
+      state
+      | contact_ref: nil,
+        contact_buf: [],
+        contact_msgs: state.contact_msgs ++ fresh
+    }
+
+    if fresh != [] and state.status == :ok and map_size(state.pending) == 0 do
+      {:noreply, finalize(state)}
+    else
+      {:noreply, state}
+    end
   end
 
   # First-paint snapshot: same payload, nothing cleared — feeds are
@@ -1123,7 +1259,10 @@ defmodule HighWire.Timeline do
 
   defp build_payload(state) do
     now = System.system_time(:millisecond)
-    acc = state.acc
+    # The window (acc) plus the store-wide contact drain: follow events
+    # are rare and old, so they routinely sit outside the per-feed
+    # window and would otherwise age out of every payload.
+    acc = Enum.uniq_by(state.acc ++ state.contact_msgs, & &1["key"])
 
     reply_counts = reply_counts(acc)
     likes = likes_state(acc)
@@ -1268,7 +1407,7 @@ defmodule HighWire.Timeline do
     |> Enum.take(300)
     |> Enum.each(fn ref ->
       try do
-        _ = Client.call(client, ["blobs", "blobswant"], [ref], 1_500)
+        _ = Client.call(client, ["blobs", "want"], [ref], 1_500)
         :ok
       catch
         _, _ -> :ok
