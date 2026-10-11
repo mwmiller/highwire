@@ -667,13 +667,15 @@ defmodule HighWireWeb.TimelineLive do
       phx-hook="OpenPost"
       data-key={@row.msg["key"]}
     >
-      <Avatar.avatar
-        id={@author}
-        size={40}
-        image={image_of(@author, @ctx.profiles)}
-        rev={@ctx.rev}
-        class="mt-0.5"
-      />
+      <div class="w-10 shrink-0">
+        <Avatar.avatar
+          id={@author}
+          size={40}
+          image={image_of(@author, @ctx.profiles)}
+          rev={@ctx.rev}
+          class="mt-0.5"
+        />
+      </div>
       <div class="min-w-0 flex-1">
         <div class="flex items-baseline gap-2">
           <span class="text-sm font-semibold text-paper">
@@ -761,12 +763,14 @@ defmodule HighWireWeb.TimelineLive do
   defp vote_row(assigns) do
     ~H"""
     <div class="flex items-center gap-3 px-4 py-2.5 text-sm text-sub hover:bg-panel">
-      <Avatar.avatar
-        id={author_of(@row.msg)}
-        size={24}
-        image={image_of(author_of(@row.msg), @ctx.profiles)}
-        rev={@ctx.rev}
-      />
+      <div class="w-10 shrink-0">
+        <Avatar.avatar
+          id={author_of(@row.msg)}
+          size={24}
+          image={image_of(author_of(@row.msg), @ctx.profiles)}
+          rev={@ctx.rev}
+        />
+      </div>
       <p>
         <span class="text-ink">{display_name(author_of(@row.msg), @ctx)}</span>
         liked <span class="text-ink">{vote_target_label(@row.msg, @ctx)}</span>
@@ -799,12 +803,14 @@ defmodule HighWireWeb.TimelineLive do
 
     ~H"""
     <div class="flex items-center gap-3 px-4 py-2.5 text-sm text-sub hover:bg-panel">
-      <Avatar.avatar
-        id={@author}
-        size={24}
-        image={image_of(@author, @ctx.profiles)}
-        rev={@ctx.rev}
-      />
+      <div class="w-10 shrink-0">
+        <Avatar.avatar
+          id={@author}
+          size={24}
+          image={image_of(@author, @ctx.profiles)}
+          rev={@ctx.rev}
+        />
+      </div>
       <p class="min-w-0">
         <.link
           :if={href = profile_href(@author)}
@@ -863,12 +869,14 @@ defmodule HighWireWeb.TimelineLive do
   defp other_row(assigns) do
     ~H"""
     <div class="flex items-center gap-3 px-4 py-2.5 text-sm italic text-faint hover:bg-panel">
-      <Avatar.avatar
-        id={author_of(@row.msg)}
-        size={24}
-        image={image_of(author_of(@row.msg), @ctx.profiles)}
-        rev={@ctx.rev}
-      />
+      <div class="w-10 shrink-0">
+        <Avatar.avatar
+          id={author_of(@row.msg)}
+          size={24}
+          image={image_of(author_of(@row.msg), @ctx.profiles)}
+          rev={@ctx.rev}
+        />
+      </div>
       <p>
         <span class="not-italic text-ink">{display_name(author_of(@row.msg), @ctx)}</span>
         {other_label(@row.msg)}
