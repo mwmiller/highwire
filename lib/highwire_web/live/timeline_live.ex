@@ -68,7 +68,7 @@ defmodule HighWireWeb.TimelineLive do
       if connected?(socket) do
         Phoenix.PubSub.subscribe(HighWire.PubSub, Timeline.topic())
         Timeline.set_activity(self(), true)
-        Process.send_after(self(), :peers_tick, 5_000)
+        Process.send_after(self(), :peers_tick, 7_000)
       end
 
     {status, payload} = Timeline.snapshot()
@@ -266,11 +266,11 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   defp schedule_peers(socket) do
-    assign(socket, :peers_timer, Process.send_after(self(), :peers_tick, 5_000))
+    assign(socket, :peers_timer, Process.send_after(self(), :peers_tick, 7_000))
   end
 
   defp schedule_labels_tick(socket) do
-    if connected?(socket), do: Process.send_after(self(), :labels_tick, 30_000)
+    if connected?(socket), do: Process.send_after(self(), :labels_tick, 31_000)
     socket
   end
 

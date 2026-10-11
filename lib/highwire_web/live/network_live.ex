@@ -30,8 +30,8 @@ defmodule HighWireWeb.NetworkLive do
   import HighWireWeb.Components.Time, only: [rel_time: 1]
 
   # How long the profile switch polls the sidecar for the engine to
-  # come back (1s intervals), matching Settings' old behaviour.
-  @switch_polls 60
+  # come back (2s intervals), matching Settings' old 60-second window.
+  @switch_polls 30
 
   # The address book is read-only here; cap the rows so a large book
   # never buries the dial attempts below it.
@@ -81,7 +81,7 @@ defmodule HighWireWeb.NetworkLive do
         |> assign(:profiles, Map.get(payload, :profiles, %{}))
         |> assign(:report, Timeline.network())
 
-      {:noreply, assign(socket, :tick_timer, Process.send_after(self(), :tick, 5_000))}
+      {:noreply, assign(socket, :tick_timer, Process.send_after(self(), :tick, 7_000))}
     else
       {:noreply, socket}
     end
@@ -134,7 +134,7 @@ defmodule HighWireWeb.NetworkLive do
          )}
 
       true ->
-        Process.send_after(self(), :poll_net_status, 1_000)
+        Process.send_after(self(), :poll_net_status, 2_000)
         {:noreply, assign(socket, net_status: status, polls: socket.assigns.polls + 1)}
     end
   end

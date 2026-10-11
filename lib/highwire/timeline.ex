@@ -67,7 +67,9 @@ defmodule HighWire.Timeline do
   # Store-wide contact drain: a completed pass is not repeated on the
   # next reload — only after this long (the per-feed window already
   # carries recent follows; the drain back-fills old follow rows).
-  @drain_refresh_ms :timer.minutes(15)
+  # 13 — prime, so the drain refresh never lines up with the 11s
+  # network poll or the 7s UI ticks.
+  @drain_refresh_ms :timer.minutes(13)
 
   def topic, do: @topic
 
@@ -868,7 +870,7 @@ defmodule HighWire.Timeline do
     if Sidecar.status() == :ready do
       connect(state)
     else
-      Process.send_after(self(), :connect, 2_000)
+      Process.send_after(self(), :connect, 3_000)
       {:noreply, %{state | status: :connecting}}
     end
   end
@@ -1021,7 +1023,7 @@ defmodule HighWire.Timeline do
         state
       end
 
-    {:noreply, schedule_network(state, 10_000)}
+    {:noreply, schedule_network(state, 11_000)}
   end
 
   def handle_info({:network, _stale}, state), do: {:noreply, state}
@@ -1029,7 +1031,7 @@ defmodule HighWire.Timeline do
   def handle_info({:reload, gen}, %{gen: current} = state) when gen == current do
     state = %{state | reload_timer: nil}
     state = maybe_reload(state)
-    {:noreply, schedule_reload(state, 10_000)}
+    {:noreply, schedule_reload(state, 13_000)}
   end
 
   def handle_info({:reload, _stale}, state), do: {:noreply, state}

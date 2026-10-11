@@ -87,7 +87,7 @@ defmodule HighWireWeb.PostLive do
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   defp schedule_labels_tick(socket) do
-    if connected?(socket), do: Process.send_after(self(), :labels_tick, 30_000)
+    if connected?(socket), do: Process.send_after(self(), :labels_tick, 31_000)
     socket
   end
 

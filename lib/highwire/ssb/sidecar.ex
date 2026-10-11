@@ -555,7 +555,7 @@ defmodule HighWire.SSB.Sidecar do
 
   defp retry(state) do
     attempts = state.attempts + 1
-    delay = min(5_000 * attempts, 60_000)
+    delay = min(7_000 * attempts, 61_000)
     Process.send_after(self(), :spawn_node, delay)
     Logger.info("sidecar: retrying spawn/attach in #{div(delay, 1_000)}s (attempt #{attempts})")
     %{state | status: :starting, attempts: attempts}
