@@ -639,7 +639,7 @@ defmodule HighWireWeb.TimelineLive do
                     name="body"
                     phx-hook="Mentions"
                     phx-debounce="300"
-                    placeholder="Write a post… (@ or ~ mentions)"
+                    placeholder="Write a post…"
                     rows="3"
                     class="w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
                   >{@compose}</textarea>
