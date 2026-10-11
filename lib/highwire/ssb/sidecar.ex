@@ -643,12 +643,14 @@ defmodule HighWire.SSB.Sidecar do
     end
   end
 
-  defp sys_config(home, port) do
+  @doc false
+  def sys_config(home, port) do
     """
     [{kernel,
       [{logger,
         [{handler, default, logger_std_h,
           \#{level => info,
+            formatter => {logger_formatter, \#{depth => 64}},
             config => \#{type => {file, "#{home}/erlbutt.log"},
                         max_no_bytes => 52428800,
                         max_no_files => 3,
@@ -856,12 +858,14 @@ defmodule HighWire.SSB.Sidecar do
   # import), and the JS blob store rides in as an app env the eval
   # hands to the converter — a path never has to be quoted into the
   # eval itself.
-  defp import_sys_config(home) do
+  @doc false
+  def import_sys_config(home) do
     """
     [{kernel,
       [{logger,
         [{handler, default, logger_std_h,
           \#{level => info,
+            formatter => {logger_formatter, \#{depth => 64}},
             config => \#{type => {file, "#{home}/erlbutt-import.log"},
                         max_no_bytes => 52428800,
                         max_no_files => 3,
