@@ -27,7 +27,7 @@ defmodule HighWireWeb.NetworkLive do
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Nav
 
-  import HighWireWeb.Components.Time, only: [rel_time: 1]
+  import HighWireWeb.Components.Time, only: [age: 1]
 
   # How long the profile switch polls the sidecar for the engine to
   # come back (2s intervals), matching Settings' old 60-second window.
@@ -532,7 +532,7 @@ defmodule HighWireWeb.NetworkLive do
                     {if try_row["attempts"] == 0, do: "ok", else: "#{try_row["attempts"]} fails"}
                   </span>
                   <span class="w-24 shrink-0 text-right text-faint">
-                    {rel_time(try_row["lastTry"])}
+                    <.age ts={try_row["lastTry"]} />
                   </span>
                 </div>
               </div>

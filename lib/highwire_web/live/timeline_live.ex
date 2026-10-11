@@ -28,7 +28,7 @@ defmodule HighWireWeb.TimelineLive do
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Nav
 
-  import HighWireWeb.Components.Time, only: [rel_time: 1]
+  import HighWireWeb.Components.Time, only: [age: 1]
 
   # Patchwork's feed tabs: the first three sit left of the search box,
   # the last two right of it (as in Patchwork's top bar). Participating
@@ -86,7 +86,6 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(active: true, peers_timer: peers_timer)
       |> maybe_load_page()
       |> merge_paged()
-      |> schedule_labels_tick()
 
     {:ok, socket}
   end
@@ -107,21 +106,6 @@ defmodule HighWireWeb.TimelineLive do
     else
       {:noreply, socket}
     end
-  end
-
-  # Relative labels age only when something re-renders, so tick a no-op
-  # assign while the tab is visible — otherwise "3m ago" freezes at the
-  # time of the last render. Hidden tabs skip the assign; the tab-active
-  # flip re-renders them the moment the tab comes back.
-  def handle_info(:labels_tick, socket) do
-    socket =
-      if socket.assigns.active do
-        assign(socket, :labels_tick, System.system_time(:millisecond))
-      else
-        socket
-      end
-
-    {:noreply, schedule_labels_tick(socket)}
   end
 
   # Cursor pages load off the render path: maybe_load_page/1 plants a
@@ -315,11 +299,6 @@ defmodule HighWireWeb.TimelineLive do
 
   defp schedule_peers(socket) do
     assign(socket, :peers_timer, Process.send_after(self(), :peers_tick, 7_000))
-  end
-
-  defp schedule_labels_tick(socket) do
-    if connected?(socket), do: Process.send_after(self(), :labels_tick, 31_000)
-    socket
   end
 
   # The active tab's first page: fetched once the engine reports :ok,
@@ -795,9 +774,9 @@ defmodule HighWireWeb.TimelineLive do
             <span :if={@author_href == nil}>{display_name(@author, @ctx)}</span>
           </span>
           <span :if={@row.self?} class="text-[10px] uppercase text-faint">you</span>
-          <span class="text-xs text-faint">{rel_time(ts(@row.msg))}</span>
+          <span class="text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
           <span :if={@row.activity > ts(@row.msg)} class="text-xs text-faint">
-            · active {rel_time(@row.activity)}
+            · active <.age ts={@row.activity} />
           </span>
           <span
             :if={@private?}
@@ -807,7 +786,9 @@ defmodule HighWireWeb.TimelineLive do
           </span>
         </div>
 
-        <p :if={meta = meta_line(@row, @ctx)} class="mt-0.5 text-xs text-dim">{meta}</p>
+        <p :if={meta = meta_line(@row, @ctx)} class="mt-0.5 text-xs text-dim">
+          {meta.prefix}<.age ts={meta.ts} />
+        </p>
 
         <div :if={@body_html != ""} class="md-body mt-1 line-clamp-4 text-sm leading-5 text-ink">
           {raw(@body_html)}
@@ -851,7 +832,7 @@ defmodule HighWireWeb.TimelineLive do
             </span>
             <span class="truncate text-xs text-sub">{snippet(reply, @ctx)}</span>
             <span class="ml-auto shrink-0 text-[11px] text-faint">
-              {rel_time(ts(reply))}
+              <.age ts={ts(reply)} />
             </span>
           </div>
         </div>
@@ -885,7 +866,7 @@ defmodule HighWireWeb.TimelineLive do
         <span class="text-ink">{display_name(author_of(@row.msg), @ctx)}</span>
         liked <span class="text-ink">{vote_target_label(@row.msg, @ctx)}</span>
       </p>
-      <span class="ml-auto text-xs text-faint">{rel_time(ts(@row.msg))}</span>
+      <span class="ml-auto text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
     </div>
     """
   end
@@ -968,7 +949,7 @@ defmodule HighWireWeb.TimelineLive do
           </button>
         </span>
       </p>
-      <span class="ml-auto shrink-0 text-xs text-faint">{rel_time(ts(@row.msg))}</span>
+      <span class="ml-auto shrink-0 text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
     </div>
     """
   end
@@ -991,7 +972,7 @@ defmodule HighWireWeb.TimelineLive do
         <span class="not-italic text-ink">{display_name(author_of(@row.msg), @ctx)}</span>
         {other_label(@row.msg)}
       </p>
-      <span class="ml-auto not-italic text-xs text-faint">{rel_time(ts(@row.msg))}</span>
+      <span class="ml-auto not-italic text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
     </div>
     """
   end
@@ -1178,7 +1159,7 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   defp meta_line(%{kind: :thread, rooted?: false, activity: activity}, _ctx) do
-    "in a thread · last activity #{rel_time(activity)}"
+    %{prefix: "in a thread · last activity ", ts: activity}
   end
 
   defp meta_line(%{kind: :thread, replies: replies, recent: recent, activity: activity}, ctx)
@@ -1190,7 +1171,7 @@ defmodule HighWireWeb.TimelineLive do
       |> Enum.take(2)
       |> Enum.map_join(", ", &display_name(&1, ctx))
 
-    "#{names} replied · #{rel_time(activity)}"
+    %{prefix: "#{names} replied · ", ts: activity}
   end
 
   defp meta_line(_row, _ctx), do: nil

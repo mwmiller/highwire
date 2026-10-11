@@ -19,7 +19,7 @@ defmodule HighWireWeb.PostLive do
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Nav
 
-  import HighWireWeb.Components.Time, only: [rel_time: 1]
+  import HighWireWeb.Components.Time, only: [age: 1]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -42,8 +42,7 @@ defmodule HighWireWeb.PostLive do
        reply_body: "",
        reply_error: nil,
        blob_rev: 0
-     )
-     |> schedule_labels_tick()}
+     )}
   end
 
   @impl true
@@ -75,21 +74,7 @@ defmodule HighWireWeb.PostLive do
     {:noreply, if(socket.assigns.raw_key, do: load(socket, socket.assigns.raw_key), else: socket)}
   end
 
-  # Relative timestamps on this thread must keep aging while it sits
-  # open; touching an assign re-renders the rel_time labels.
-  def handle_info(:labels_tick, socket) do
-    {:noreply,
-     socket
-     |> assign(:labels_tick, System.system_time(:millisecond))
-     |> schedule_labels_tick()}
-  end
-
   def handle_info(_msg, socket), do: {:noreply, socket}
-
-  defp schedule_labels_tick(socket) do
-    if connected?(socket), do: Process.send_after(self(), :labels_tick, 31_000)
-    socket
-  end
 
   defp load(socket, raw_key) do
     {status, payload} = Timeline.snapshot()
@@ -304,7 +289,7 @@ defmodule HighWireWeb.PostLive do
                     <span :if={author_of(@root) == @self_id} class="text-[10px] uppercase text-faint">
                       you
                     </span>
-                    <span class="text-xs text-faint">{rel_time(ts(@root))}</span>
+                    <span class="text-xs text-faint"><.age ts={ts(@root)} /></span>
                     <span
                       :if={@root["value"]["private"]}
                       class="rounded border border-edge px-1 text-[10px] uppercase text-faint"
@@ -395,7 +380,7 @@ defmodule HighWireWeb.PostLive do
                   <span :if={author_of(reply) == @self_id} class="text-[10px] uppercase text-faint">
                     you
                   </span>
-                  <span class="text-xs text-faint">{rel_time(ts(reply))}</span>
+                  <span class="text-xs text-faint"><.age ts={ts(reply)} /></span>
                   <span
                     :if={reply["value"]["private"]}
                     class="rounded border border-edge px-1 text-[10px] uppercase text-faint"

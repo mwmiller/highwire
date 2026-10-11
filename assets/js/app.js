@@ -374,6 +374,41 @@ let Mentions = {
   }
 }
 
+// Relative-time labels: the server renders the initial text plus the
+// data-ts it came from; this rewrites the text from that stamp so the
+// labels stay accurate with zero server re-renders. Mirrors
+// HighWireWeb.Components.Time.rel_time/1, including the "%b %d, %Y"
+// UTC date the server prints once a label passes a week.
+const relAge = ts => {
+  const diff = Date.now() - ts
+  if (diff < 60_000) return "just now"
+  if (diff < 3_600_000) return Math.floor(diff / 60_000) + "m ago"
+  if (diff < 86_400_000) return Math.floor(diff / 3_600_000) + "h ago"
+  if (diff < 604_800_000) return Math.floor(diff / 86_400_000) + "d ago"
+  return new Date(ts).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "2-digit",
+    year: "numeric"
+  })
+}
+
+const ageLabels = () => {
+  document.querySelectorAll("time[data-ts]").forEach(el => {
+    const ts = Number(el.dataset.ts)
+    if (!ts) return
+    const text = relAge(ts)
+    if (el.textContent !== text) el.textContent = text
+  })
+}
+
+ageLabels()
+setInterval(ageLabels, 15_000)
+// Background tabs throttle timers, so refresh the moment one returns.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) ageLabels()
+})
+
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
   hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions}

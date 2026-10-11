@@ -17,7 +17,7 @@ defmodule HighWireWeb.ProfileLive do
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Nav
 
-  import HighWireWeb.Components.Time, only: [rel_time: 1]
+  import HighWireWeb.Components.Time, only: [age: 1]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -34,8 +34,7 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:resume, nil)
      |> assign(:follows, [])
      |> assign(:self_id, nil)
-     |> assign(:more, false)
-     |> schedule_labels_tick()}
+     |> assign(:more, false)}
   end
 
   @impl true
@@ -62,21 +61,7 @@ defmodule HighWireWeb.ProfileLive do
      )}
   end
 
-  # Relative timestamps on the profile must keep aging while it sits
-  # open; touching an assign re-renders the rel_time labels.
-  def handle_info(:labels_tick, socket) do
-    {:noreply,
-     socket
-     |> assign(:labels_tick, System.system_time(:millisecond))
-     |> schedule_labels_tick()}
-  end
-
   def handle_info(_msg, socket), do: {:noreply, socket}
-
-  defp schedule_labels_tick(socket) do
-    if connected?(socket), do: Process.send_after(self(), :labels_tick, 31_000)
-    socket
-  end
 
   @impl true
   def handle_event("load-more", _params, socket) do
@@ -246,7 +231,7 @@ defmodule HighWireWeb.ProfileLive do
             <div class="md-body text-ink">
               {raw(Markdown.to_html(text(msg), blob_rev: @blob_rev))}
             </div>
-            <div class="mt-1 text-xs text-faint">{rel_time(ts(msg))}</div>
+            <div class="mt-1 text-xs text-faint"><.age ts={ts(msg)} /></div>
           </div>
 
           <div :if={@more} id="profile-sentinel" phx-hook="InfiniteScroll" class="h-px"></div>

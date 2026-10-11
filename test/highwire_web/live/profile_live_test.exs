@@ -48,17 +48,6 @@ defmodule HighWireWeb.ProfileLiveTest do
     assert html =~ "Open a profile from the timeline"
   end
 
-  test "the label tick re-renders so relative times keep aging", %{conn: conn} do
-    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
-
-    send(view.pid, :labels_tick)
-    assert render(view) =~ "Posts"
-
-    state = :sys.get_state(view.pid)
-    assert is_integer(state.socket.assigns.labels_tick)
-  end
-
   test "profile posts open their thread like timeline posts", %{conn: conn} do
     id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
     {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
@@ -90,13 +79,17 @@ defmodule HighWireWeb.ProfileLiveTest do
       %{state | socket: %{socket | assigns: assigns}}
     end)
 
-    send(view.pid, :labels_tick)
+    # Any message wakes the view so it computes that diff — the label
+    # tick this replaced is gone; ages now refresh client-side from
+    # the data-ts the row ships with.
+    send(view.pid, :nudge)
 
     html = render(view)
     assert html =~ "phx-hook=\"OpenPost\""
     assert html =~ "data-key=\"fake-post-key\""
     assert html =~ "cursor-pointer"
     assert html =~ "seedit"
+    assert html =~ ~s(data-ts="1700000000000")
 
     render_hook(view, "open-post", %{"key" => key})
     assert_redirect(view, "/post/" <> Base.url_encode64(key, padding: false))
