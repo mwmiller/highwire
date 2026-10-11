@@ -63,6 +63,42 @@ defmodule HighWireWeb.Components.Nav do
     """
   end
 
+  @doc """
+  A rail section heading — the label above a list or card.
+  """
+  slot :inner_block, required: true
+
+  def rail_label(assigns) do
+    ~H"""
+    <div class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint">
+      {render_slot(@inner_block)}
+    </div>
+    """
+  end
+
+  @doc """
+  One row in a rail list: a page (`navigate`) or an in-page anchor
+  (`href`). The rail must never sit empty under its header — each page
+  fills it with something of its own.
+  """
+  attr :navigate, :string, default: nil, doc: "live route to navigate to"
+  attr :href, :string, default: nil, doc: "plain href (in-page anchor)"
+  attr :title, :string, default: nil
+  slot :inner_block, required: true
+
+  def rail_link(assigns) do
+    ~H"""
+    <.link
+      navigate={@navigate}
+      href={@href}
+      title={@title}
+      class="flex items-center gap-2 px-4 py-1 text-xs text-muted transition hover:bg-raised hover:text-paper"
+    >
+      {render_slot(@inner_block)}
+    </.link>
+    """
+  end
+
   defp gear(assigns) do
     ~H"""
     <svg class="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">

@@ -22,5 +22,14 @@ defmodule HighWireWeb.SettingsLiveTest do
       refute html =~ "Network set to:"
       refute html =~ "HighWire starts on Mainnet."
     end
+
+    test "the rail jump-links every section", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/settings")
+
+      assert html =~ ~s(href="#appearance")
+      assert html =~ ~s(href="#notifications")
+      assert html =~ ~s(href="#writing")
+      assert html =~ ~s(href="#information")
+    end
   end
 end

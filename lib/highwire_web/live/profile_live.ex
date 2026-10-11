@@ -158,7 +158,36 @@ defmodule HighWireWeb.ProfileLive do
   def render(assigns) do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail />
+      <Nav.rail>
+        <Nav.rail_label>Profile</Nav.rail_label>
+
+        <div :if={@id} class="px-4 pb-4">
+          <Avatar.avatar
+            id={@id}
+            size={40}
+            image={@profile && @profile.image}
+            rev={@blob_rev}
+          />
+          <p class="mt-2 text-sm font-medium text-paper">
+            {heading(@profile) || Ident.short_id(@id)}
+          </p>
+          <p class="mt-0.5 break-all font-mono text-[10px] text-dim">{@id}</p>
+
+          <button
+            :if={@id != @self_id and @status != :disabled}
+            type="button"
+            phx-click="toggle-follow"
+            phx-value-id={@id}
+            class={["btn mt-3 w-full", @id in @follows and "btn-primary"]}
+          >
+            {if @id in @follows, do: "Following", else: "Follow"}
+          </button>
+        </div>
+
+        <p :if={@id == nil} class="px-4 pb-4 text-xs italic text-faint">
+          Open a profile from the timeline to see it here.
+        </p>
+      </Nav.rail>
 
       <section class="flex-1 overflow-y-auto">
         <div :if={@id} class="mx-auto max-w-2xl px-6 py-10">
@@ -178,16 +207,6 @@ defmodule HighWireWeb.ProfileLive do
               </h1>
 
               <p class="mt-1 break-all font-mono text-xs text-dim">{@id}</p>
-
-              <button
-                :if={@id != @self_id and @status != :disabled}
-                type="button"
-                phx-click="toggle-follow"
-                phx-value-id={@id}
-                class={["btn mt-3", @id in @follows and "btn-primary"]}
-              >
-                {if @id in @follows, do: "Following", else: "Follow"}
-              </button>
 
               <div
                 :if={@profile && @profile.description}

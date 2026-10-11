@@ -8,6 +8,10 @@ defmodule HighWireWeb.PostLiveTest do
     {:ok, _view, html} = live(conn, "/post/" <> key)
 
     assert html =~ "not in the local store"
+    # the rail still carries its section, with an explanation instead
+    # of an empty column
+    assert html =~ "In this thread"
+    assert html =~ "Nothing loaded"
   end
 
   test "the label tick re-renders so relative times keep aging", %{conn: conn} do

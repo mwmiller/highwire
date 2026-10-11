@@ -57,14 +57,23 @@ defmodule HighWireWeb.SettingsLive do
   def render(assigns) do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail />
+      <Nav.rail>
+        <Nav.rail_label>On this page</Nav.rail_label>
+        <Nav.rail_link href="#appearance">Appearance</Nav.rail_link>
+        <Nav.rail_link href="#notifications">Notification options</Nav.rail_link>
+        <Nav.rail_link href="#writing">Writing</Nav.rail_link>
+        <Nav.rail_link href="#information">Information</Nav.rail_link>
+      </Nav.rail>
 
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-10">
           <h1 class="text-xl font-bold text-paper">Settings</h1>
 
           <div phx-hook="Prefs" id="prefs">
-            <h2 class="mt-6 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub">
+            <h2
+              id="appearance"
+              class="mt-6 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub"
+            >
               Appearance
             </h2>
 
@@ -120,7 +129,10 @@ defmodule HighWireWeb.SettingsLive do
               </button>
             </div>
 
-            <h2 class="mt-8 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub">
+            <h2
+              id="notifications"
+              class="mt-8 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub"
+            >
               Notification options
             </h2>
 
@@ -134,7 +146,10 @@ defmodule HighWireWeb.SettingsLive do
               /> Include "Participating" tab in the navigation bar
             </label>
 
-            <h2 class="mt-8 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub">
+            <h2
+              id="writing"
+              class="mt-8 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub"
+            >
               Writing
             </h2>
 
@@ -148,7 +163,10 @@ defmodule HighWireWeb.SettingsLive do
               /> Enable spellchecking in text fields
             </label>
 
-            <h2 class="mt-8 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub">
+            <h2
+              id="information"
+              class="mt-8 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub"
+            >
               Information
             </h2>
 

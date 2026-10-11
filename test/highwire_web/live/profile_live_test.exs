@@ -37,6 +37,15 @@ defmodule HighWireWeb.ProfileLiveTest do
     assert html =~ "No posts yet."
     # engine off: no follow control is offered
     refute html =~ "toggle-follow"
+
+    # the rail identity card carries the id a second time (header + rail)
+    assert length(Regex.scan(~r/vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=/, html)) >= 2
+  end
+
+  test "the rail never sits empty without an id", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/profile")
+
+    assert html =~ "Open a profile from the timeline"
   end
 
   test "the label tick re-renders so relative times keep aging", %{conn: conn} do

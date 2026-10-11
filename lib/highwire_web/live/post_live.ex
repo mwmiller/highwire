@@ -222,16 +222,55 @@ defmodule HighWireWeb.PostLive do
     root_likers =
       if assigns.root, do: Map.get(assigns.likes_by, assigns.root["key"], []), else: []
 
+    participants =
+      case assigns.root do
+        nil -> []
+        root -> Enum.uniq([author_of(root) | Enum.map(assigns.replies, &author_of/1)])
+      end
+
     assigns =
       assign(assigns,
         likes: likes,
         root_liked: root_liked,
-        root_likers: Enum.take(root_likers, 4)
+        root_likers: Enum.take(root_likers, 4),
+        participants: participants
       )
 
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail />
+      <Nav.rail>
+        <Nav.rail_label>In this thread</Nav.rail_label>
+
+        <div :if={@root}>
+          <Nav.rail_link
+            :for={who <- @participants}
+            navigate={profile_href(who)}
+            title={who}
+          >
+            <Avatar.avatar
+              id={who}
+              size={16}
+              image={image_of(who, @profiles)}
+              rev={@blob_rev}
+            />
+            <span class="truncate">{display_name(who, @profiles)}</span>
+            <span
+              :if={who == @self_id}
+              class="ml-auto shrink-0 text-[10px] uppercase text-faint"
+            >
+              you
+            </span>
+          </Nav.rail_link>
+
+          <p :if={@replies != []} class="px-4 pt-3 text-xs text-faint">
+            {length(@replies)} {if length(@replies) == 1, do: "reply", else: "replies"}
+          </p>
+        </div>
+
+        <p :if={@root == nil} class="px-4 pb-4 text-xs italic text-faint">
+          Nothing loaded — the message may not be in the local store yet.
+        </p>
+      </Nav.rail>
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-6">
           <div :if={@not_found} class="text-sm text-dim">
