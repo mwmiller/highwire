@@ -17,12 +17,19 @@ defmodule HighWireWeb.Router do
   scope "/", HighWireWeb do
     pipe_through :browser
 
-    live("/", TimelineLive)
-    live("/about", Live)
-    live("/profile", ProfileLive)
-    live("/network", NetworkLive)
-    live("/settings", SettingsLive)
-    live("/post/:key", PostLive)
+    # The gate: with a first-run import waiting, every app route halts
+    # into /import at mount. /import itself lives outside the session —
+    # a hook must not redirect its own page.
+    live_session :app, on_mount: [{HighWireWeb.Hooks, :import_gate}] do
+      live("/", TimelineLive)
+      live("/about", Live)
+      live("/profile", ProfileLive)
+      live("/network", NetworkLive)
+      live("/settings", SettingsLive)
+      live("/post/:key", PostLive)
+    end
+
+    live("/import", ImportLive)
   end
 
   # Blobs are static bytes: no session, CSRF or format negotiation.

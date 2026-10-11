@@ -5,6 +5,10 @@ config :highwire,
   application_dir: Path.expand("~/.highwire-test"),
   blob_store: Path.expand("~/.highwire-test/.ssberl/blobs")
 
+# …and never the real ~/.ssb either: detection would otherwise offer a
+# first-run import (and read a real store) on any machine that has one.
+config :highwire, :ssb, js_home: Path.expand("~/.highwire-test/no-js-store")
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :highwire, HighWireWeb.Endpoint,
