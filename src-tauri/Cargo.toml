@@ -14,7 +14,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", default-features = false, features = [
+  "wry",
+  "common-controls-v6",
+  "dynamic-acl",
+  "x11",
+  "dbus",
+] }
 tauri-plugin-window-state = "2"
 serde_json = "1"
 
