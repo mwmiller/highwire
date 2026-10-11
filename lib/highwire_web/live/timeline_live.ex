@@ -26,6 +26,7 @@ defmodule HighWireWeb.TimelineLive do
   alias HighWire.Markdown
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
+  alias HighWireWeb.Components.Mentions
   alias HighWireWeb.Components.Nav
 
   import HighWireWeb.Components.Time, only: [age: 1]
@@ -270,31 +271,8 @@ defmodule HighWireWeb.TimelineLive do
   defp mention_candidates(socket, q) do
     profiles = Map.get(socket.assigns, :profiles, %{})
     follows = Map.get(socket.assigns, :sidebar_contacts, [])
-    query = String.downcase(q)
 
-    follows
-    |> Kernel.++(Map.keys(profiles))
-    |> Enum.filter(&(is_binary(&1) and String.starts_with?(&1, "@")))
-    |> Enum.uniq()
-    |> Enum.map(&{&1, display_name(&1, profiles)})
-    |> Enum.map(fn {id, name} -> {id, name, mention_score(name, id, query)} end)
-    |> Enum.reject(fn {_id, _name, score} -> score == :miss end)
-    |> Enum.sort_by(fn {id, name, score} -> {score, String.downcase(name), id} end)
-    |> Enum.take(8)
-    |> Enum.map(fn {id, name, _score} -> {id, name} end)
-  end
-
-  defp mention_score(_name, _id, ""), do: 0
-
-  defp mention_score(name, id, query) do
-    down_name = String.downcase(name)
-
-    cond do
-      String.starts_with?(down_name, query) -> 1
-      String.contains?(down_name, query) -> 2
-      String.contains?(String.downcase(id), query) -> 3
-      true -> :miss
-    end
+    Mentions.candidates(q, follows ++ Map.keys(profiles), &display_name(&1, profiles))
   end
 
   defp schedule_peers(socket) do

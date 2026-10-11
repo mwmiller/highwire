@@ -17,6 +17,7 @@ defmodule HighWireWeb.PostLive do
   alias HighWire.Markdown
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
+  alias HighWireWeb.Components.Mentions
   alias HighWireWeb.Components.Nav
 
   import HighWireWeb.Components.Time, only: [age: 1]
@@ -41,6 +42,7 @@ defmodule HighWireWeb.PostLive do
        raw_key: nil,
        reply_body: "",
        reply_error: nil,
+       mention_suggestions: [],
        blob_rev: 0
      )}
   end
@@ -147,6 +149,19 @@ defmodule HighWireWeb.PostLive do
     end
 
     {:noreply, socket}
+  end
+
+  def handle_event("mention-query", %{"q" => q}, socket) when is_binary(q) do
+    {:noreply, assign(socket, :mention_suggestions, mention_candidates(socket, q))}
+  end
+
+  def handle_event("mention-close", _params, socket) do
+    {:noreply, assign(socket, :mention_suggestions, [])}
+  end
+
+  defp mention_candidates(socket, q) do
+    profiles = Map.get(socket.assigns, :profiles, %{})
+    Mentions.candidates(q, Map.keys(profiles), &display_name(&1, profiles))
   end
 
   defp reply_error(:offline), do: "Not connected to the local SSB engine yet."
@@ -428,15 +443,45 @@ defmodule HighWireWeb.PostLive do
 
             <form phx-submit="reply" class="mt-6 border-t border-edge pt-4">
               <label for="reply-body" class="sr-only">Reply</label>
-              <textarea
-                id="reply-body"
-                name="body"
-                phx-change="reply-draft"
-                phx-debounce="300"
-                placeholder="Write a reply…"
-                rows="3"
-                class="w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
-              >{@reply_body}</textarea>
+              <div class="relative">
+                <textarea
+                  id="reply-body"
+                  name="body"
+                  phx-hook="Mentions"
+                  data-draft-event="reply-draft"
+                  phx-change="reply-draft"
+                  phx-debounce="300"
+                  placeholder="Write a reply…"
+                  rows="3"
+                  class="w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
+                >{@reply_body}</textarea>
+                <div
+                  :if={@mention_suggestions != []}
+                  id="mention-list"
+                  class="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded border border-edge bg-panel shadow-lg"
+                >
+                  <button
+                    :for={{id, name} <- @mention_suggestions}
+                    type="button"
+                    data-mention-option
+                    data-id={id}
+                    data-name={name}
+                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-panel2"
+                  >
+                    <Avatar.avatar
+                      id={id}
+                      size={16}
+                      image={image_of(id, @profiles)}
+                      rev={@blob_rev}
+                      class="shrink-0"
+                    />
+                    <span class="truncate text-paper">{name}</span>
+                    <span class="ml-auto shrink-0 font-mono text-[10px] text-faint">
+                      {Ident.short_id(id)}
+                    </span>
+                  </button>
+                </div>
+              </div>
               <p :if={@reply_error} role="alert" class="mt-1 text-xs text-bad">
                 {@reply_error}
               </p>

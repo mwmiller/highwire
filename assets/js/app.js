@@ -362,8 +362,11 @@ let Mentions = {
     this.el.setSelectionRange(caret, caret)
     this.close()
 
+    // The host input picks its own event: the timeline composer drafts
+    // via "compose-draft", the thread reply box via "reply-draft".
     try {
-      this.pushEvent("compose-draft", {body: value}, () => {})
+      const draftEvent = this.el.dataset.draftEvent || "compose-draft"
+      this.pushEvent(draftEvent, {body: value}, () => {})
     } catch (_) {}
   },
 
