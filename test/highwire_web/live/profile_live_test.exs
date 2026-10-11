@@ -58,4 +58,47 @@ defmodule HighWireWeb.ProfileLiveTest do
     state = :sys.get_state(view.pid)
     assert is_integer(state.socket.assigns.labels_tick)
   end
+
+  test "profile posts open their thread like timeline posts", %{conn: conn} do
+    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+
+    key = "fake-post-key"
+
+    row = %{
+      "key" => key,
+      "value" => %{
+        "content" => %{"type" => "post", "text" => "seedit"},
+        "timestamp" => 1_700_000_000_000
+      }
+    }
+
+    # Engine is off under test, so the profile mounts with no posts.
+    # Seed one row straight into the assigns and record the old value in
+    # __changed__ (LiveView's dirty map) so the next render computes a
+    # diff for :messages instead of serving the cached tree.
+    :sys.replace_state(view.pid, fn state ->
+      socket = state.socket
+      assigns = socket.assigns
+      changed = Map.put(assigns.__changed__, :messages, assigns.messages)
+
+      assigns =
+        assigns
+        |> Map.put(:messages, [row])
+        |> Map.put(:__changed__, changed)
+
+      %{state | socket: %{socket | assigns: assigns}}
+    end)
+
+    send(view.pid, :labels_tick)
+
+    html = render(view)
+    assert html =~ "phx-hook=\"OpenPost\""
+    assert html =~ "data-key=\"fake-post-key\""
+    assert html =~ "cursor-pointer"
+    assert html =~ "seedit"
+
+    render_hook(view, "open-post", %{"key" => key})
+    assert_redirect(view, "/post/" <> Base.url_encode64(key, padding: false))
+  end
 end

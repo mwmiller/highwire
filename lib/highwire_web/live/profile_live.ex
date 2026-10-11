@@ -110,6 +110,12 @@ defmodule HighWireWeb.ProfileLive do
     {:noreply, socket}
   end
 
+  # Clicking a post opens its thread — the same journey as the timeline
+  # row: PostLive carries the reply composer and the like toggle.
+  def handle_event("open-post", %{"key" => key}, socket) when is_binary(key) do
+    {:noreply, push_navigate(socket, to: "/post/" <> Base.url_encode64(key, padding: false))}
+  end
+
   defp load(socket, id) do
     {status, payload} = Timeline.snapshot()
     %{rows: rows, resume: resume, more: more} = Timeline.profile_feed(id)
@@ -231,8 +237,11 @@ defmodule HighWireWeb.ProfileLive do
           </div>
 
           <div
-            :for={msg <- @messages}
-            class="border-b border-edge-soft py-3 text-sm hover:bg-panel"
+            :for={{msg, idx} <- Enum.with_index(@messages)}
+            id={"profile-post-" <> Integer.to_string(idx)}
+            phx-hook="OpenPost"
+            data-key={msg["key"]}
+            class="cursor-pointer border-b border-edge-soft py-3 text-sm hover:bg-panel"
           >
             <div class="md-body text-ink">
               {raw(Markdown.to_html(text(msg), blob_rev: @blob_rev))}
