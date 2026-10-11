@@ -16,8 +16,11 @@ config :highwire, HighWireWeb.Endpoint,
   secret_key_base: "SPxKtYJrt9CsLLapQ3vv2Lzr5P2AvjZnbbdCMMWfxW6Y5g1OBpeLJs29iveA6CrC",
   server: false
 
-# Print only warnings and errors during test
-config :logger, level: :warning
+# Quiet test output: the suite deliberately exercises resilience paths
+# that log at warning level (unreadable overrides.cfg, a missing
+# first-run secret), and echoing those expected-path warnings on every
+# run buries the results. Errors still print.
+config :logger, level: :error
 
 config :highwire, :ssb, enabled: false
 
