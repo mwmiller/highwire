@@ -5,11 +5,13 @@ defmodule HighWireWeb.Components.Avatar do
   1px frame — the same geometry and colors Poncho Wonky renders
   (`HighWire.Avatar` is a pixel-exact port of color-hash v1.0.3).
 
-  Resolution order: the feed's blob (`/blob/<hex>`, which generates an
-  Excon placeholder when the bytes are not local yet) → the Excon
-  `:framed` identicon keyed by the feed id (`/identicon/<hex>`), for
-  feeds that have no avatar image at all. The color tile underneath is
-  what shows while the image loads — and what remains if it fails.
+  Resolution order: the feed's blob (`/blob/<hex>`, which serves a
+  neutral missing-blob placeholder while the bytes are not local yet —
+  deliberately not an identicon) → for feeds with no avatar image at
+  all, the Excon `:framed` identicon keyed by the feed id
+  (`/identicon/<hex>`), which is stable for as long as the identity
+  is. The color tile underneath is what shows while the image loads —
+  and what remains if it fails.
   """
 
   use Phoenix.Component

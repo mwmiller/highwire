@@ -1551,8 +1551,8 @@ defmodule HighWire.Timeline do
 
   # Avatars and post images whose blob we have never seen: register
   # wants so the sidecar pulls them from the gossip graph; /blob/ serves
-  # a generated Excon placeholder until the bytes land (the blobs.ls
-  # tail then bumps blob_rev and the UI refetches).
+  # a neutral missing-blob placeholder until the bytes land (the
+  # blobs.ls tail then bumps blob_rev and the UI refetches).
   defp want_missing_blobs(client, refs) do
     refs
     |> Enum.filter(&(is_binary(&1) and not Blob.local?(&1)))

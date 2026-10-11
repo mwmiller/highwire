@@ -10,11 +10,12 @@ defmodule HighWireWeb.BlobController do
     2. `<home>/.ssberl/blobs/<HH>/<rest>` — the engine's own blob
        store: everything HighWire serves was imported or replicated
        into it, and the old JS-client store (`~/.ssb`) is never opened
-    3. a generated Excon `:framed` identicon (keyed by the hex, cached
-       under `images/gen/`) — a placeholder in the same framed format as
-       feed avatars while the real bytes are being wanted over the wire.
-       The short cache window lets the real blob take over as soon as it
-       lands.
+    3. a neutral "missing blob" placeholder (dashed frame over a
+       mountain glyph, no per-key derivation) — the bytes have never
+       been seen. It deliberately does NOT look like an identicon:
+       identicons only mean something keyed by a feed id (a long-lived
+       identity), never by a blob. The short cache window lets the
+       real blob take over as soon as it lands.
 
   Also serves `GET /identicon/<feed-id-hex>`: the Excon `:framed`
   identicon for feeds without an avatar image (deterministic per id, so
@@ -105,16 +106,40 @@ defmodule HighWireWeb.BlobController do
           File.stat!(store).size > 0 ->
         {:file, store}
 
-      File.regular?(gen) ->
-        {:file, gen}
-
       true ->
-        data = Excon.ident(cool_id(hex), type: :framed)
-        _ = File.mkdir_p(Path.dirname(gen))
-        _ = File.write(gen, data)
-        {:generated, data}
+        # Earlier builds cached Excon identicons under gen/ keyed by
+        # the blob hex — a pseudo-identicon that means nothing. Remove
+        # on sight; the neutral placeholder answers until the real
+        # bytes land in the store above.
+        _ = File.rm(gen)
+        {:generated, missing_blob_svg()}
     end
   end
+
+  # Static, theme-aware via prefers-color-scheme (the SVG renders in an
+  # <img>, which honors media queries but not page CSS). No key in it:
+  # every missing blob looks the same, and only feed-id identicons get
+  # to be interesting.
+  @missing_blob_svg """
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+    <style>
+      .bg { fill: #22252b; }
+      .fg { fill: #8f93a0; }
+      .dash { fill: none; stroke: #8f93a0; stroke-width: 2; stroke-dasharray: 7 5; opacity: 0.7; }
+      @media (prefers-color-scheme: light) {
+        .bg { fill: #e8eaef; }
+        .fg { fill: #65656e; }
+        .dash { stroke: #65656e; }
+      }
+    </style>
+    <rect class="bg" width="64" height="64"/>
+    <rect class="dash" x="5" y="5" width="54" height="54"/>
+    <path class="fg" d="M12 47 L26 31 L34 39 L42 29 L52 47 Z"/>
+    <circle class="fg" cx="45" cy="20" r="5"/>
+  </svg>
+  """
+
+  defp missing_blob_svg, do: @missing_blob_svg
 
   # Deterministic per feed id; cached under images/ident/ so the Blake2
   # hash and SVG assembly happen once per id ever.

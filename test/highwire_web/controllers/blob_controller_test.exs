@@ -1,11 +1,11 @@
 defmodule HighWireWeb.BlobControllerTest do
   @moduledoc """
   The avatar/image serving layer: `/blob/<hex>` resolves through
-  HighWire's cache, then the engine's own blob store, then a
-  generated framed placeholder — and `/identicon/<hex>` serves the
-  deterministic Excon identicon for feeds without an avatar image.
-  Everything lives under the test home (`~/.highwire-test`), so these
-  tests never touch the real stores.
+  HighWire's cache, then the engine's own blob store, then a neutral
+  missing-blob placeholder — never an identicon — while
+  `/identicon/<hex>` serves the deterministic Excon identicon for
+  feeds without an avatar image. Everything lives under the test home
+  (`~/.highwire-test`), so these tests never touch the real stores.
   """
   use HighWireWeb.ConnCase, async: true
 
@@ -78,7 +78,7 @@ defmodule HighWireWeb.BlobControllerTest do
     refute File.exists?(cache)
   end
 
-  test "a missing blob generates a framed placeholder and caches it under gen", %{
+  test "a missing blob serves the neutral placeholder, never an identicon", %{
     conn: conn,
     hex: hex,
     cache: cache,
@@ -88,13 +88,30 @@ defmodule HighWireWeb.BlobControllerTest do
 
     assert media_type(conn) == "image/svg+xml"
     body = response(conn, 200)
-    assert body =~ "<svg"
+    # the missing-blob glyph carries a dashed frame and follows the
+    # color scheme; Excon identicons carry neither
+    assert body =~ "prefers-color-scheme"
+    assert body =~ "stroke-dasharray"
     refute File.exists?(cache)
-    assert File.regular?(gen)
+    refute File.exists?(gen)
 
-    # the cached placeholder answers the next request identically
+    # static bytes: the next request answers identically
     conn = get(build_conn(), "/blob/#{hex}")
     assert response(conn, 200) == body
+  end
+
+  test "a stale Excon placeholder under gen/ is removed on sight", %{
+    conn: conn,
+    hex: hex,
+    gen: gen
+  } do
+    File.mkdir_p!(Path.dirname(gen))
+    File.write!(gen, "<svg>old-identicon-keyed-by-blob</svg>")
+
+    conn = get(conn, "/blob/#{hex}")
+
+    assert response(conn, 200) =~ "prefers-color-scheme"
+    refute File.exists?(gen)
   end
 
   test "content type follows the file's magic bytes", %{conn: conn} do
