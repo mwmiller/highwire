@@ -823,14 +823,24 @@ defmodule HighWire.Timeline do
   defp resolve_root(state, window, key) do
     case fetch_msg(state, window, key) do
       nil -> nil
-      msg -> resolve_thread_root(state, window, key, msg)
+      msg -> resolve_thread_root(state, window, key, msg, MapSet.new([key]))
     end
   end
 
-  defp resolve_thread_root(state, window, key, msg) do
-    case content(msg)["root"] do
-      r when is_binary(r) and r != key -> fetch_msg(state, window, r) || msg
-      _ -> msg
+  # Walk up to the thread's first message: a plain reply's root IS that
+  # message, but a fork's root is the parent reply, so one hop lands on
+  # the middle of the thread. The seen set keeps a malformed cycle from
+  # walking forever.
+  defp resolve_thread_root(state, window, key, msg, seen) do
+    root = content(msg)["root"]
+
+    if is_binary(root) and root != key and not MapSet.member?(seen, root) do
+      case fetch_msg(state, window, root) do
+        nil -> msg
+        parent -> resolve_thread_root(state, window, root, parent, MapSet.put(seen, root))
+      end
+    else
+      msg
     end
   end
 
@@ -839,9 +849,78 @@ defmodule HighWire.Timeline do
   end
 
   defp post_replies(state, window, root_key) do
-    case fetch_thread(state.client, root_key) do
-      list when is_list(list) and list != [] -> list
-      _ -> window_replies(window, root_key)
+    replies =
+      case fetch_thread(state.client, root_key) do
+        list when is_list(list) and list != [] -> list
+        _ -> window_replies(window, root_key)
+      end
+
+    attach_forks(replies, window, root_key)
+  end
+
+  # A reply-to-a-reply is a FORK: patchwork pins content.root to the
+  # message being answered rather than the thread's first one, with
+  # content.fork naming the thread. thread.sorted and window_replies
+  # both match content.root == root_key, so forks vanish from the page
+  # — while the feed row (build_feed walks the chain) previews and
+  # counts them, and the roots view even issues a row for the fork
+  # itself. The thread page must show what the row promised: pull the
+  # window's forks out and slot each directly after the message it
+  # answers, keeping the engine's causal order for the rest.
+  defp attach_forks(replies, window, root_key) do
+    have = MapSet.new(replies, & &1["key"])
+    by_key = Map.new(window, &{&1["key"], &1})
+
+    window
+    |> Enum.filter(fn m ->
+      is_binary(m["key"]) and m["key"] != root_key and post?(m) and
+        not MapSet.member?(have, m["key"]) and fork_of?(m, by_key, root_key)
+    end)
+    |> Enum.sort_by(fn m -> m["value"]["timestamp"] || 0 end)
+    |> Enum.reduce(replies, &insert_fork(&1, &2, by_key))
+  end
+
+  # Membership in this thread: content.fork when the client named it,
+  # otherwise the root chain walk the feed rows already use — which is
+  # what a fork field left out still reaches.
+  defp fork_of?(m, by_key, root_key) do
+    content(m)["fork"] == root_key or thread_root(m, by_key) == root_key
+  end
+
+  # Seat the fork one past the last seated descendant of the message it
+  # answers — its parent included — so siblings queue in timestamp
+  # order behind the subtree instead of jumping ahead of it. A parent
+  # the window never saw rides at the end rather than vanishing.
+  defp insert_fork(fork, replies, by_key) do
+    parent = content(fork)["root"]
+
+    last_seat =
+      replies
+      |> Enum.with_index()
+      |> Enum.filter(fn {m, _i} -> m["key"] == parent or descendant_of?(m, parent, by_key) end)
+      |> List.last()
+
+    case last_seat do
+      nil -> replies ++ [fork]
+      {_m, i} -> List.insert_at(replies, i + 1, fork)
+    end
+  end
+
+  defp descendant_of?(m, ancestor, by_key, seen \\ MapSet.new()) do
+    root = content(m)["root"]
+
+    cond do
+      not is_binary(root) or MapSet.member?(seen, root) ->
+        false
+
+      root == ancestor ->
+        true
+
+      true ->
+        case by_key[root] do
+          nil -> false
+          parent -> descendant_of?(parent, ancestor, by_key, MapSet.put(seen, root))
+        end
     end
   end
 

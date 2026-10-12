@@ -539,6 +539,121 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  # Answers patchwork.thread.sorted by replaying canned items to the
+  # subscriber before the stream call even returns — the drain finds
+  # them waiting in its mailbox — and serves everything else a
+  # method-not-found, so get falls through to the window.
+  defmodule ThreadClient do
+    @moduledoc false
+    use GenServer
+
+    def start(items), do: GenServer.start_link(__MODULE__, items)
+
+    @impl true
+    def init(items), do: {:ok, items}
+
+    @impl true
+    def handle_call({:stream, name, _args, subscriber}, _from, items) do
+      ref = make_ref()
+
+      if name == ["patchwork", "thread", "sorted"] do
+        Enum.each(items, &send(subscriber, {HighWire.SSB.Client, ref, {:item, &1}}))
+        send(subscriber, {HighWire.SSB.Client, ref, {:item, %{"sync" => true}}})
+      end
+
+      {:reply, {:ok, ref}, items}
+    end
+
+    def handle_call({:call, _name, _args}, _from, items) do
+      {:reply, {:error, :methodnotfound}, items}
+    end
+  end
+
+  describe "fork replies (reply-to-a-reply)" do
+    # The patchwork fork shape: the reply pins root to the message it
+    # answers, with fork naming the thread (and one sibling leaving the
+    # fork field off, reachable only by walking the root chain).
+    defp fork_window do
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      reply =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      fork =
+        msg("@c=.ed25519", "%f=.sha256", 3_000, %{
+          "type" => "post",
+          "text" => "second",
+          "root" => "%a=.sha256",
+          "branch" => ["%a=.sha256"],
+          "fork" => "%r=.sha256"
+        })
+
+      sibling =
+        msg("@d=.ed25519", "%s=.sha256", 3_500, %{
+          "type" => "post",
+          "text" => "third",
+          "root" => "%a=.sha256",
+          "branch" => ["%a=.sha256"]
+        })
+
+      stranger =
+        msg("@e=.ed25519", "%x=.sha256", 4_000, %{
+          "type" => "post",
+          "text" => "elsewhere",
+          "root" => "%zz=.sha256",
+          "branch" => ["%zz=.sha256"],
+          "fork" => "%zz=.sha256"
+        })
+
+      [root, reply, fork, sibling, stranger]
+    end
+
+    defp post_call(client, key) do
+      st = %{client: client, messages: %{messages: fork_window()}}
+      {:reply, post, _st} = Timeline.handle_call({:post, key}, {self(), make_ref()}, st)
+      post
+    end
+
+    test "the window fallback seats forks after the message they answer" do
+      post = post_call(nil, "%f=.sha256")
+
+      assert post.root["key"] == "%r=.sha256"
+      assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
+    end
+
+    test "engine replies merge with the window's forks, stranger threads stay out" do
+      engine_reply =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      client = ThreadClient.start([engine_reply])
+      post = post_call(client, "%f=.sha256")
+
+      assert post.root["key"] == "%r=.sha256"
+      assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
+    end
+
+    test "opening on the thread root pulls the forks in too" do
+      client = ThreadClient.start([])
+      post = post_call(client, "%r=.sha256")
+
+      assert post.root["key"] == "%r=.sha256"
+      # empty stream falls back to the window's plain reply, and the
+      # root view — the feed row's own click target — gains the forks;
+      # the stranger's thread never leaks in
+      assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
+    end
+  end
+
   describe "ensure_profiles" do
     defp ensure_state(overrides) do
       Map.merge(
