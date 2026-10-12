@@ -310,6 +310,22 @@ defmodule HighWireWeb.TimelineLiveTest do
     end
   end
 
+  test "a replication wave lights the new rows, once", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    now = System.system_time(:millisecond)
+    alice = ssb_msg("%a.alice", "@alice.ed25519", now, %{"type" => "post", "text" => "first"})
+    bob = ssb_msg("%b.bob", "@bob.ed25519", now + 1, %{"type" => "post", "text" => "second"})
+
+    # Empty store — the first real payload is all arrival.
+    assert notify(view, feed_payload([alice], now: now)) =~ "gossip-arrived"
+
+    # The same wave again: nothing new, and the glow retires.
+    refute notify(view, feed_payload([alice], now: now)) =~ "gossip-arrived"
+
+    # Replication brings a newer post: only that wave lights up.
+    assert notify(view, feed_payload([bob, alice], now: now)) =~ "gossip-arrived"
+  end
+
   test "the rail badge counts gossip connections", %{conn: conn} do
     {:ok, view, html} = live(conn, "/")
     refute html =~ "· 3"

@@ -86,6 +86,12 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(mention_suggestions: [])
       |> assign(paged: %{}, page_inflight: MapSet.new())
       |> assign(active: true, peers_timer: peers_timer)
+      # Arrival shimmer: rows the next wave brings that this store
+      # never saw. seen_keys is the top-window baseline — it only
+      # moves when a real feed payload lands, so status-only
+      # broadcasts can't fake a wave.
+      |> assign(arrived: MapSet.new(), arrived_timer: nil)
+      |> assign(seen_keys: top_keys(Map.get(payload, :feed, [])))
       |> maybe_load_page()
       |> merge_paged()
 
@@ -94,8 +100,25 @@ defmodule HighWireWeb.TimelineLive do
 
   @impl true
   def handle_info({Timeline, :updated, payload}, socket) do
-    socket = socket |> assign(:status, :ok) |> assign_payload(payload)
-    {:noreply, socket |> maybe_load_page() |> merge_paged()}
+    socket = assign(socket, :status, :ok)
+
+    socket =
+      if Map.has_key?(payload, :feed) do
+        top = top_keys(payload.feed)
+        fresh = MapSet.new(top) |> MapSet.difference(MapSet.new(socket.assigns.seen_keys))
+
+        socket
+        |> assign(:seen_keys, top)
+        |> mark_arrived(fresh |> Enum.take(6) |> MapSet.new())
+      else
+        socket
+      end
+
+    {:noreply, socket |> assign_payload(payload) |> maybe_load_page() |> merge_paged()}
+  end
+
+  def handle_info(:arrived_clear, socket) do
+    {:noreply, assign(socket, arrived: MapSet.new(), arrived_timer: nil)}
   end
 
   def handle_info(:peers_tick, socket) do
@@ -433,6 +456,39 @@ defmodule HighWireWeb.TimelineLive do
   defp dedupe_id(%{kind: :contact} = row), do: {:contact, author_of(row.msg)}
   defp dedupe_id(row), do: {:row, row_uid(row)}
 
+  # -- arrival shimmer ----------------------------------------------------
+
+  # The identity of the top of the feed — what a wave can change.
+  defp top_keys(feed) when is_list(feed), do: feed |> Enum.take(8) |> Enum.map(&row_uid/1)
+  defp top_keys(_), do: []
+
+  # Always swap in the new set (an empty one retires a glow still
+  # playing); only a real wave bumps the pulse and arms the timer.
+  defp mark_arrived(socket, arrived) do
+    socket = assign(socket, :arrived, arrived)
+
+    if MapSet.size(arrived) > 0 do
+      socket |> bump_gossip() |> clear_arrived_later()
+    else
+      socket
+    end
+  end
+
+  defp bump_gossip(socket) do
+    case socket.assigns do
+      %{gossip: %{pulse: pulse} = gossip} ->
+        assign(socket, :gossip, %{gossip | pulse: pulse + 1})
+
+      _ ->
+        socket
+    end
+  end
+
+  defp clear_arrived_later(socket) do
+    if socket.assigns.arrived_timer, do: Process.cancel_timer(socket.assigns.arrived_timer)
+    assign(socket, :arrived_timer, Process.send_after(self(), :arrived_clear, 1_800))
+  end
+
   defp annotate_likes(rows, like_counts) when is_map(like_counts) do
     Enum.map(rows, fn row ->
       key = row_uid(row)
@@ -666,7 +722,13 @@ defmodule HighWireWeb.TimelineLive do
           </p>
 
           <div :for={{row, idx} <- Enum.with_index(@rows)} class="border-b border-edge-soft">
-            <.post_row :if={row.kind in [:thread, :post]} row={row} ctx={@as} idx={idx} />
+            <.post_row
+              :if={row.kind in [:thread, :post]}
+              row={row}
+              ctx={@as}
+              idx={idx}
+              arrived={@arrived}
+            />
             <.vote_row :if={row.kind == :vote} row={row} ctx={@as} />
             <.contact_row :if={row.kind == :contact} row={row} ctx={@as} />
             <.other_row :if={row.kind == :other} row={row} ctx={@as} />
@@ -704,6 +766,7 @@ defmodule HighWireWeb.TimelineLive do
   attr :row, :map, required: true
   attr :ctx, :map, required: true
   attr :idx, :integer, required: true
+  attr :arrived, :map, default: MapSet.new(), doc: "row uids lighting up this wave"
 
   defp post_row(assigns) do
     raw_text = text(assigns.row.msg)
@@ -731,7 +794,10 @@ defmodule HighWireWeb.TimelineLive do
     ~H"""
     <article
       id={"post-" <> Integer.to_string(@idx)}
-      class="flex cursor-pointer gap-3 px-4 py-3 hover:bg-panel"
+      class={[
+        "flex cursor-pointer gap-3 px-4 py-3 hover:bg-panel",
+        MapSet.member?(@arrived, row_uid(@row)) && "gossip-arrived"
+      ]}
       phx-hook="OpenPost"
       data-key={@row.msg["key"]}
     >

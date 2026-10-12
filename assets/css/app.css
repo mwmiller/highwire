@@ -274,3 +274,27 @@ html[data-participating="off"] [data-pref-tab] {
     opacity: 0.4;
   }
 }
+
+/* Arrival: rows replication just brought in light up once — an
+   accent edge and a raised wash that fade together. */
+.gossip-arrived {
+  animation: gossip-arrive 1.6s ease-out both;
+}
+
+@keyframes gossip-arrive {
+  from {
+    background-color: var(--bg-raised);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  to {
+    background-color: transparent;
+    box-shadow: inset 2px 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gossip-dot,
+  .gossip-arrived {
+    animation: none;
+  }
+}
