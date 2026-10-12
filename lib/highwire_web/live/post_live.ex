@@ -17,6 +17,7 @@ defmodule HighWireWeb.PostLive do
   alias HighWire.Markdown
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
+  alias HighWireWeb.Components.Heart
   alias HighWireWeb.Components.Mentions
   alias HighWireWeb.Components.Nav
 
@@ -336,18 +337,7 @@ defmodule HighWireWeb.PostLive do
                       {length(@replies)} {if length(@replies) == 1, do: "reply", else: "replies"}
                     </span>
                     <div class="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        phx-click="like"
-                        phx-value-key={@root["key"]}
-                        class={[
-                          "transition-colors hover:text-paper",
-                          @root_liked and "font-medium text-accent"
-                        ]}
-                        title={if(@root_liked, do: "Unlike", else: "Like")}
-                      >
-                        ❤
-                      </button>
+                      <Heart.pill key={@root["key"]} liked={@root_liked} />
                       <span
                         :for={liker <- @root_likers}
                         title={display_name(liker, @profiles)}
@@ -415,18 +405,7 @@ defmodule HighWireWeb.PostLive do
                 </div>
 
                 <div class="mt-1.5 flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    phx-click="like"
-                    phx-value-key={reply["key"]}
-                    class={[
-                      "text-xs text-dim transition-colors hover:text-paper",
-                      reply["key"] in @my_likes and "font-medium text-accent"
-                    ]}
-                    title={if(reply["key"] in @my_likes, do: "Unlike", else: "Like")}
-                  >
-                    ❤
-                  </button>
+                  <Heart.pill key={reply["key"]} liked={reply["key"] in @my_likes} />
                   <span
                     :for={liker <- Enum.take(Map.get(@likes_by, reply["key"], []), 4)}
                     title={display_name(liker, @profiles)}

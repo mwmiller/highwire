@@ -26,6 +26,7 @@ defmodule HighWireWeb.TimelineLive do
   alias HighWire.Markdown
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
+  alias HighWireWeb.Components.Heart
   alias HighWireWeb.Components.Mentions
   alias HighWireWeb.Components.Nav
 
@@ -775,15 +776,7 @@ defmodule HighWireWeb.TimelineLive do
         <div class="mt-1.5 flex items-center gap-4 text-xs text-dim">
           <span :if={@row.replies > 0}>{@row.replies} replies</span>
           <div :if={@like_target} class="flex items-center gap-1.5">
-            <button
-              type="button"
-              phx-click="like"
-              phx-value-key={@like_target}
-              class={["transition-colors hover:text-paper", @liked and "font-medium text-accent"]}
-              title={if(@liked, do: "Unlike", else: "Like")}
-            >
-              ❤
-            </button>
+            <Heart.pill key={@like_target} liked={@liked} />
             <span :for={liker <- @likers} title={display_name(liker, @ctx)} class="inline-flex">
               <Avatar.avatar
                 id={liker}

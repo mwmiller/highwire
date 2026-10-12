@@ -196,8 +196,9 @@ defmodule HighWireWeb.TimelineLiveTest do
 
       # the liker is named on their avatar...
       assert html =~ "Dana"
-      # ...and the bare tally is gone.
-      refute html =~ "❤ <span"
+      # ...and the like control is one obvious pill with a pressed state.
+      assert html =~ ~s(phx-click="like")
+      assert html =~ "aria-pressed="
     end
 
     test "channel subscriptions say which channel and which way", %{conn: conn} do
