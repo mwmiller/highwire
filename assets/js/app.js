@@ -439,6 +439,37 @@ document.addEventListener("keydown", e => {
   }
 })
 
+// The webview never grants new windows, so a target="_blank" click
+// dies silently. External URLs go to the shell, which opens the
+// system browser; same-origin links (LiveView navigation) and plain
+// browser previews keep their native behavior.
+const externalUrl = href => {
+  try {
+    const url = new URL(href, window.location.href)
+    if (url.origin === window.location.origin) return null
+    if (url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:") {
+      return url.href
+    }
+  } catch (_) {}
+  return null
+}
+
+const openExternally = e => {
+  if (!window.__TAURI__) return
+  const target = e.target instanceof Element ? e.target.closest("a[href]") : null
+  if (!target) return
+  const url = externalUrl(target.getAttribute("href"))
+  if (!url) return
+  e.preventDefault()
+  window.__TAURI__.core.invoke("open_external", {url}).catch(() => {})
+}
+
+document.addEventListener("click", openExternally)
+// Middle-click asks for a new window too; treat it the same way.
+document.addEventListener("auxclick", e => {
+  if (e.button === 1) openExternally(e)
+})
+
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
   hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions}

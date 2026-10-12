@@ -354,12 +354,67 @@ fn wait_for_backend() {
     eprintln!("[highwire] backend did not come up in time");
 }
 
+// The config-defined window can't grant new windows (a builder-only
+// hook would be needed), so target="_blank" links from the page used
+// to be dropped on the floor. The page hands external URLs here
+// instead: one allowlist gate, then the platform's own "open this"
+// launcher takes it to the system browser.
+fn acceptable_external(url: &str) -> Result<tauri::Url, String> {
+    let parsed = tauri::Url::parse(url).map_err(|err| err.to_string())?;
+
+    match parsed.scheme() {
+        "http" | "https" | "mailto" => Ok(parsed),
+        scheme => Err(format!("refusing to open {scheme} URLs")),
+    }
+}
+
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    acceptable_external(&url)?;
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = StdCommand::new("open");
+        command.arg(&url);
+        command
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = StdCommand::new("cmd");
+        command.args(["/C", "start", ""]);
+        command.arg(&url);
+        command
+    };
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let mut command = {
+        let mut command = StdCommand::new("xdg-open");
+        command.arg(&url);
+        command
+    };
+
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| err.to_string())?;
+
+    // Reap the launcher so repeated link clicks never accumulate
+    // zombies; it exits as soon as the browser accepts the URL.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let backend_pid: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     let exit_pid = backend_pid.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .invoke_handler(tauri::generate_handler![open_external])
         .setup(move |app| {
             build_menu(app)?;
             // Spawn synchronously so the PID is recorded before any event
@@ -419,4 +474,25 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::acceptable_external;
+
+    #[test]
+    fn allows_the_link_schemes_a_feed_can_carry() {
+        assert!(acceptable_external("https://example.com/a?b=1").is_ok());
+        assert!(acceptable_external("http://example.com").is_ok());
+        assert!(acceptable_external("mailto:someone@example.com").is_ok());
+    }
+
+    #[test]
+    fn refuses_anything_that_isnt_a_web_or_mail_link() {
+        assert!(acceptable_external("file:///etc/passwd").is_err());
+        assert!(acceptable_external("javascript:alert(1)").is_err());
+        assert!(acceptable_external("data:text/html,<b>x</b>").is_err());
+        assert!(acceptable_external("tauri://localhost").is_err());
+        assert!(acceptable_external("not a url").is_err());
+    }
 }
