@@ -59,6 +59,7 @@ defmodule HighWire.Timeline do
   alias HighWire.SSB.{Client, Keys, Sidecar}
 
   @topic "timeline"
+  @gossip "gossip"
 
   # First-paint: once this many feed streams have reported, broadcast
   # what has arrived instead of waiting for every stream (up to 400).
@@ -72,6 +73,10 @@ defmodule HighWire.Timeline do
   @drain_refresh_ms :timer.minutes(13)
 
   def topic, do: @topic
+
+  @doc "PubSub topic for gossip events — the live connection set changing."
+  @spec gossip_topic() :: binary()
+  def gossip_topic, do: @gossip
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -1040,7 +1045,14 @@ defmodule HighWire.Timeline do
   # follow" section simply stay hidden.
   def handle_info({:network, gen}, %{gen: current} = state) when gen == current do
     state = %{state | network_timer: nil}
+    previous = connections_of(Map.get(state, :network))
     state = Map.put(state, :network, fetch_network(Map.get(state, :client)))
+    connections = connections_of(state.network)
+
+    # A peer joined or left — the rail badge's flare rides this event.
+    if connections != previous do
+      broadcast_gossip(%{connected: length(connections)})
+    end
 
     old = Map.get(state, :suggestions, [])
 
@@ -1136,6 +1148,13 @@ defmodule HighWire.Timeline do
   end
 
   def handle_info(_other, state), do: {:noreply, state}
+
+  defp connections_of(%{"connections" => connections}) when is_list(connections), do: connections
+  defp connections_of(_), do: []
+
+  defp broadcast_gossip(payload) do
+    Phoenix.PubSub.broadcast(HighWire.PubSub, @gossip, {__MODULE__, :gossip, payload})
+  end
 
   # -- flow --------------------------------------------------------------
 

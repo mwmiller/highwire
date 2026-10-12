@@ -49,6 +49,10 @@ defmodule HighWireWeb.NetworkLive do
 
     {:ok,
      socket
+     # Isolated test mounts skip the session's gossip hook; keep a
+     # zeroed default so the rail badge still renders. assign_new so a
+     # live count set by the hook survives.
+     |> assign_new(:gossip, fn -> %{connected: 0, pulse: 0} end)
      |> assign(:page_title, "Network")
      |> assign(:status, status)
      |> assign(:profiles, Map.get(payload, :profiles, %{}))
@@ -295,7 +299,7 @@ defmodule HighWireWeb.NetworkLive do
       phx-hook="TabActivity"
       class="flex h-screen overflow-hidden bg-app text-ink"
     >
-      <Nav.rail>
+      <Nav.rail gossip={@gossip}>
         <Nav.rail_label>On this page</Nav.rail_label>
         <Nav.rail_link href="#which-network">Which network</Nav.rail_link>
         <Nav.rail_link href="#dialer">Dialer</Nav.rail_link>

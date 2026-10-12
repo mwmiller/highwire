@@ -310,6 +310,15 @@ defmodule HighWireWeb.TimelineLiveTest do
     end
   end
 
+  test "the rail badge counts gossip connections", %{conn: conn} do
+    {:ok, view, html} = live(conn, "/")
+    refute html =~ "· 3"
+
+    send(view.pid, {HighWire.Timeline, :gossip, %{connected: 3}})
+
+    assert render(view) =~ "· 3"
+  end
+
   defp ssb_msg(key, author, ts, content) do
     %{"key" => key, "value" => %{"author" => author, "timestamp" => ts, "content" => content}}
   end

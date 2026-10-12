@@ -239,7 +239,7 @@ defmodule HighWireWeb.PostLive do
 
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail>
+      <Nav.rail gossip={@gossip}>
         <div class="pb-1 pt-4">
           <Nav.rail_link navigate="/" title="Back to the timeline">
             Timeline

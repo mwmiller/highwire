@@ -21,7 +21,12 @@ defmodule HighWireWeb.Components.Nav do
   @doc """
   Renders the rail frame. Anything given as content is placed below the
   header inside the same panel.
+
+  The footer badge carries the gossip state: `connected` is the live
+  peer count, `pulse` increments on every gossip event — the keyed dot
+  replays its flare whenever it changes.
   """
+  attr :gossip, :map, default: %{connected: 0, pulse: 0}, doc: "live gossip state"
   slot :inner_block, doc: "Rail content below the header"
 
   def rail(assigns) do
@@ -48,7 +53,7 @@ defmodule HighWireWeb.Components.Nav do
       {render_slot(@inner_block)}
       <.link
         navigate="/network"
-        title={"Network: #{Network.label(Network.current())} — click to manage"}
+        title={"Network: #{Network.label(Network.current())} — #{@gossip.connected} live — click to manage"}
         aria-label="Network"
         class={[
           "mt-auto block border-t border-edge py-2 text-center text-[10px] font-medium uppercase",
@@ -57,7 +62,19 @@ defmodule HighWireWeb.Components.Nav do
           Network.current() != :mainnet && "text-dim"
         ]}
       >
-        {Network.label(Network.current())}
+        <span class="flex items-center justify-center gap-1.5">
+          <span
+            key={@gossip.pulse}
+            class={[
+              "inline-block h-1.5 w-1.5 rounded-full",
+              (@gossip.connected > 0 && "gossip-dot") || "bg-dot"
+            ]}
+          />
+          {Network.label(Network.current())}
+          <span :if={@gossip.connected > 0} class="font-normal">
+            · {@gossip.connected}
+          </span>
+        </span>
       </.link>
     </aside>
     """

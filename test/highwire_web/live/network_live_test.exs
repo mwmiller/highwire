@@ -236,7 +236,8 @@ defmodule HighWireWeb.NetworkLiveTest do
       polls: 0,
       dial_notice: nil,
       dialing: false,
-      known_peers_cap: 50
+      known_peers_cap: 50,
+      gossip: %{connected: 0, pulse: 0}
     }
 
     NetworkLive.render(assigns) |> Phoenix.LiveViewTest.rendered_to_string()

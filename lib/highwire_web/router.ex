@@ -20,7 +20,8 @@ defmodule HighWireWeb.Router do
     # The gate: with a first-run import waiting, every app route halts
     # into /import at mount. /import itself lives outside the session —
     # a hook must not redirect its own page.
-    live_session :app, on_mount: [{HighWireWeb.Hooks, :import_gate}] do
+    live_session :app,
+      on_mount: [{HighWireWeb.Hooks, :import_gate}, {HighWireWeb.Hooks, :gossip}] do
       live("/", TimelineLive)
       live("/about", Live)
       live("/profile", ProfileLive)

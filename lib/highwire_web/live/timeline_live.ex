@@ -485,7 +485,7 @@ defmodule HighWireWeb.TimelineLive do
       phx-hook="TabActivity"
       class="flex h-screen overflow-hidden bg-app text-ink"
     >
-      <Nav.rail>
+      <Nav.rail gossip={@gossip}>
         <h1 class="sr-only">Timeline</h1>
 
         <div class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint">

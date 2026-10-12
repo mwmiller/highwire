@@ -247,3 +247,30 @@
 html[data-participating="off"] [data-pref-tab] {
   display: none;
 }
+
+/* Gossip: the rail's footer dot flares when the connection set
+   changes and breathes while a peer is live. The keyed element the
+   HEEx renders replays both animations on every pulse. */
+.gossip-dot {
+  background: var(--dot-ok);
+  animation: gossip-flare 0.9s ease-out both, gossip-breathe 3.4s 0.9s ease-in-out infinite;
+}
+
+@keyframes gossip-flare {
+  from {
+    box-shadow: 0 0 0 0 rgb(52 211 153 / 0.5);
+  }
+  to {
+    box-shadow: 0 0 0 5px rgb(52 211 153 / 0);
+  }
+}
+
+@keyframes gossip-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}

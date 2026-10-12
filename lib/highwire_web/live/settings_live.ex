@@ -57,7 +57,7 @@ defmodule HighWireWeb.SettingsLive do
   def render(assigns) do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail>
+      <Nav.rail gossip={@gossip}>
         <Nav.rail_label>On this page</Nav.rail_label>
         <Nav.rail_link href="#appearance">Appearance</Nav.rail_link>
         <Nav.rail_link href="#notifications">Notification options</Nav.rail_link>

@@ -149,7 +149,7 @@ defmodule HighWireWeb.ProfileLive do
   def render(assigns) do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail>
+      <Nav.rail gossip={@gossip}>
         <Nav.rail_label>Profile</Nav.rail_label>
 
         <div :if={@id} class="px-4 pb-4">
