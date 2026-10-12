@@ -199,6 +199,32 @@ defmodule HighWireWeb.NetworkLiveTest do
       assert html =~ "No peers connected."
       assert html =~ "The address book is empty"
       assert html =~ "Nothing dialed yet."
+      assert html =~ "Quiet sky"
+    end
+
+    test "the constellation draws live, dialing, and known peers as rings" do
+      html =
+        render_with_report(%{
+          "enabled" => true,
+          "connections" => ["@alice.ed25519"],
+          "knownPeers" => [
+            %{"address" => "net:192.168.1.10:8008~shs:bobkey", "autoconnect" => true}
+          ],
+          "dialTry" => [
+            %{"addr" => "net:10.0.0.2:8008~shs:carolkey", "attempts" => 3, "lastTry" => 1}
+          ]
+        })
+
+      assert html =~ ~s(id="constellation")
+      # Live nodes are the only ones tethered to the center and the
+      # only green ones; dialing is amber; the address book is plain.
+      assert html =~ "fill-dot-ok"
+      assert html =~ "fill-warn"
+      assert html =~ "10.0.0.2:8008"
+      assert html =~ "192.168.1.10:8008"
+      assert html =~ ~s(role="img")
+      assert html =~ "1 live"
+      refute html =~ "Quiet sky"
     end
 
     test "the rail jump-links every rendered section" do
@@ -212,6 +238,7 @@ defmodule HighWireWeb.NetworkLiveTest do
 
       assert html =~ ~s(href="#which-network")
       assert html =~ ~s(href="#dialer")
+      assert html =~ ~s(href="#constellation")
       assert html =~ ~s(href="#connections")
       assert html =~ ~s(href="#known-peers")
       assert html =~ ~s(href="#dials")

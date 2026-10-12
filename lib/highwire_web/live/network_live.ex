@@ -6,10 +6,13 @@ defmodule HighWireWeb.NetworkLive do
   Sections, top to bottom: which network the engine is on (the
   profile switcher, moved here from Settings so all network concerns
   live on one page), the dialer's live state with enable/disable and
-  dial-now controls, who we are connected to right now (one row per
-  live peer, Patchwork's "connected pubs" affordance generalised to
-  any peer), the `conn.json` address book, and the recent dial
-  attempts with their backoff state.
+  dial-now controls, the constellation — a radial map of the same
+  facts the lists below state (self at center, rings outward for live
+  peers, mid-dial attempts, and the address book) — who we are
+  connected to right now (one row per live peer, Patchwork's
+  "connected pubs" affordance generalised to any peer), the
+  `conn.json` address book, and the recent dial attempts with their
+  backoff state.
 
   Read paths come from `HighWire.Timeline` (the shared client polls
   `gossip.peers` + `admin.peers.known` every 10s while a tab is
@@ -303,6 +306,7 @@ defmodule HighWireWeb.NetworkLive do
         <Nav.rail_label>On this page</Nav.rail_label>
         <Nav.rail_link href="#which-network">Which network</Nav.rail_link>
         <Nav.rail_link href="#dialer">Dialer</Nav.rail_link>
+        <Nav.rail_link :if={@report != nil} href="#constellation">Constellation</Nav.rail_link>
         <Nav.rail_link :if={@report != nil} href="#connections">Connections</Nav.rail_link>
         <Nav.rail_link :if={@report != nil} href="#known-peers">Known peers</Nav.rail_link>
         <Nav.rail_link :if={@report != nil} href="#dials">Recent dials</Nav.rail_link>
@@ -432,6 +436,94 @@ defmodule HighWireWeb.NetworkLive do
           </p>
 
           <div :if={@report != nil} class="mt-8 space-y-8">
+            <%!-- The sky: the lists below stated in one glance. Self at
+            center, rings outward — live peers (tethered), mid-dial
+            attempts, address book. Static by design; it re-renders
+            with the page's poll, no motion of its own. --%>
+            <section>
+              <h2
+                id="constellation"
+                class="text-sm font-semibold uppercase tracking-wider text-faint"
+              >
+                Constellation
+              </h2>
+
+              <div class="mt-3 rounded border border-edge bg-panel py-2">
+                <svg
+                  viewBox="0 0 640 320"
+                  class="w-full"
+                  role="img"
+                  aria-label={sky_summary(@report)}
+                >
+                  <circle
+                    :for={radius <- [70, 120, 170]}
+                    cx={320}
+                    cy={160}
+                    r={radius}
+                    class="fill-none stroke-edge-soft"
+                  />
+
+                  <line
+                    :for={{id, x, y} <- sky_nodes(@report["connections"] || [], 70, 320, 160)}
+                    x1={320}
+                    y1={160}
+                    x2={x}
+                    y2={y}
+                    class="stroke-edge-soft"
+                  />
+
+                  <circle cx={320} cy={160} r={5} class="fill-accent" />
+                  <text x={320} y={177} text-anchor="middle" class="fill-faint text-[9px]">
+                    you
+                  </text>
+
+                  <g :for={{id, x, y} <- sky_nodes(@report["connections"] || [], 70, 320, 160)}>
+                    <circle cx={x} cy={y} r={5} class="fill-dot-ok" />
+                    <text x={x} y={y + 14} text-anchor="middle" class="fill-faint text-[9px]">
+                      {sky_short_name(id, @profiles)}
+                    </text>
+                    <title>{display_name(id, @profiles)}</title>
+                  </g>
+
+                  <g :for={{try_row, x, y} <- sky_nodes(@report["dialTry"] || [], 120, 320, 160)}>
+                    <circle cx={x} cy={y} r={4} class="fill-warn" />
+                    <title>
+                      {"dialing " <> (try_row["addr"] || "") <> " — #{try_row["attempts"] || 0} fails"}
+                    </title>
+                  </g>
+
+                  <g :for={
+                    {peer, x, y} <-
+                      sky_nodes(
+                        Enum.take(@report["knownPeers"] || [], @known_peers_cap),
+                        170,
+                        320,
+                        160
+                      )
+                  }>
+                    <circle cx={x} cy={y} r={3.5} class="fill-dot" />
+                    <title>{peer["address"]}</title>
+                  </g>
+                </svg>
+
+                <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 px-3 pb-1 text-[11px] text-faint">
+                  <span class="flex items-center gap-1.5">
+                    <span class="h-1.5 w-1.5 rounded-full bg-dot-ok"></span>live
+                  </span>
+                  <span class="flex items-center gap-1.5">
+                    <span class="h-1.5 w-1.5 rounded-full bg-warn"></span>dialing
+                  </span>
+                  <span class="flex items-center gap-1.5">
+                    <span class="h-1.5 w-1.5 rounded-full bg-dot"></span>address book
+                  </span>
+                </div>
+              </div>
+
+              <p :if={sky_empty?(@report)} class="mt-2 text-sm text-dim">
+                Quiet sky — no peers, no pending dials, empty address book.
+              </p>
+            </section>
+
             <%!-- Patchwork's "connected pubs" affordance: one row per live
             peer, each with its own status dot — never a lone global claim. --%>
             <section>
@@ -628,5 +720,39 @@ defmodule HighWireWeb.NetworkLive do
       cap when is_integer(cap) -> "#{n} / #{cap}"
       _ -> "#{n}"
     end
+  end
+
+  # -- constellation ------------------------------------------------------
+
+  # Items placed evenly around a ring, starting at the top and walking
+  # clockwise. Coordinates feed the SVG directly; a single-item ring
+  # sits at twelve o'clock.
+  defp sky_nodes(list, radius, cx, cy) when is_list(list) do
+    total = length(list)
+
+    list
+    |> Enum.with_index()
+    |> Enum.map(fn {item, index} ->
+      angle = -:math.pi() / 2 + 2 * :math.pi() * index / max(total, 1)
+      {item, cx + radius * :math.cos(angle), cy + radius * :math.sin(angle)}
+    end)
+  end
+
+  defp sky_nodes(_list, _radius, _cx, _cy), do: []
+
+  defp sky_short_name(id, profiles) do
+    name = display_name(id, profiles)
+    if String.length(name) > 16, do: String.slice(name, 0, 15) <> "…", else: name
+  end
+
+  defp sky_summary(report) do
+    "Constellation: #{length(report["connections"] || [])} live, " <>
+      "#{length(report["dialTry"] || [])} mid-dial, " <>
+      "#{length(report["knownPeers"] || [])} known"
+  end
+
+  defp sky_empty?(report) do
+    report["connections"] in [nil, []] and report["dialTry"] in [nil, []] and
+      report["knownPeers"] in [nil, []]
   end
 end
