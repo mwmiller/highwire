@@ -20,7 +20,10 @@ defmodule HighWire.TimelineTest do
 
   # Answers Client.stream/4-shaped calls without a network and records
   # them, so tests can prove which connection a stream opened on; the
-  # first contacts item boots the feed streams through this.
+  # first contacts item boots the feed streams through this. Client
+  # calls are recorded too (blobs.want, profile avatar) and reply with
+  # a plain {:ok, nil} — the avatar fetch misses, which is what a want
+  # test wants: no profiles fetched, only blob refs.
   defmodule FakeClient do
     @moduledoc false
     use GenServer
@@ -29,16 +32,26 @@ defmodule HighWire.TimelineTest do
 
     def streams(client), do: GenServer.call(client, :streams)
 
-    @impl true
-    def init(_), do: {:ok, []}
+    def calls(client), do: GenServer.call(client, :calls)
 
     @impl true
-    def handle_call({:stream, name, args, _subscriber}, _from, state) do
-      {:reply, {:ok, make_ref()}, [{name, args} | state]}
+    def init(_), do: {:ok, {[], []}}
+
+    @impl true
+    def handle_call({:stream, name, args, _subscriber}, _from, {streams, calls}) do
+      {:reply, {:ok, make_ref()}, {[{name, args} | streams], calls}}
     end
 
-    def handle_call(:streams, _from, state) do
-      {:reply, Enum.reverse(state), state}
+    def handle_call({:call, name, args}, _from, {streams, calls}) do
+      {:reply, {:ok, nil}, {streams, [{name, args} | calls]}}
+    end
+
+    def handle_call(:streams, _from, {streams, _calls} = state) do
+      {:reply, Enum.reverse(streams), state}
+    end
+
+    def handle_call(:calls, _from, {_streams, calls} = state) do
+      {:reply, Enum.reverse(calls), state}
     end
   end
 
@@ -323,6 +336,7 @@ defmodule HighWire.TimelineTest do
           last_drain_at: nil,
           contacts_ref: nil,
           contacts_primed?: true,
+          profile_fetching?: false,
           # @a is a follow id too, so the contact author's profile is
           # never narrowed out of the payload between the two builds.
           follows: ["@me.ed25519", "@a.ed25519"],
@@ -491,6 +505,37 @@ defmodule HighWire.TimelineTest do
       assert st.drain_client == nil
       assert st.contact_ref == nil
       assert st.contact_buf == []
+    end
+  end
+
+  describe "blob wants" do
+    # A body embedding an image the store has never seen, with every
+    # profile already known — the finalize shape where the worker used
+    # to be skipped on an empty missing list, taking every blob want
+    # with it. Fresh posts by known authors are the common case.
+    test "ride even when every profile is already known" do
+      client = start_supervised!(%{id: :blob_client, start: {FakeClient, :start_link, [nil]}})
+      img = "&" <> String.duplicate("A", 43) <> "=.sha256"
+
+      post =
+        msg("@me.ed25519", "%p=.sha256", 5_000, %{"type" => "post", "text" => "![x](#{img})"})
+
+      st = drain_state(pending: %{123 => "@me.ed25519"}, acc: [post], client: client)
+
+      {:noreply, st} = Timeline.handle_info({Client, 123, :done}, st)
+
+      assert st.profile_fetching?
+      assert_receive {:profiles_fetched, _}, 2_000
+      assert Enum.any?(FakeClient.calls(client), &match?({["blobs", "want"], [^img]}, &1))
+    end
+
+    test "no worker when nothing is missing and nothing is unseen" do
+      st = drain_state(pending: %{123 => "@me.ed25519"})
+
+      {:noreply, st} = Timeline.handle_info({Client, 123, :done}, st)
+
+      refute st.profile_fetching?
+      refute_receive {:profiles_fetched, _}, 100
     end
   end
 

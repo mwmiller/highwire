@@ -1466,13 +1466,23 @@ defmodule HighWire.Timeline do
   # Names and blob wants run after the payload is out: the feed must not
   # wait on hundreds of avatar round trips. One worker at a time — a
   # finalize while it runs skips, and the pass after it finishes rechecks
-  # whatever is still missing.
+  # whatever is still missing. The worker also carries the blob wants, so
+  # a finalize whose profiles are ALL known must still run it when the
+  # window holds unseen images: blobs from fresh posts by known authors
+  # are exactly when the wants matter, and skipping on an empty missing
+  # list is what left those bytes never filling in.
   defp kick_profile_fetch(%{profile_fetching?: true} = state, _missing, _base, _refs),
     do: state
 
-  defp kick_profile_fetch(state, [], _base, _refs), do: state
-
   defp kick_profile_fetch(state, missing, base, post_refs) do
+    if missing == [] and post_refs == [] and Enum.all?(image_refs(base), &is_nil/1) do
+      state
+    else
+      spawn_profile_worker(state, missing, base, post_refs)
+    end
+  end
+
+  defp spawn_profile_worker(state, missing, base, post_refs) do
     if is_pid(state.client) and Process.alive?(state.client) do
       client = state.client
       parent = self()
@@ -1588,7 +1598,7 @@ defmodule HighWire.Timeline do
   end
 
   defp image_refs(profiles) do
-    Enum.map(profiles, fn {_id, p} -> p.image end)
+    Enum.map(profiles, fn {_id, p} -> p[:image] end)
   end
 
   # Markdown image targets (![alt](&…sha256)) in post bodies — these are
