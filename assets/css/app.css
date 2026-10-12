@@ -275,6 +275,12 @@ html[data-participating="off"] [data-pref-tab] {
   }
 }
 
+/* The constellation's live nodes flare with the same breath as the
+   rail dot; their keyed parent group replays it on each pulse. */
+.gossip-node-flare {
+  animation: gossip-flare 0.9s ease-out both;
+}
+
 /* Arrival: rows replication just brought in light up once — an
    accent edge and a raised wash that fade together. */
 .gossip-arrived {
@@ -294,6 +300,7 @@ html[data-participating="off"] [data-pref-tab] {
 
 @media (prefers-reduced-motion: reduce) {
   .gossip-dot,
+  .gossip-node-flare,
   .gossip-arrived {
     animation: none;
   }

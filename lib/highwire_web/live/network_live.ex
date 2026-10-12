@@ -12,7 +12,14 @@ defmodule HighWireWeb.NetworkLive do
   connected to right now (one row per live peer, Patchwork's
   "connected pubs" affordance generalised to any peer), the
   `conn.json` address book, and the recent dial attempts with their
-  backoff state.
+  backoff state. Dialing and book peers are selectable in either the
+  sky or their list row — both highlight together and the row scrolls
+  into view; live peers are named links to their profiles.
+
+  Node positions hash from each peer's address, so the sky holds
+  still between polls — membership changes add or remove a node
+  without reshuffling its neighbours. A flare on the live ring rides
+  the same gossip pulse the rail badge breathes by.
 
   Read paths come from `HighWire.Timeline` (the shared client polls
   `gossip.peers` + `admin.peers.known` every 10s while a tab is
@@ -61,6 +68,7 @@ defmodule HighWireWeb.NetworkLive do
      |> assign(:profiles, Map.get(payload, :profiles, %{}))
      |> assign(:report, Timeline.network())
      |> assign(active: true, tick_timer: tick_timer)
+     |> assign(selected: nil)
      |> assign(
        network: Network.current(),
        net_status: Sidecar.status(),
@@ -294,6 +302,16 @@ defmodule HighWireWeb.NetworkLive do
     end
   end
 
+  # -- constellation ------------------------------------------------------
+
+  # A dialing or book node and its list row are the same peer; selecting
+  # one highlights both, and the SkyScroll hook brings the row into view.
+  # Clicking the selected peer again retires the selection.
+  def handle_event("sky-select", %{"addr" => addr}, socket) do
+    selected = if socket.assigns.selected == addr, do: nil, else: addr
+    {:noreply, assign(socket, :selected, selected)}
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -437,9 +455,11 @@ defmodule HighWireWeb.NetworkLive do
 
           <div :if={@report != nil} class="mt-8 space-y-8">
             <%!-- The sky: the lists below stated in one glance. Self at
-            center, rings outward — live peers (tethered), mid-dial
-            attempts, address book. Static by design; it re-renders
-            with the page's poll, no motion of its own. --%>
+            center, rings outward — live peers (tethered, green, named),
+            mid-dial attempts (amber), address book (plain). Positions
+            hash from each peer's address, so nodes hold still between
+            polls. Dialing and book peers are clickable; live peers are
+            links to their profiles. --%>
             <section>
               <h2
                 id="constellation"
@@ -450,7 +470,7 @@ defmodule HighWireWeb.NetworkLive do
 
               <div class="mt-3 rounded border border-edge bg-panel py-2">
                 <svg
-                  viewBox="0 0 640 320"
+                  viewBox="0 0 640 350"
                   class="w-full"
                   role="img"
                   aria-label={sky_summary(@report)}
@@ -463,12 +483,48 @@ defmodule HighWireWeb.NetworkLive do
                     class="fill-none stroke-edge-soft"
                   />
 
+                  <%!-- Live peers: solid tethers to self. --%>
                   <line
-                    :for={{id, x, y} <- sky_nodes(@report["connections"] || [], 70, 320, 160)}
+                    :for={{id, x, y} <- sky_nodes(@report["connections"] || [], 70, 320, 160, & &1)}
                     x1={320}
                     y1={160}
                     x2={x}
                     y2={y}
+                    class="stroke-edge-soft"
+                  />
+
+                  <%!-- Mid-dial attempts: amber tethers. --%>
+                  <line
+                    :for={
+                      {try_row, x, y} <-
+                        sky_nodes(@report["dialTry"] || [], 120, 320, 160, & &1["addr"])
+                    }
+                    x1={320}
+                    y1={160}
+                    x2={x}
+                    y2={y}
+                    class="stroke-warn"
+                  />
+
+                  <%!-- Autoconnect book peers: dashed tethers; manual
+                  entries float untethered. --%>
+                  <line
+                    :for={
+                      {peer, x, y} <-
+                        sky_nodes(
+                          Enum.take(@report["knownPeers"] || [], @known_peers_cap),
+                          170,
+                          320,
+                          160,
+                          & &1["address"]
+                        )
+                    }
+                    :if={peer["autoconnect"]}
+                    x1={320}
+                    y1={160}
+                    x2={x}
+                    y2={y}
+                    stroke-dasharray="2 4"
                     class="stroke-edge-soft"
                   />
 
@@ -477,34 +533,94 @@ defmodule HighWireWeb.NetworkLive do
                     you
                   </text>
 
-                  <g :for={{id, x, y} <- sky_nodes(@report["connections"] || [], 70, 320, 160)}>
-                    <circle cx={x} cy={y} r={5} class="fill-dot-ok" />
-                    <text x={x} y={y + 14} text-anchor="middle" class="fill-faint text-[9px]">
-                      {sky_short_name(id, @profiles)}
-                    </text>
-                    <title>{display_name(id, @profiles)}</title>
+                  <%!-- The live ring keys on the gossip pulse: a real
+                  connection change replaces the group, replaying the
+                  nodes' flare exactly when the sky's membership moved.
+                  --%>
+                  <g key={@gossip.pulse}>
+                    <g :for={
+                      {id, x, y} <-
+                        sky_nodes(@report["connections"] || [], 70, 320, 160, & &1)
+                    }>
+                      <.link navigate={profile_href(id)} class="hover:opacity-80">
+                        <circle cx={x} cy={y} r={5} class="fill-dot-ok gossip-node-flare" />
+                        <text x={x} y={y + 14} text-anchor="middle" class="fill-faint text-[9px]">
+                          {sky_short_name(id, @profiles)}
+                        </text>
+                        <title>{display_name(id, @profiles)}</title>
+                      </.link>
+                    </g>
                   </g>
 
-                  <g :for={{try_row, x, y} <- sky_nodes(@report["dialTry"] || [], 120, 320, 160)}>
+                  <g
+                    :for={
+                      {try_row, x, y} <-
+                        sky_nodes(@report["dialTry"] || [], 120, 320, 160, & &1["addr"])
+                    }
+                    key={"dial-" <> (try_row["addr"] || "")}
+                  >
+                    <circle
+                      :if={@selected == try_row["addr"]}
+                      cx={x}
+                      cy={y}
+                      r={9}
+                      class="fill-none stroke-accent"
+                    />
                     <circle cx={x} cy={y} r={4} class="fill-warn" />
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r={12}
+                      class="cursor-pointer fill-transparent"
+                      phx-click="sky-select"
+                      phx-value-addr={try_row["addr"]}
+                    />
                     <title>
-                      {"dialing " <> (try_row["addr"] || "") <> " — #{try_row["attempts"] || 0} fails"}
+                      {"dialing " <>
+                        (try_row["addr"] || "") <>
+                        " — #{try_row["attempts"] || 0} fails"}
                     </title>
                   </g>
 
-                  <g :for={
-                    {peer, x, y} <-
-                      sky_nodes(
-                        Enum.take(@report["knownPeers"] || [], @known_peers_cap),
-                        170,
-                        320,
-                        160
-                      )
-                  }>
+                  <g
+                    :for={
+                      {peer, x, y} <-
+                        sky_nodes(
+                          Enum.take(@report["knownPeers"] || [], @known_peers_cap),
+                          170,
+                          320,
+                          160,
+                          & &1["address"]
+                        )
+                    }
+                    key={"known-" <> (peer["address"] || "")}
+                  >
+                    <circle
+                      :if={@selected == peer["address"]}
+                      cx={x}
+                      cy={y}
+                      r={9}
+                      class="fill-none stroke-accent"
+                    />
                     <circle cx={x} cy={y} r={3.5} class="fill-dot" />
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r={12}
+                      class="cursor-pointer fill-transparent"
+                      phx-click="sky-select"
+                      phx-value-addr={peer["address"]}
+                    />
                     <title>{peer["address"]}</title>
                   </g>
                 </svg>
+
+                <span
+                  id="sky-scroll"
+                  phx-hook="SkyScroll"
+                  data-target={@selected}
+                  class="hidden"
+                ></span>
 
                 <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 px-3 pb-1 text-[11px] text-faint">
                   <span class="flex items-center gap-1.5">
@@ -572,11 +688,21 @@ defmodule HighWireWeb.NetworkLive do
                 The address book is empty — it fills as pubs announce themselves.
               </div>
 
-              <div :if={@report["knownPeers"] not in [nil, []]} class="mt-2 space-y-1">
+              <div
+                :if={@report["knownPeers"] not in [nil, []]}
+                id="known-peer-rows"
+                class="mt-2 space-y-1"
+              >
                 <div
                   :for={peer <- Enum.take(@report["knownPeers"], @known_peers_cap)}
-                  class="flex items-baseline gap-3 border-b border-edge-soft px-2 py-1.5 text-xs"
+                  data-sky-key={peer["address"]}
+                  phx-click="sky-select"
+                  phx-value-addr={peer["address"]}
                   title={peer["address"]}
+                  class={[
+                    "flex cursor-pointer items-baseline gap-3 border-b border-edge-soft px-2 py-1.5 text-xs",
+                    @selected == peer["address"] && "bg-raised"
+                  ]}
                 >
                   <span class="min-w-0 flex-1 break-all font-mono text-sub">
                     {addr_text(peer["address"])}
@@ -613,10 +739,16 @@ defmodule HighWireWeb.NetworkLive do
                   else: "Nothing dialed yet."}
               </div>
 
-              <div :if={@report["dialTry"] not in [nil, []]} class="mt-2 space-y-1">
+              <div :if={@report["dialTry"] not in [nil, []]} id="dial-rows" class="mt-2 space-y-1">
                 <div
                   :for={try_row <- @report["dialTry"] || []}
-                  class="flex items-baseline gap-3 border-b border-edge-soft px-2 py-1.5 text-xs"
+                  data-sky-key={try_row["addr"]}
+                  phx-click="sky-select"
+                  phx-value-addr={try_row["addr"]}
+                  class={[
+                    "flex cursor-pointer items-baseline gap-3 border-b border-edge-soft px-2 py-1.5 text-xs",
+                    @selected == try_row["addr"] && "bg-raised"
+                  ]}
                 >
                   <span class="min-w-0 flex-1 break-all font-mono text-sub">
                     {addr_text(try_row["addr"])}
@@ -724,21 +856,20 @@ defmodule HighWireWeb.NetworkLive do
 
   # -- constellation ------------------------------------------------------
 
-  # Items placed evenly around a ring, starting at the top and walking
-  # clockwise. Coordinates feed the SVG directly; a single-item ring
-  # sits at twelve o'clock.
-  defp sky_nodes(list, radius, cx, cy) when is_list(list) do
-    total = length(list)
-
-    list
-    |> Enum.with_index()
-    |> Enum.map(fn {item, index} ->
-      angle = -:math.pi() / 2 + 2 * :math.pi() * index / max(total, 1)
+  # Items placed around a ring at an angle hashed from their identity
+  # key — stable across renders, so membership changes add or remove a
+  # node without reshuffling its neighbours. A single-item ring lands
+  # wherever its hash says; no item ever moves on its own.
+  defp sky_nodes(list, radius, cx, cy, key_fun)
+       when is_list(list) and is_function(key_fun, 1) do
+    Enum.map(list, fn item ->
+      key = key_fun.(item) || ""
+      angle = 2 * :math.pi() * :erlang.phash2(key, 10_000) / 10_000
       {item, cx + radius * :math.cos(angle), cy + radius * :math.sin(angle)}
     end)
   end
 
-  defp sky_nodes(_list, _radius, _cx, _cy), do: []
+  defp sky_nodes(_list, _radius, _cx, _cy, _key_fun), do: []
 
   defp sky_short_name(id, profiles) do
     name = display_name(id, profiles)

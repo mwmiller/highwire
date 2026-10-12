@@ -227,6 +227,113 @@ defmodule HighWireWeb.NetworkLiveTest do
       refute html =~ "Quiet sky"
     end
 
+    test "constellation nodes hold their positions across reordering" do
+      peers =
+        for i <- 1..5 do
+          %{"address" => "net:10.0.0.#{i}:8008~shs:key#{i}", "autoconnect" => true}
+        end
+
+      sky = fn known ->
+        html =
+          render_with_report(%{
+            "enabled" => true,
+            "connections" => [],
+            "dialTry" => [],
+            "knownPeers" => known
+          })
+
+        [_, block] =
+          Regex.run(~r/(<svg[^>]*viewBox="0 0 640 350"[^>]*>.*?<\/svg>)/s, html)
+
+        Regex.scan(~r/cx="([\d.]+)" cy="([\d.]+)" r="3\.5"/, block)
+        |> Enum.map(fn [_, x, y] -> {x, y} end)
+        |> MapSet.new()
+      end
+
+      assert sky.(peers) == sky.(Enum.reverse(peers))
+      assert MapSet.size(sky.(peers)) == 5
+    end
+
+    test "the constellation tethers autoconnect peers and mid-dials" do
+      html =
+        render_with_report(%{
+          "enabled" => true,
+          "connections" => [],
+          "dialTry" => [
+            %{"addr" => "net:10.0.0.2:8008~shs:carolkey", "attempts" => 1, "lastTry" => 1}
+          ],
+          "knownPeers" => [
+            %{"address" => "net:192.168.1.10:8008~shs:bobkey", "autoconnect" => true},
+            %{"address" => "net:10.9.9.9:8008~shs:manualkey", "autoconnect" => false}
+          ]
+        })
+
+      # Amber tether for the mid-dial, dashed for autoconnect, and the
+      # manual entry floats untethered — its address appears only as a
+      # node tooltip and a list row.
+      assert html =~ "stroke-warn"
+      assert html =~ "stroke-dasharray"
+      assert html =~ "10.9.9.9:8008"
+      # Hit targets exist behind the clickable nodes.
+      assert html =~ ~s(phx-click="sky-select")
+    end
+
+    test "selecting a peer highlights its node ring and list row" do
+      report = %{
+        "enabled" => true,
+        "connections" => [],
+        "dialTry" => [],
+        "knownPeers" => [
+          %{"address" => "net:192.168.1.10:8008~shs:bobkey", "autoconnect" => true}
+        ]
+      }
+
+      unselected = render_with_report(report)
+      refute unselected =~ "stroke-accent"
+      refute unselected =~ ~s(data-target="net:)
+
+      selected =
+        render_with_report(report, %{selected: "net:192.168.1.10:8008~shs:bobkey"})
+
+      assert selected =~ "stroke-accent"
+      # The scroll hook carries the selection to the browser.
+      assert selected =~ ~s(phx-hook="SkyScroll")
+      assert selected =~ ~s(data-target="net:192.168.1.10:8008~shs:bobkey")
+    end
+
+    test "sky-select toggles the selection" do
+      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+      addr = "net:192.168.1.10:8008~shs:bobkey"
+
+      {:noreply, socket} =
+        NetworkLive.handle_event("sky-select", %{"addr" => addr}, socket)
+
+      assert socket.assigns.selected == addr
+
+      # A second click on the same peer retires the selection.
+      {:noreply, socket} =
+        NetworkLive.handle_event("sky-select", %{"addr" => addr}, socket)
+
+      assert socket.assigns.selected == nil
+    end
+
+    test "live nodes flare with the gossip pulse and link to profiles" do
+      html =
+        render_with_report(
+          %{
+            "enabled" => true,
+            "connections" => ["@alice.ed25519"],
+            "dialTry" => [],
+            "knownPeers" => []
+          },
+          %{gossip: %{connected: 1, pulse: 4}}
+        )
+
+      assert html =~ "gossip-node-flare"
+      assert html =~ ~s(key="4")
+      assert html =~ "/profile?"
+    end
+
     test "the rail jump-links every rendered section" do
       html =
         render_with_report(%{
@@ -247,25 +354,32 @@ defmodule HighWireWeb.NetworkLiveTest do
 
   # The assigns a connected session would hold, with only the report
   # varying per test.
-  defp render_with_report(report) do
-    assigns = %{
-      __changed__: nil,
-      page_title: "Network",
-      status: :ok,
-      profiles: %{},
-      report: report,
-      active: true,
-      tick_timer: nil,
-      network: :dev,
-      net_status: :ready,
-      switching: false,
-      switch_notice: nil,
-      polls: 0,
-      dial_notice: nil,
-      dialing: false,
-      known_peers_cap: 50,
-      gossip: %{connected: 0, pulse: 0}
-    }
+  # The assigns a connected session would hold, with only the report
+  # swapped out — render_with_report/2 lets a test override anything.
+  defp render_with_report(report, overrides \\ %{}) do
+    assigns =
+      Map.merge(
+        %{
+          __changed__: nil,
+          page_title: "Network",
+          status: :ok,
+          profiles: %{},
+          report: report,
+          active: true,
+          tick_timer: nil,
+          network: :dev,
+          net_status: :ready,
+          switching: false,
+          switch_notice: nil,
+          polls: 0,
+          dial_notice: nil,
+          dialing: false,
+          known_peers_cap: 50,
+          selected: nil,
+          gossip: %{connected: 0, pulse: 0}
+        },
+        overrides
+      )
 
     NetworkLive.render(assigns) |> Phoenix.LiveViewTest.rendered_to_string()
   end

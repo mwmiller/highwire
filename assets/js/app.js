@@ -212,6 +212,31 @@ let TabActivity = {
   }
 }
 
+// The constellation's selected peer: when the server-side selection
+// changes, bring the matching list row into view. The row is found by
+// its data-sky-key (same string the SVG nodes carry), scoped to the
+// two lists so a node never scrolls to itself.
+let SkyScroll = {
+  mounted() {
+    this.maybeScroll()
+  },
+  updated() {
+    this.maybeScroll()
+  },
+  maybeScroll() {
+    const key = this.el.dataset.target
+    if (!key) return
+    const escaped = window.CSS && CSS.escape ? CSS.escape(key) : key.replace(/"/g, '\\"')
+    const row = this.el.ownerDocument.querySelector(
+      `#dial-rows [data-sky-key="${escaped}"], #known-peer-rows [data-sky-key="${escaped}"]`
+    )
+    if (row) {
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      row.scrollIntoView({block: "nearest", behavior: reduced ? "auto" : "smooth"})
+    }
+  }
+}
+
 // Composer mentions: typing @ or ~ before a word opens the popup the
 // server renders from mention-query. Picking splices the feed id into
 // the draft here in the browser — string indices stay UTF-16-safe
@@ -472,7 +497,7 @@ document.addEventListener("auxclick", e => {
 
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions}
+  hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions, SkyScroll}
 })
 
 // Show progress bar on live navigation and form submits
