@@ -629,7 +629,7 @@ defmodule HighWireWeb.TimelineLive do
           </.link>
         </header>
 
-        <div class="flex-1 overflow-y-auto">
+        <div id="feed-scroller" phx-hook="FeedScroll" class="flex-1 overflow-y-auto">
           <form
             :if={@view == :public}
             id="compose"

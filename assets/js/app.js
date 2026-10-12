@@ -237,6 +237,63 @@ let SkyScroll = {
   }
 }
 
+// Feed scroll position: opening a post tears the timeline down, and
+// coming back used to drop the reader at the top of a fresh mount.
+// Save on a rAF-throttled scroll; restore on mount and keep retrying
+// while the stored offset doesn't stick — the first render can be
+// shorter than the final content, and a user scroll always wins.
+const FEED_SCROLL_KEY = "highwire:feed-scroll"
+
+let FeedScroll = {
+  mounted() {
+    this.stored = 0
+    try {
+      this.stored = Number(sessionStorage.getItem(FEED_SCROLL_KEY)) || 0
+    } catch (_) {}
+    this.restored = this.stored <= 0
+    this.restoring = false
+    this.frame = 0
+
+    this.onScroll = () => {
+      if (this.restoring) return
+      this.restored = true
+      cancelAnimationFrame(this.frame)
+      this.frame = requestAnimationFrame(() => {
+        try {
+          sessionStorage.setItem(FEED_SCROLL_KEY, String(Math.round(this.el.scrollTop)))
+        } catch (_) {}
+      })
+    }
+
+    this.el.addEventListener("scroll", this.onScroll, {passive: true})
+    this.apply()
+  },
+
+  updated() {
+    if (!this.restored) this.apply()
+  },
+
+  apply() {
+    this.restoring = true
+    this.el.scrollTop = this.stored
+    requestAnimationFrame(() => {
+      this.restoring = false
+      if (this.el.scrollTop >= this.stored) this.restored = true
+    })
+  },
+
+  destroyed() {
+    cancelAnimationFrame(this.frame)
+    this.el.removeEventListener("scroll", this.onScroll)
+    // A departure mid-restore holds a clamped offset; keep the stored
+    // one rather than overwriting the position with its shadow.
+    const keep = this.restoring ? this.stored : this.el.scrollTop
+    try {
+      sessionStorage.setItem(FEED_SCROLL_KEY, String(Math.round(keep)))
+    } catch (_) {}
+  }
+}
+
 // Composer mentions: typing @ or ~ before a word opens the popup the
 // server renders from mention-query. Picking splices the feed id into
 // the draft here in the browser — string indices stay UTF-16-safe
@@ -457,10 +514,24 @@ document.addEventListener("keydown", e => {
 
   if (e.key === "Escape") {
     const input = feedSearchInput()
-    if (!input || document.activeElement !== input) return
-    input.value = ""
-    input.dispatchEvent(new Event("input", {bubbles: true}))
-    input.blur()
+    if (input && document.activeElement === input) {
+      input.value = ""
+      input.dispatchEvent(new Event("input", {bubbles: true}))
+      input.blur()
+      return
+    }
+
+    // On a post, Escape walks back to the timeline — unless a text
+    // field holds the key (the reply box's mention popup handles its
+    // own Escape on the way past) or that popup is still rendered.
+    if (!window.location.pathname.startsWith("/post/")) return
+    const t = e.target
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return
+    if (document.getElementById("mention-list")) return
+    const back = document.getElementById("post-back")
+    if (!back) return
+    e.preventDefault()
+    back.click()
   }
 })
 
@@ -497,7 +568,7 @@ document.addEventListener("auxclick", e => {
 
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions, SkyScroll}
+  hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions, SkyScroll, FeedScroll}
 })
 
 // Show progress bar on live navigation and form submits

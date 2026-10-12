@@ -12,9 +12,10 @@ defmodule HighWireWeb.PostLiveTest do
     # of an empty column
     assert html =~ "In this thread"
     assert html =~ "Nothing loaded"
-    # and a way back — the thread page has no content header, so the
-    # rail carries the explicit nav row
-    assert html =~ ~s(title="Back to the timeline")
+    # and a way back — the content column's own control, which Escape
+    # follows too (the rail row alone is a small target)
+    assert html =~ ~s(id="post-back")
+    assert html =~ "← Timeline"
   end
 
   test "the reply box opens the mention popup", %{conn: conn} do

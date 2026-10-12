@@ -280,6 +280,10 @@ defmodule HighWireWeb.PostLive do
       </Nav.rail>
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-6">
+          <.link id="post-back" navigate="/" title="Back to the timeline" class="btn mb-4">
+            ← Timeline
+          </.link>
+
           <div :if={@not_found} class="text-sm text-dim">
             That message is not in the local store — it may not have replicated yet.
           </div>

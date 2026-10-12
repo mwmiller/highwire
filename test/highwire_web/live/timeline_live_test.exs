@@ -9,6 +9,9 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "Timeline"
     # sidecar disabled under test
     assert html =~ "SSB engine disabled"
+    # the feed scroller carries the scroll-position hook, so returning
+    # from a post lands where the reader left off
+    assert html =~ ~s(id="feed-scroller" phx-hook="FeedScroll")
   end
 
   test "tab activity events toggle timeline polling", %{conn: conn} do
