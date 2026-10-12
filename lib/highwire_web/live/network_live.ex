@@ -400,6 +400,7 @@ defmodule HighWireWeb.NetworkLive do
                 type="button"
                 class="pref-choice"
                 phx-click="dialer-toggle"
+                aria-pressed={to_string(@report != nil and @report["enabled"])}
                 disabled={@dialing or @report == nil}
               >
                 {if @report != nil and @report["enabled"],

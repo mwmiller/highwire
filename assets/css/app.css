@@ -224,9 +224,10 @@
   }
 }
 
-/* Settings: preference choice buttons (theme, font size, font family).
-   aria-pressed is the source of truth — the Prefs hook sets it, so the
-   state survives LiveView patches. */
+/* Preference choice buttons (theme, font size, font family, network
+   dialer). aria-pressed is the source of truth — the Prefs hook sets it,
+   so the state survives LiveView patches; plain actions that share the
+   chip (no attribute at all) rest like an unpressed choice. */
 @layer components {
   .pref-choice {
     @apply rounded border px-4 py-2 text-sm transition-colors;
@@ -234,7 +235,7 @@
   .pref-choice[aria-pressed="true"] {
     @apply border-focus bg-active font-medium text-paper;
   }
-  .pref-choice[aria-pressed="false"] {
+  .pref-choice:not([aria-pressed="true"]) {
     @apply border-edge text-dim hover:bg-raised hover:text-paper;
   }
 }

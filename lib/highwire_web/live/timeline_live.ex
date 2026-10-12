@@ -612,7 +612,7 @@ defmodule HighWireWeb.TimelineLive do
                       data-mention-option
                       data-id={id}
                       data-name={name}
-                      class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-panel2"
+                      class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-raised"
                     >
                       <Avatar.avatar
                         id={id}

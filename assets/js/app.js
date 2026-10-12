@@ -300,10 +300,10 @@ let Mentions = {
     opts.forEach((o, i) => {
       if (i === idx) {
         o.setAttribute("data-active", "")
-        o.classList.add("bg-panel2")
+        o.classList.add("bg-active")
       } else {
         o.removeAttribute("data-active")
-        o.classList.remove("bg-panel2")
+        o.classList.remove("bg-active")
       }
     })
   },
