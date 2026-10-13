@@ -171,6 +171,13 @@ defmodule HighWireWeb.SettingsLive do
             </h2>
 
             <p class="mt-3 text-sm text-dim">HighWire {@version} · MIT</p>
+
+            <.link
+              navigate="/diagnostics"
+              class="mt-3 inline-block text-sm text-accent underline-offset-2 hover:underline"
+            >
+              Diagnostics →
+            </.link>
           </div>
         </div>
       </section>

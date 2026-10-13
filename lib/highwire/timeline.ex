@@ -94,6 +94,25 @@ defmodule HighWire.Timeline do
   end
 
   @doc """
+  Live health probes for the diagnostics page — one per engine view the
+  timeline depends on, plus the sidecar and the local window.
+
+  Runs in the timeline process so it reuses the authenticated client, and
+  returns a map with a `:probes` list (one entry per check, `:ok` /
+  `:warn` / `:fail` with a human note) and top-level `:sidecar` and
+  `:window` summaries. `:disabled` when the timeline is not running.
+  """
+  @spec diagnose() :: map()
+  def diagnose do
+    case Process.whereis(__MODULE__) do
+      nil -> %{sidecar: Sidecar.status(), window: nil, probes: []}
+      pid -> GenServer.call(pid, :diagnose, 15_000)
+    end
+  catch
+    :exit, _ -> %{sidecar: Sidecar.status(), window: nil, probes: []}
+  end
+
+  @doc """
   The sidecar's connection report — live peer ids, dialer state,
   candidate counts, recent dial attempts — merged with the
   `admin.peers.known` address book under `"knownPeers"`, or nil when
@@ -402,6 +421,10 @@ defmodule HighWire.Timeline do
   @impl true
   def handle_call(:snapshot, _from, state) do
     {:reply, {state.status, state.messages}, state}
+  end
+
+  def handle_call(:diagnose, _from, state) do
+    {:reply, run_probes(state), state}
   end
 
   def handle_call(:network, _from, state) do
@@ -1043,6 +1066,117 @@ defmodule HighWire.Timeline do
     |> Enum.filter(fn m -> m["key"] != root_key and content(m)["root"] == root_key end)
     |> Enum.sort_by(fn m -> m["value"]["timestamp"] || 0 end)
   end
+
+  # Live health probes for /diagnostics. Each engine view the timeline
+  # depends on gets one check: a bounded call against the shared client,
+  # scored :ok / :warn / :fail with a human note. Kept deliberately cheap
+  # (small limits, short timeouts) so a click on the page never stalls.
+  defp run_probes(state) do
+    client = state.client
+    alive? = is_pid(client) and Process.alive?(client)
+    per = Keyword.get(Sidecar.config(), :messages_per_feed, 10)
+
+    %{
+      sidecar: Sidecar.status(),
+      window: window_summary(state, per),
+      probes: [
+        stream_count_probe(alive?, client, state.self_id, per),
+        get_shape_probe(alive?, client, state.self_id),
+        roots_count_probe(alive?, client, "publicFeed", %{}, false),
+        roots_count_probe(alive?, client, "participatingFeed", %{}, false)
+      ]
+    }
+  end
+
+  # createHistoryStream — the per-feed window the whole timeline rests on.
+  # Zero items on the account's own feed means nothing is reaching us.
+  defp stream_count_probe(false, _client, _self_id, _per),
+    do: probe(:createHistoryStream, :fail, "no engine client")
+
+  defp stream_count_probe(true, client, self_id, per) when is_binary(self_id) do
+    case count_stream(client, ["createHistoryStream"], [%{"id" => self_id, "limit" => per}]) do
+      {:ok, n} when n > 0 -> probe(:createHistoryStream, :ok, "#{n} items on own feed")
+      {:ok, 0} -> probe(:createHistoryStream, :fail, "0 items on own feed")
+      {:error, reason} -> probe(:createHistoryStream, :fail, "error: #{inspect(reason)}")
+    end
+  end
+
+  defp stream_count_probe(true, _client, nil, _per),
+    do: probe(:createHistoryStream, :warn, "no self id yet")
+
+  # get — the unbox path. A real message must come back author-shaped; the
+  # engine's error-map leak (%{"name" => "Error", …}) is the regression the
+  # client now rejects, so this check confirms the fix holds end to end.
+  defp get_shape_probe(false, _client, _self_id),
+    do: probe(:get, :fail, "no engine client")
+
+  defp get_shape_probe(true, client, self_id) when is_binary(self_id) do
+    case Client.call(client, ["get"], [%{"id" => self_id, "private" => true}], 5_000) do
+      {:ok, %{"author" => _}} ->
+        probe(:get, :ok, "returns a real message")
+
+      {:ok, %{"name" => "Error"} = err} ->
+        probe(:get, :warn, "engine leaked an error map: #{err["message"]}")
+
+      {:ok, _other} ->
+        probe(:get, :warn, "unexpected get shape")
+
+      {:error, reason} ->
+        probe(:get, :fail, "error: #{inspect(reason)}")
+    end
+  catch
+    _, reason -> probe(:get, :fail, "error: #{inspect(reason)}")
+  end
+
+  defp get_shape_probe(true, _client, nil), do: probe(:get, :warn, "no self id yet")
+
+  # patchwork.<Feed>.roots — the paged tabs. Zero rows while the engine is
+  # up usually means the view index is broken, not that the feed is empty.
+  defp roots_count_probe(false, _client, _feed, _extra, _private?),
+    do: probe(:feed, :fail, "no engine client")
+
+  defp roots_count_probe(true, client, feed, extra, private?) do
+    props = Map.merge(%{"limit" => 1, "reverse" => true}, extra)
+
+    case count_stream(client, ["patchwork", feed, "roots"], [props], private?) do
+      {:ok, n} when n > 0 -> probe(String.to_atom(feed), :ok, "#{n} roots")
+      {:ok, 0} -> probe(String.to_atom(feed), :fail, "0 roots")
+      {:error, reason} -> probe(String.to_atom(feed), :fail, "error: #{inspect(reason)}")
+    end
+  end
+
+  # Drain a source stream, counting items until :done / error / timeout.
+  # Mirrors fetch_thread's mailbox drain but tallies instead of collecting.
+  defp count_stream(client, name, args, private? \\ false) do
+    case Client.stream(client, name, args, self()) do
+      {:ok, ref} -> {:ok, drain_count(ref, 0, private?)}
+      {:error, reason} -> {:error, reason}
+    end
+  catch
+    _, reason -> {:error, reason}
+  end
+
+  defp drain_count(ref, n, private?) do
+    receive do
+      {Client, ^ref, {:item, %{"sync" => true}}} -> n
+      {Client, ^ref, {:item, _}} -> drain_count(ref, n + 1, private?)
+      {Client, ^ref, :done} -> n
+      {Client, ^ref, {:error, _}} -> n
+    after
+      8_000 -> n
+    end
+  end
+
+  defp window_summary(state, per) do
+    %{
+      per_feed: per,
+      follows: length(state.follows),
+      acc: length(state.acc),
+      messages: length(state.messages.messages)
+    }
+  end
+
+  defp probe(name, level, note), do: %{name: name, level: level, note: note}
 
   @impl true
   def handle_info(:connect, state) do
