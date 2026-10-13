@@ -1,6 +1,6 @@
 [package]
 name = "highwire"
-version = "1.1.3"
+version = "1.1.4"
 description = "Native shell for the HighWire feed"
 authors = ["HighWire"]
 edition = "2021"

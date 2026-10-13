@@ -4,7 +4,7 @@ defmodule HighWire.MixProject do
   def project do
     [
       app: :highwire,
-      version: "1.1.3",
+      version: "1.1.4",
       elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
