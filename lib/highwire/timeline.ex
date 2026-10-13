@@ -563,6 +563,18 @@ defmodule HighWire.Timeline do
     end
   end
 
+  # The boot paths open windows directly, not through a reload request.
+  # Arm the heartbeat from there too, without schedule_reload/2's
+  # active?/1 gate — that set is about live connections, and boot has
+  # none yet; a stalled boot still needs a timer to retry on.
+  defp ensure_heartbeat(state) do
+    if state.reload_timer == nil do
+      %{state | reload_timer: Process.send_after(self(), {:reload, state.gen}, 13_000)}
+    else
+      state
+    end
+  end
+
   # A fresh publish (or any reason to refresh right now): drop the queued
   # poll and re-open the feeds on the next tick instead of waiting.
   defp reload_soon(state) do
@@ -1084,7 +1096,10 @@ defmodule HighWire.Timeline do
       if follows == [] do
         {:noreply, finalize(state)}
       else
-        {:noreply, open_windows(%{state | status: :loading})}
+        # Arm the heartbeat here: this path opens windows directly, not
+        # through a reload request, and a boot that stalls must still
+        # have a timer to retry on.
+        {:noreply, state |> Map.put(:status, :loading) |> open_windows() |> ensure_heartbeat()}
       end
     else
       {:noreply, reload_soon(state)}
@@ -1103,7 +1118,7 @@ defmodule HighWire.Timeline do
       if state.follows == [] do
         {:noreply, finalize(state)}
       else
-        {:noreply, open_windows(%{state | status: :loading})}
+        {:noreply, state |> Map.put(:status, :loading) |> open_windows() |> ensure_heartbeat()}
       end
     end
   end
@@ -1274,20 +1289,49 @@ defmodule HighWire.Timeline do
   end
 
   # -- flow --------------------------------------------------------------
-
   defp maybe_reload(state) do
     cond do
-      state.status != :ok -> state
+      # Boot stalled mid-sequence: a stream that failed to open (or a
+      # contacts snapshot that never arrived) would otherwise leave the
+      # app on an empty payload forever, with no reload request armed to
+      # recover it. Re-open the window once follows are known; re-dial
+      # when the contacts stream never primed.
+      stalled_boot?(state) ->
+        resume_boot(state)
+
       # Streams are already in flight: come back shortly rather than
       # losing this request to the 13s heartbeat. A publish's refresh
       # must not wait out a full tick to show up on screen.
-      map_size(state.pending) != 0 -> schedule_reload(state, 400)
-      state.follows == [] -> state
-      not (is_pid(state.client) and Process.alive?(state.client)) -> state
-      true -> open_windows(%{state | done_count: 0})
+
+      map_size(state.pending) != 0 ->
+        schedule_reload(state, 400)
+
+      state.status != :ok ->
+        state
+
+      state.follows == [] ->
+        state
+
+      not (is_pid(state.client) and Process.alive?(state.client)) ->
+        state
+
+      true ->
+        open_windows(%{state | done_count: 0})
     end
   catch
     _, _ -> state
+  end
+
+  defp stalled_boot?(state) do
+    state.status == :loading and map_size(state.pending) == 0
+  end
+
+  defp resume_boot(state) do
+    if state.contacts_primed? do
+      open_windows(%{state | done_count: 0})
+    else
+      reset_connection(state)
+    end
   end
 
   defp connect(state) do
@@ -2119,17 +2163,21 @@ defmodule HighWire.Timeline do
   end
 
   defp reconnect(state) do
+    {:noreply, reset_connection(state)}
+  end
+
+  defp reset_connection(state) do
     schedule_reconnect()
 
-    {:noreply,
-     %{
-       state
-       | status: :connecting,
-         client: nil,
-         contacts_ref: nil,
-         pending: %{},
-         blob_ls_ref: nil
-     }}
+    %{
+      state
+      | status: :connecting,
+        client: nil,
+        contacts_ref: nil,
+        contacts_primed?: false,
+        pending: %{},
+        blob_ls_ref: nil
+    }
   end
 
   defp schedule_reconnect, do: Process.send_after(self(), :connect, 3_000)

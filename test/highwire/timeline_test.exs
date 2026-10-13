@@ -749,6 +749,58 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  describe "boot recovery" do
+    test "a stalled boot re-opens the window on the heartbeat" do
+      {:ok, client} = FakeClient.start_link(nil)
+
+      st = %{
+        status: :loading,
+        contacts_primed?: true,
+        client: client,
+        self_id: "@me=.ed25519",
+        follows: ["@a=.ed25519"],
+        pending: %{},
+        acc: [],
+        done_count: 0,
+        gen: 2,
+        reload_timer: nil,
+        active: %{self() => make_ref()},
+        contact_ref: nil,
+        contact_msgs: [],
+        contact_buf: [],
+        drain_client: nil,
+        last_drain_at: nil,
+        messages: %{messages: []}
+      }
+
+      {:noreply, st2} = Timeline.handle_info({:reload, 2}, st)
+
+      assert map_size(st2.pending) > 0
+      assert st2.acc == []
+      assert st2.reload_timer != nil
+    end
+
+    test "a boot that never primed contacts re-dials instead" do
+      st = %{
+        status: :loading,
+        contacts_primed?: false,
+        client: self(),
+        pending: %{},
+        gen: 5,
+        reload_timer: nil,
+        active: %{self() => make_ref()},
+        contacts_ref: nil,
+        blob_ls_ref: nil
+      }
+
+      {:noreply, st2} = Timeline.handle_info({:reload, 5}, st)
+
+      assert st2.status == :connecting
+      assert st2.contacts_primed? == false
+      assert_receive :connect, 4_000
+    end
+  end
+
   describe "ensure_profiles" do
     defp ensure_state(overrides) do
       Map.merge(
