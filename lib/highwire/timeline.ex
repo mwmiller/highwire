@@ -1012,17 +1012,8 @@ defmodule HighWire.Timeline do
   # the one way to read a private message outside silkpurse's views.
   defp get_msg(client, key) do
     if is_pid(client) and Process.alive?(client) do
-      case Client.call(client, ["get"], [%{"id" => key, "private" => true}], 5_000) do
-        {:ok, value} when is_map(value) ->
-          if message_value?(value) do
-            %{"key" => key, "value" => value, "timestamp" => value["timestamp"] || 0}
-          else
-            nil
-          end
-
-        _ ->
-          nil
-      end
+      Client.call(client, ["get"], [%{"id" => key, "private" => true}], 5_000)
+      |> get_value(key)
     else
       nil
     end
@@ -1030,13 +1021,20 @@ defmodule HighWire.Timeline do
     _, _ -> nil
   end
 
-  # The engine answers a missing message with {:ok, %{"message" =>
-  # "message not found", "name" => "Error", "stack" => "_"}} — an error
-  # map, not a message. Accepting it made fetch_msg/2 stop at a ghost for
-  # every key and never fall back to the window, so resolve_root could not
-  # walk up to the thread root (content(ghost)["root"] is nil) and a
-  # midlevel URL rendered only its own children instead of the full thread.
-  # Only a real message value (author or content) counts.
+  # A missing message comes back as {:ok, %{"message" => "message not
+  # found", "name" => "Error", "stack" => "_"}} — an error map, not a
+  # message. Accepting it made fetch_msg/2 stop at a ghost for every key
+  # and never fall back to the window, so resolve_root could not walk up
+  # to the thread root and a midlevel URL rendered only its own children
+  # instead of the full thread. Only a real message value counts.
+  defp get_value({:ok, value}, key) when is_map(value) do
+    if message_value?(value) do
+      %{"key" => key, "value" => value, "timestamp" => value["timestamp"] || 0}
+    end
+  end
+
+  defp get_value(_reply, _key), do: nil
+
   defp message_value?(value),
     do: is_binary(value["author"]) or is_map(value["content"])
 
