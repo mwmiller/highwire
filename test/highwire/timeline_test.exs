@@ -42,6 +42,10 @@ defmodule HighWire.TimelineTest do
       {:reply, {:ok, make_ref()}, {[{name, args} | streams], calls}}
     end
 
+    def handle_call({:call, ["publish"], args}, _from, {streams, calls}) do
+      {:reply, {:ok, %{"key" => "%published=.sha256"}}, {streams, [{["publish"], args} | calls]}}
+    end
+
     def handle_call({:call, name, args}, _from, {streams, calls}) do
       {:reply, {:ok, nil}, {streams, [{name, args} | calls]}}
     end
@@ -651,6 +655,73 @@ defmodule HighWire.TimelineTest do
       # root view — the feed row's own click target — gains the forks;
       # the stranger's thread never leaks in
       assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
+    end
+
+    test "the raw acc window feeds the page even when the payload copy is empty" do
+      st = %{client: nil, acc: fork_window(), messages: %{messages: []}}
+      {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
+
+      assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
+    end
+
+    test "an empty acc mid-reload falls back to the last payload's window" do
+      st = %{client: nil, acc: [], messages: %{messages: fork_window()}}
+      {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
+
+      assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
+    end
+  end
+
+  describe "publish ack injects into the window" do
+    test "a published vote lands in the payload before any reload" do
+      {:ok, client} = FakeClient.start_link(nil)
+
+      st = %{
+        client: client,
+        self_id: "@me=.ed25519",
+        follows: [],
+        contact_msgs: [],
+        acc: [],
+        messages: %{profiles: %{}},
+        blob_rev: 0,
+        status: :ok,
+        gen: 0,
+        reload_timer: nil,
+        pending: %{},
+        done_count: 0,
+        profile_fetching?: false
+      }
+
+      vote = Timeline.vote_content("%t=.sha256", 1)
+
+      {:reply, {:ok, key}, st2} =
+        Timeline.handle_call({:publish_content, vote}, {self(), make_ref()}, st)
+
+      assert is_binary(key)
+      assert [%{"key" => ^key} | _] = st2.acc
+      assert st2.messages.my_likes == ["%t=.sha256"]
+      assert st2.messages.like_counts == %{"%t=.sha256" => 1}
+      assert st2.messages.likes_by == %{"%t=.sha256" => ["@me=.ed25519"]}
+    end
+  end
+
+  describe "reload retry" do
+    test "a reload request while streams are in flight comes back shortly" do
+      st = %{
+        gen: 3,
+        reload_timer: nil,
+        active: %{self() => make_ref()},
+        pending: %{make_ref() => :feed},
+        status: :ok,
+        follows: ["@a=.ed25519"],
+        client: self()
+      }
+
+      {:noreply, st2} = Timeline.handle_info({:reload, 3}, st)
+
+      assert st2.reload_timer != nil
+      # not the 13s heartbeat — the short retry
+      assert_receive {:reload, 3}, 1_500
     end
   end
 

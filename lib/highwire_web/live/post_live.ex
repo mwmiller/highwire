@@ -137,19 +137,22 @@ defmodule HighWireWeb.PostLive do
   end
 
   def handle_event("like", %{"key" => key}, socket) do
-    result =
-      if key in socket.assigns.my_likes do
-        Timeline.unlike(key)
-      else
-        Timeline.like(key)
-      end
+    # The pill fills on the click itself; the publish's ack rebroadcast
+    # reconciles it with the store, and a refusal re-reads the thread so
+    # a failed like never lingers on screen.
+    liked? = key in socket.assigns.my_likes
+    socket = assign(socket, Heart.toggle(socket.assigns, key))
+
+    result = if liked?, do: Timeline.unlike(key), else: Timeline.like(key)
 
     case result do
-      {:error, reason} -> Logger.warning("post: like publish failed: #{inspect(reason)}")
-      _ok -> :ok
-    end
+      {:error, reason} ->
+        Logger.warning("post: like publish failed: #{inspect(reason)}")
+        {:noreply, load(socket, socket.assigns.raw_key)}
 
-    {:noreply, socket}
+      _ok ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("mention-query", %{"q" => q}, socket) when is_binary(q) do

@@ -443,7 +443,7 @@ defmodule HighWire.Timeline do
          true <- Process.alive?(state.client) do
       case Client.call(state.client, ["publish"], [content], 10_000) do
         {:ok, %{"key" => key}} when is_binary(key) ->
-          {:reply, {:ok, key}, reload_soon(state)}
+          {:reply, {:ok, key}, state |> inject_published(key, content) |> reload_soon()}
 
         {:ok, _other} ->
           {:reply, {:ok, nil}, reload_soon(state)}
@@ -457,6 +457,27 @@ defmodule HighWire.Timeline do
   catch
     kind, reason -> {:reply, {:error, {kind, reason}}, state}
   end
+
+  # The publish ack beats any reload: fold the message into the window
+  # and rebroadcast now, so a like's heart fills on the publish
+  # round-trip instead of waiting out a window re-stream — and so a
+  # reload whose streams opened before the publish landed cannot
+  # finalize without it. The reload that follows rebuilds from the
+  # store and agrees.
+  defp inject_published(%{self_id: id} = state, key, content) when is_binary(id) do
+    envelope = %{
+      "key" => key,
+      "value" => %{
+        "author" => id,
+        "timestamp" => System.system_time(:millisecond),
+        "content" => content
+      }
+    }
+
+    finalize(%{state | acc: [envelope | state.acc]})
+  end
+
+  defp inject_published(state, _key, _content), do: state
 
   @impl true
   def handle_cast({:set_activity, pid, true}, state) do
@@ -812,11 +833,23 @@ defmodule HighWire.Timeline do
   # reply. A URL may point at a reply whose root is elsewhere; one level
   # of `content.root` resolution lands on the thread root.
   defp fetch_post(state, key) do
-    window = Map.get(state.messages, :messages, [])
+    window = post_window(state)
 
     case resolve_root(state, window, key) do
       nil -> nil
       root -> %{root: root, replies: post_replies(state, window, root["key"])}
+    end
+  end
+
+  # The page reads the raw per-feed window, which the payload's
+  # take(2000) never truncated — a deep thread whose older replies fell
+  # outside the payload copy still seats them from here. While a reload
+  # is rebuilding acc (it resets to []) the last payload's window is the
+  # freshest copy there is; the reload that follows replaces it anyway.
+  defp post_window(state) do
+    case Map.get(state, :acc, []) do
+      [] -> Map.get(state.messages, :messages, [])
+      acc -> acc
     end
   end
 
@@ -1240,7 +1273,10 @@ defmodule HighWire.Timeline do
   defp maybe_reload(state) do
     cond do
       state.status != :ok -> state
-      map_size(state.pending) != 0 -> state
+      # Streams are already in flight: come back shortly rather than
+      # losing this request to the 13s heartbeat. A publish's refresh
+      # must not wait out a full tick to show up on screen.
+      map_size(state.pending) != 0 -> schedule_reload(state, 400)
       state.follows == [] -> state
       not (is_pid(state.client) and Process.alive?(state.client)) -> state
       true -> open_windows(%{state | done_count: 0})

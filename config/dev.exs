@@ -77,4 +77,4 @@ config :highwire, :ssb,
   erlbutt_rel: System.get_env("ERLBUTT_REL", "/Users/matt/git/erlbutt/_build/default/rel/ssb"),
   net_id: "1KHLiKZvAvjbY1ziZEHMXawbCEIM6qwjCDm3VYRan/s=",
   max_feeds: 400,
-  messages_per_feed: 10
+  messages_per_feed: 50

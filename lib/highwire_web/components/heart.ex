@@ -43,4 +43,44 @@ defmodule HighWireWeb.Components.Heart do
     </button>
     """
   end
+
+  @doc """
+  The local half of a like click: the three assigns that draw the pill
+  and its counts, flipped as the click lands so the heart fills without
+  waiting on a payload broadcast. The publish's rebroadcast — or the
+  revert on a refusal — reconciles it with the store.
+  """
+  def toggle(assigns, key) do
+    liked? = key in assigns.my_likes
+
+    [
+      my_likes: toggle_membership(assigns.my_likes, key, liked?),
+      like_counts: toggle_count(assigns.like_counts, key, liked?),
+      likes_by: toggle_authors(assigns.likes_by, key, assigns[:self_id], liked?)
+    ]
+  end
+
+  defp toggle_membership(list, key, true), do: List.delete(list, key)
+  defp toggle_membership(list, key, false), do: [key | list]
+
+  defp toggle_count(counts, key, false), do: Map.update(counts, key, 1, &(&1 + 1))
+
+  defp toggle_count(counts, key, true) do
+    case Map.get(counts, key, 0) do
+      n when n <= 1 -> Map.delete(counts, key)
+      n -> Map.put(counts, key, n - 1)
+    end
+  end
+
+  defp toggle_authors(by, _key, self, _liked?) when not is_binary(self), do: by
+
+  defp toggle_authors(by, key, self, true) do
+    case Map.get(by, key, []) |> List.delete(self) do
+      [] -> Map.delete(by, key)
+      authors -> Map.put(by, key, authors)
+    end
+  end
+
+  defp toggle_authors(by, key, self, false),
+    do: Map.update(by, key, [self], &[self | List.delete(&1, self)])
 end

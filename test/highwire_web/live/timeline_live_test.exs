@@ -204,6 +204,28 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ "aria-pressed="
     end
 
+    test "a refused like on the feed falls back to the last payload", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%root-unliked.sha256", "@alice:.ed25519", now - 5_000, %{
+          "type" => "post",
+          "text" => "the thing"
+        })
+      ]
+
+      payload = feed_payload(msgs, now: now, self_id: "@me=.ed25519")
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, payload)
+      assert html =~ ~s(aria-label="Like")
+
+      # the engine is off under test, so the publish refuses: the
+      # optimistic fill must not linger on a row the store never saw
+      html = element(view, ~s(button[aria-label="Like"])) |> render_click()
+      refute html =~ ~s(aria-pressed="true")
+    end
+
     test "channel subscriptions say which channel and which way", %{conn: conn} do
       now = 1_700_000_000_000
 

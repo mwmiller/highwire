@@ -211,19 +211,22 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   def handle_event("like", %{"key" => key}, socket) do
-    result =
-      if key in socket.assigns.my_likes do
-        Timeline.unlike(key)
-      else
-        Timeline.like(key)
-      end
+    # Same local-first flip as the post page: the heart fills on the
+    # click, and a refusal falls back to the last real payload.
+    liked? = key in socket.assigns.my_likes
+    socket = assign(socket, Heart.toggle(socket.assigns, key))
+
+    result = if liked?, do: Timeline.unlike(key), else: Timeline.like(key)
 
     case result do
-      {:error, reason} -> Logger.warning("timeline: like publish failed: #{inspect(reason)}")
-      _ok -> :ok
-    end
+      {:error, reason} ->
+        Logger.warning("timeline: like publish failed: #{inspect(reason)}")
+        {_status, payload} = Timeline.snapshot()
+        {:noreply, assign_payload(socket, payload)}
 
-    {:noreply, socket}
+      _ok ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("view", %{"v" => v}, socket) do

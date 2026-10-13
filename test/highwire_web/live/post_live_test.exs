@@ -3,6 +3,8 @@ defmodule HighWireWeb.PostLiveTest do
 
   import Phoenix.LiveViewTest
 
+  alias HighWireWeb.Components.Heart
+
   test "unknown key renders the not-found message", %{conn: conn} do
     key = Base.url_encode64("%missing=.sha256", padding: false)
     {:ok, _view, html} = live(conn, "/post/" <> key)
@@ -76,5 +78,64 @@ defmodule HighWireWeb.PostLiveTest do
 
     html = render_click(view, "mention-close", %{})
     refute html =~ ~s(id="mention-list")
+  end
+
+  test "Heart.toggle flips the like state locally" do
+    assigns = %{my_likes: [], like_counts: %{}, likes_by: %{}, self_id: "@me=.ed25519"}
+    key = "%k=.sha256"
+
+    on = Heart.toggle(assigns, key)
+    assert on[:my_likes] == [key]
+    assert on[:like_counts] == %{key => 1}
+    assert on[:likes_by] == %{key => ["@me=.ed25519"]}
+
+    off = Heart.toggle(Map.merge(assigns, Map.new(on)), key)
+    assert off[:my_likes] == []
+    assert off[:like_counts] == %{}
+    assert off[:likes_by] == %{}
+  end
+
+  test "a refused like leaves no phantom heart behind", %{conn: conn} do
+    alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    key = Base.url_encode64("%like-root=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    root = %{
+      "key" => "%like-root=.sha256",
+      "value" => %{
+        "author" => alice,
+        "timestamp" => 1_700_000_000_000,
+        "content" => %{"type" => "post", "text" => "the thing"}
+      }
+    }
+
+    :sys.replace_state(view.pid, fn state ->
+      socket = state.socket
+      assigns = socket.assigns
+
+      changed =
+        assigns.__changed__
+        |> Map.put(:root, assigns.root)
+        |> Map.put(:not_found, assigns.not_found)
+
+      assigns =
+        assigns
+        |> Map.put(:root, root)
+        |> Map.put(:not_found, false)
+        |> Map.put(:__changed__, changed)
+
+      %{state | socket: %{socket | assigns: assigns}}
+    end)
+
+    send(view.pid, :nudge)
+    html = render(view)
+    assert html =~ ~s(aria-label="Like")
+
+    # the engine is off under test, so the publish refuses: the
+    # optimistic fill must revert to the re-read thread instead of
+    # lingering as a heart that never happened
+    html = element(view, ~s(button[aria-label="Like"])) |> render_click()
+    refute html =~ ~s(aria-pressed="true")
+    assert html =~ "not in the local store"
   end
 end

@@ -22,5 +22,8 @@ if config_env() == :prod do
     erlbutt_rel: engine,
     net_id: "1KHLiKZvAvjbY1ziZEHMXawbCEIM6qwjCDm3VYRan/s=",
     max_feeds: 400,
-    messages_per_feed: 10
+    # Per-author window depth. The thread page seats reply-to-a-reply
+    # forks from this window, so it must reach past an active author's
+    # recent traffic — 10 dropped replies a handful of days old.
+    messages_per_feed: 50
 end
