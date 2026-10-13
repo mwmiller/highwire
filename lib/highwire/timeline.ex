@@ -843,13 +843,18 @@ defmodule HighWire.Timeline do
 
   # The page reads the raw per-feed window, which the payload's
   # take(2000) never truncated — a deep thread whose older replies fell
-  # outside the payload copy still seats them from here. While a reload
-  # is rebuilding acc (it resets to []) the last payload's window is the
-  # freshest copy there is; the reload that follows replaces it anyway.
+  # outside the payload copy still seats them from here. Only a SETTLED
+  # acc counts: open_windows resets acc to [] and refills it across the
+  # whole stream — on every heartbeat reload — so a mid-reload acc is a
+  # partial window, and replies computed from it come out missing
+  # parents and forks alike. Until finalize lands, the last payload's
+  # window is the freshest complete copy there is.
   defp post_window(state) do
+    settled? = map_size(Map.get(state, :pending, %{})) == 0
+
     case Map.get(state, :acc, []) do
-      [] -> Map.get(state.messages, :messages, [])
-      acc -> acc
+      acc when settled? and acc != [] -> acc
+      _ -> Map.get(state.messages, :messages, [])
     end
   end
 

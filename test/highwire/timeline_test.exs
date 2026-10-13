@@ -657,15 +657,39 @@ defmodule HighWire.TimelineTest do
       assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
     end
 
-    test "the raw acc window feeds the page even when the payload copy is empty" do
-      st = %{client: nil, acc: fork_window(), messages: %{messages: []}}
+    test "the settled acc window feeds the page even when the payload copy is empty" do
+      st = %{client: nil, acc: fork_window(), pending: %{}, messages: %{messages: []}}
       {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
 
       assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
     end
 
     test "an empty acc mid-reload falls back to the last payload's window" do
-      st = %{client: nil, acc: [], messages: %{messages: fork_window()}}
+      st = %{
+        client: nil,
+        acc: [],
+        pending: %{make_ref() => :feed},
+        messages: %{messages: fork_window()}
+      }
+
+      {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
+
+      assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
+    end
+
+    test "a half-streamed acc mid-reload also falls back to the last payload's window" do
+      # open_windows resets acc and refills it across the stream; a page
+      # opened mid-reload must not seat replies from that partial window
+      # when the previous payload still holds a complete one
+      partial = fork_window() |> Enum.reject(&(&1["key"] == "%s=.sha256"))
+
+      st = %{
+        client: nil,
+        acc: partial,
+        pending: %{make_ref() => :feed},
+        messages: %{messages: fork_window()}
+      }
+
       {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
 
       assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
