@@ -24,6 +24,8 @@ if config_env() == :prod do
     max_feeds: 400,
     # Per-author window depth. The thread page seats reply-to-a-reply
     # forks from this window, so it must reach past an active author's
-    # recent traffic — 10 dropped replies a handful of days old.
-    messages_per_feed: 50
+    # recent traffic — 10 dropped the known forks (author-feed rank
+    # 11-16). 20 seats them while keeping first paint light; deeper
+    # history rides the cursor pages.
+    messages_per_feed: 20
 end
