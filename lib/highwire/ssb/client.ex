@@ -190,13 +190,36 @@ defmodule HighWire.SSB.Client do
     send(sub, {__MODULE__, req, {:item, body}})
   end
 
-  defp decode_reply(body) do
+  # Muxrpc encodes errors two ways. A structured error — `{"error": …}`
+  # — is caught here. But some "not found" / failure replies arrive as a
+  # *successful* body that is itself an error-shaped map: erlang's
+  # `{error, {name, message, stack}}` marshalled as
+  # `{"name": "Error", "message": …, "stack": …}`. Treating those as data
+  # (the old behavior) let a missing message render as a truthy ghost and
+  # starve every downstream fallback. Recognize that shape and fail it
+  # too, so every call site sees a uniform `{:error, …}` instead of
+  # having to re-learn the engine's two failure encodings.
+  @doc false
+  def decode_reply(body) do
     case Jason.decode(body) do
       {:ok, %{"error" => err}} -> {:error, err}
-      {:ok, decoded} -> {:ok, decoded}
+      {:ok, decoded} -> classify_body(decoded)
       {:error, _} -> {:ok, body}
     end
   end
+
+  defp classify_body(%{"name" => name, "message" => message} = err)
+       when is_binary(name) and is_binary(message) do
+    if error_name?(name), do: {:error, err}, else: {:ok, err}
+  end
+
+  defp classify_body(decoded), do: {:ok, decoded}
+
+  # An erlang-style error term marshalled by erlbutt uses the name "Error".
+  # A real data map never pairs a top-level "name" with a "message" string,
+  # so this only fires on the failure shape we have hard evidence for.
+  defp error_name?("Error"), do: true
+  defp error_name?(_), do: false
 
   defp send_packet(state, packet) do
     {bytes, nonce} = BoxStream.box(packet, state.enc_nonce, state.enc_key)
