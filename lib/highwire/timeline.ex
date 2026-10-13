@@ -1014,7 +1014,11 @@ defmodule HighWire.Timeline do
     if is_pid(client) and Process.alive?(client) do
       case Client.call(client, ["get"], [%{"id" => key, "private" => true}], 5_000) do
         {:ok, value} when is_map(value) ->
-          %{"key" => key, "value" => value, "timestamp" => value["timestamp"] || 0}
+          if message_value?(value) do
+            %{"key" => key, "value" => value, "timestamp" => value["timestamp"] || 0}
+          else
+            nil
+          end
 
         _ ->
           nil
@@ -1025,6 +1029,16 @@ defmodule HighWire.Timeline do
   catch
     _, _ -> nil
   end
+
+  # The engine answers a missing message with {:ok, %{"message" =>
+  # "message not found", "name" => "Error", "stack" => "_"}} — an error
+  # map, not a message. Accepting it made fetch_msg/2 stop at a ghost for
+  # every key and never fall back to the window, so resolve_root could not
+  # walk up to the thread root (content(ghost)["root"] is nil) and a
+  # midlevel URL rendered only its own children instead of the full thread.
+  # Only a real message value (author or content) counts.
+  defp message_value?(value),
+    do: is_binary(value["author"]) or is_map(value["content"])
 
   defp window_replies(window, root_key) do
     window

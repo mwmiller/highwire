@@ -543,6 +543,30 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  # Answers Client.call/4-shaped get requests with the shape a missing
+  # message actually comes back as: an :ok error map, not a message.
+  defmodule GhostClient do
+    @moduledoc false
+    use GenServer
+
+    def start_link(_), do: GenServer.start_link(__MODULE__, nil)
+
+    @impl true
+    def init(_), do: {:ok, nil}
+
+    @impl true
+    def handle_call({:call, _name, _args}, _from, state) do
+      {:reply, {:ok, %{"message" => "message not found", "name" => "Error", "stack" => "_"}},
+       state}
+    end
+
+    # The broken thread.sorted answers with an empty stream — no items,
+    # no sentinel. The page must fall back to the window either way.
+    def handle_call({:stream, _name, _args, _subscriber}, _from, state) do
+      {:reply, {:ok, make_ref()}, state}
+    end
+  end
+
   # Answers patchwork.thread.sorted by replaying canned items to the
   # subscriber before the stream call even returns — the drain finds
   # them waiting in its mailbox — and serves everything else a
@@ -625,6 +649,20 @@ defmodule HighWire.TimelineTest do
 
     test "the window fallback seats forks after the message they answer" do
       post = post_call(nil, "%f=.sha256")
+
+      assert post.root["key"] == "%r=.sha256"
+      assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
+    end
+
+    test "a get that answers with the engine's error map still resolves the thread" do
+      # A missing message comes back {:ok, %{"message" => "message not
+      # found", "name" => "Error", ...}} — an error map, not a message.
+      # Treating it as a message stopped the root walk at that ghost, so
+      # opening a midlevel link rendered it (empty) with no thread above
+      # it even though every ancestor sat in the window. The window copy
+      # must win over the ghost.
+      client = start_supervised!({GhostClient, nil})
+      post = post_call(client, "%f=.sha256")
 
       assert post.root["key"] == "%r=.sha256"
       assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
