@@ -7,14 +7,16 @@ defmodule HighWireWeb.NetworkLive do
   profile switcher, moved here from Settings so all network concerns
   live on one page), the dialer's live state with enable/disable and
   dial-now controls, the constellation — a radial map of the same
-  facts the lists below state (self at center, rings outward for live
-  peers, mid-dial attempts, and the address book) — who we are
-  connected to right now (one row per live peer, Patchwork's
-  "connected pubs" affordance generalised to any peer), the
-  `conn.json` address book, and the recent dial attempts with their
-  backoff state. Dialing and book peers are selectable in either the
-  sky or their list row — both highlight together and the row scrolls
-  into view; live peers are named links to their profiles.
+  facts the lists below state (self at centre, rings outward as a
+  ladder of connectivity: a session open now, an address whose last
+  handshake worked, one we are backing off after, and an address-book
+  entry with no result at all) — who we are connected to right now
+  (one row per live peer, Patchwork's "connected pubs" affordance
+  generalised to any peer), the `conn.json` address book, and the
+  recent dial attempts with their backoff state. Dialing and book
+  peers are selectable in either the sky or their list row — both
+  highlight together and the row scrolls into view; live peers are
+  named links to their profiles.
 
   Node positions hash from each peer's address, so the sky holds
   still between polls — membership changes add or remove a node
@@ -47,6 +49,23 @@ defmodule HighWireWeb.NetworkLive do
   # never buries the dial attempts below it.
   @known_peers_cap 50
 
+  # The sky's centre and its four rings as {rx, ry} pairs. The rings are
+  # ellipses rather than circles because the panel is wide: a circle
+  # sized to the height strands a third of the width unused. They are a
+  # ladder of connectivity, innermost best, and a peer is drawn on the
+  # innermost rung it qualifies for — improving moves a dot inward
+  # rather than adding a second one.
+  @sky_cx 320
+  @sky_cy 175
+  @sky_rings [live: {86, 54}, ok: {136, 86}, retry: {188, 119}, book: {240, 152}]
+
+  # How far recency nudges a node along its ring — ±10% inward for a
+  # peer the cache just heard of, outward for one it has gone quiet on.
+  @sky_spread 0.1
+
+  # Peer metadata older than this reads as fully cold.
+  @sky_recency_span :timer.hours(24)
+
   @impl true
   def mount(_params, _session, socket) do
     tick_timer =
@@ -67,6 +86,7 @@ defmodule HighWireWeb.NetworkLive do
      |> assign(:status, status)
      |> assign(:profiles, Map.get(payload, :profiles, %{}))
      |> assign(:report, Timeline.network())
+     |> assign(:peer_meta, Timeline.peer_meta())
      |> assign(active: true, tick_timer: tick_timer)
      |> assign(selected: nil)
      |> assign(
@@ -95,6 +115,7 @@ defmodule HighWireWeb.NetworkLive do
         |> assign(:status, status)
         |> assign(:profiles, Map.get(payload, :profiles, %{}))
         |> assign(:report, Timeline.network())
+        |> assign(:peer_meta, Timeline.peer_meta())
 
       {:noreply, assign(socket, :tick_timer, Process.send_after(self(), :tick, 7_000))}
     else
@@ -455,15 +476,22 @@ defmodule HighWireWeb.NetworkLive do
 
           <div :if={@report != nil} class="mt-8 space-y-8">
             <%!-- The sky: the lists below stated in one glance. Self at
-            center, rings outward — live peers (tethered, green, named),
-            mid-dial attempts (amber), address book (plain). Positions
-            hash from each peer's address, so nodes hold still between
-            polls. Dialing and book peers are clickable; live peers are
-            links to their profiles. --%>
+            centre, rings outward as a ladder of connectivity — a muxrpc
+            session open now (tethered, green, named), an address whose
+            last handshake worked (blue), one we are backing off after
+            (amber, an open ring: still trying, so it carries less ink
+            than a state we have attained), an address-book entry with
+            no result at all (plain). A peer sits on the innermost rung
+            it qualifies for, so improving moves a dot inward rather
+            than adding a second one.
+            Positions hash from the feed id, so nodes hold still between
+            polls and while climbing; each drifts outward and fades when
+            we have gone quiet on it. Dialing and book peers are
+            clickable; live peers are links to their profiles. --%>
             <section>
               <h2
                 id="constellation"
-                class="text-sm font-semibold uppercase tracking-wider text-faint"
+                class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint"
               >
                 Constellation
               </h2>
@@ -471,128 +499,54 @@ defmodule HighWireWeb.NetworkLive do
               <div class="mt-3 rounded border border-edge bg-panel py-2">
                 <svg
                   viewBox="0 0 640 350"
+                  preserveAspectRatio="xMidYMid meet"
                   class="w-full"
                   role="img"
                   aria-label={sky_summary(@report)}
                 >
-                  <circle
-                    :for={radius <- [70, 120, 170]}
-                    cx={320}
-                    cy={160}
-                    r={radius}
+                  <%!-- The rings are ellipses carrying the panel's own
+                  proportion, so the sky fills the width it is given
+                  instead of stranding a small circle in a wide box. --%>
+                  <ellipse
+                    :for={{rx, ry} <- sky_rings()}
+                    cx={sky_cx()}
+                    cy={sky_cy()}
+                    rx={rx}
+                    ry={ry}
                     class="fill-none stroke-edge-soft"
                   />
 
-                  <%!-- Live peers: solid tethers to self. --%>
-                  <line
-                    :for={{id, x, y} <- sky_nodes(@report["connections"] || [], 70, 320, 160, & &1)}
-                    x1={320}
-                    y1={160}
-                    x2={x}
-                    y2={y}
-                    class="stroke-edge-soft"
-                  />
+                  <%!-- Each ring names itself and counts what it
+                  carries, so the picture says what it is without a
+                  trip down to the key. --%>
+                  <text
+                    :for={{ring, label, n} <- sky_ring_labels(@report)}
+                    x={sky_cx()}
+                    y={sky_cy() - sky_ring_ry(ring) - 7}
+                    text-anchor="middle"
+                    class="fill-faint text-[9px] sky-label"
+                  >
+                    {label} · {n}
+                  </text>
 
-                  <%!-- Mid-dial attempts: amber tethers. --%>
+                  <%!-- Outermost rung first, so the connected ring is
+                  never buried under the ones describing peers we are
+                  not talking to. Only a socket we actually hold earns a
+                  tether; the rest are places on a ladder. --%>
                   <line
-                    :for={
-                      {try_row, x, y} <-
-                        sky_nodes(@report["dialTry"] || [], 120, 320, 160, & &1["addr"])
-                    }
-                    x1={320}
-                    y1={160}
-                    x2={x}
-                    y2={y}
-                    class="stroke-warn"
-                  />
-
-                  <%!-- Autoconnect book peers: dashed tethers; manual
-                  entries float untethered. --%>
-                  <line
-                    :for={
-                      {peer, x, y} <-
-                        sky_nodes(
-                          Enum.take(@report["knownPeers"] || [], @known_peers_cap),
-                          170,
-                          320,
-                          160,
-                          & &1["address"]
-                        )
-                    }
+                    :for={{peer, recency, x, y} <- sky_stage(@report, @peer_meta, :book)}
                     :if={peer["autoconnect"]}
-                    x1={320}
-                    y1={160}
+                    x1={sky_cx()}
+                    y1={sky_cy()}
                     x2={x}
                     y2={y}
+                    opacity={sky_dim(recency, 0.5)}
                     stroke-dasharray="2 4"
                     class="stroke-edge-soft"
                   />
 
-                  <circle cx={320} cy={160} r={5} class="fill-accent" />
-                  <text x={320} y={177} text-anchor="middle" class="fill-faint text-[9px]">
-                    you
-                  </text>
-
-                  <%!-- The live ring keys on the gossip pulse: a real
-                  connection change replaces the group, replaying the
-                  nodes' flare exactly when the sky's membership moved.
-                  --%>
-                  <g key={@gossip.pulse}>
-                    <g :for={
-                      {id, x, y} <-
-                        sky_nodes(@report["connections"] || [], 70, 320, 160, & &1)
-                    }>
-                      <.link navigate={profile_href(id)} class="hover:opacity-80">
-                        <circle cx={x} cy={y} r={5} class="fill-dot-ok gossip-node-flare" />
-                        <text x={x} y={y + 14} text-anchor="middle" class="fill-faint text-[9px]">
-                          {sky_short_name(id, @profiles)}
-                        </text>
-                        <title>{display_name(id, @profiles)}</title>
-                      </.link>
-                    </g>
-                  </g>
-
                   <g
-                    :for={
-                      {try_row, x, y} <-
-                        sky_nodes(@report["dialTry"] || [], 120, 320, 160, & &1["addr"])
-                    }
-                    key={"dial-" <> (try_row["addr"] || "")}
-                  >
-                    <circle
-                      :if={@selected == try_row["addr"]}
-                      cx={x}
-                      cy={y}
-                      r={9}
-                      class="fill-none stroke-accent"
-                    />
-                    <circle cx={x} cy={y} r={4} class="fill-warn" />
-                    <circle
-                      cx={x}
-                      cy={y}
-                      r={12}
-                      class="cursor-pointer fill-transparent"
-                      phx-click="sky-select"
-                      phx-value-addr={try_row["addr"]}
-                    />
-                    <title>
-                      {"dialing " <>
-                        (try_row["addr"] || "") <>
-                        " — #{try_row["attempts"] || 0} fails"}
-                    </title>
-                  </g>
-
-                  <g
-                    :for={
-                      {peer, x, y} <-
-                        sky_nodes(
-                          Enum.take(@report["knownPeers"] || [], @known_peers_cap),
-                          170,
-                          320,
-                          160,
-                          & &1["address"]
-                        )
-                    }
+                    :for={{peer, recency, x, y} <- sky_stage(@report, @peer_meta, :book)}
                     key={"known-" <> (peer["address"] || "")}
                   >
                     <circle
@@ -602,7 +556,13 @@ defmodule HighWireWeb.NetworkLive do
                       r={9}
                       class="fill-none stroke-accent"
                     />
-                    <circle cx={x} cy={y} r={3.5} class="fill-dot" />
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r={3.5}
+                      opacity={sky_opacity(recency)}
+                      class="fill-dot"
+                    />
                     <circle
                       cx={x}
                       cy={y}
@@ -612,6 +572,136 @@ defmodule HighWireWeb.NetworkLive do
                       phx-value-addr={peer["address"]}
                     />
                     <title>{peer["address"]}</title>
+                  </g>
+
+                  <g
+                    :for={{try_row, recency, x, y} <- sky_stage(@report, @peer_meta, :retry)}
+                    key={"retry-" <> (try_row["addr"] || "")}
+                  >
+                    <circle
+                      :if={@selected == try_row["addr"]}
+                      cx={x}
+                      cy={y}
+                      r={9}
+                      class="fill-none stroke-accent"
+                    />
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r={4}
+                      stroke-width={1.25}
+                      opacity={sky_opacity(recency)}
+                      class="fill-none stroke-warn"
+                    />
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r={12}
+                      class="cursor-pointer fill-transparent"
+                      phx-click="sky-select"
+                      phx-value-addr={try_row["addr"]}
+                    />
+                    <title>
+                      {"retrying " <>
+                        (try_row["addr"] || "") <>
+                        " — #{try_row["attempts"] || 0} fails, backing off"}
+                    </title>
+                  </g>
+
+                  <g
+                    :for={{try_row, recency, x, y} <- sky_stage(@report, @peer_meta, :ok)}
+                    key={"ok-" <> (try_row["addr"] || "")}
+                  >
+                    <circle
+                      :if={@selected == try_row["addr"]}
+                      cx={x}
+                      cy={y}
+                      r={9}
+                      class="fill-none stroke-accent"
+                    />
+                    <circle cx={x} cy={y} r={4.5} opacity={sky_opacity(recency)} class="fill-info" />
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r={12}
+                      class="cursor-pointer fill-transparent"
+                      phx-click="sky-select"
+                      phx-value-addr={try_row["addr"]}
+                    />
+                    <title>
+                      {"reached " <>
+                        (try_row["addr"] || "") <>
+                        " — last handshake completed"}
+                    </title>
+                  </g>
+
+                  <line
+                    :for={{_id, recency, x, y} <- sky_stage(@report, @peer_meta, :live)}
+                    x1={sky_cx()}
+                    y1={sky_cy()}
+                    x2={x}
+                    y2={y}
+                    opacity={sky_opacity(recency)}
+                    class="stroke-edge-soft"
+                  />
+
+                  <%!-- Self reads as a target rather than another
+                  peer: a ring around the dot, so the centre never
+                  competes with the blue of a peer we merely reached. --%>
+                  <circle
+                    cx={sky_cx()}
+                    cy={sky_cy()}
+                    r={10}
+                    fill="none"
+                    stroke="var(--accent)"
+                    stroke-width="1"
+                    opacity="0.45"
+                  />
+                  <circle cx={sky_cx()} cy={sky_cy()} r={4.5} class="fill-accent" />
+                  <text
+                    x={sky_cx()}
+                    y={sky_cy() + 17}
+                    text-anchor="middle"
+                    class="fill-faint text-[9px] sky-label"
+                  >
+                    you
+                  </text>
+
+                  <%!-- The live ring keys on the gossip pulse: a real
+                  connection change replaces the group, replaying the
+                  nodes' flare exactly when the sky's membership moved.
+                  --%>
+                  <g key={@gossip.pulse}>
+                    <g :for={{id, recency, x, y} <- sky_stage(@report, @peer_meta, :live)}>
+                      <.link navigate={profile_href(id)} class="group">
+                        <%!-- A generous hit ring: the name is the reward
+                        for hovering, so the thing you hover must not be
+                        a five-pixel dot. --%>
+                        <circle cx={x} cy={y} r={12} pointer-events="all" class="fill-none" />
+                        <circle
+                          cx={x}
+                          cy={y}
+                          r={5}
+                          opacity={sky_opacity(recency)}
+                          class="fill-dot-ok gossip-node-flare"
+                        />
+                        <%!-- Names surface under the pointer rather than
+                        all at once: four labels landing on one another
+                        carried less information than four green dots.
+                        pointer-events keeps a hidden name from acting
+                        as an invisible hover zone. --%>
+                        <text
+                          x={sky_label(x, y).x}
+                          y={sky_label(x, y).y}
+                          text-anchor={sky_label(x, y).anchor}
+                          pointer-events="none"
+                          class="fill-sub text-[10px] sky-label opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100"
+                        >
+                          {sky_short_name(id, @profiles)}
+                        </text>
+                        <title>{display_name(id, @profiles)}</title>
+                      </.link>
+                    </g>
                   </g>
                 </svg>
 
@@ -624,13 +714,45 @@ defmodule HighWireWeb.NetworkLive do
 
                 <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 px-3 pb-1 text-[11px] text-faint">
                   <span class="flex items-center gap-1.5">
-                    <span class="h-1.5 w-1.5 rounded-full bg-dot-ok"></span>live
+                    <span class="flex h-2.5 w-2.5 items-center justify-center rounded-full border border-accent">
+                      <span class="h-1 w-1 rounded-full bg-accent"></span>
+                    </span>
+                    you
+                  </span>
+                  <span
+                    class="flex items-center gap-1.5"
+                    title="a muxrpc session is open right now"
+                  >
+                    <span class="h-1.5 w-1.5 rounded-full bg-dot-ok"></span>connected
+                  </span>
+                  <span
+                    class="flex items-center gap-1.5"
+                    title="the last dial completed a handshake, but no session is open now"
+                  >
+                    <span class="h-1.5 w-1.5 rounded-full bg-dot-info"></span>reached
+                  </span>
+                  <span
+                    class="flex items-center gap-1.5"
+                    title="handshakes are failing and the dialer is backing off — still trying, so drawn as an open ring"
+                  >
+                    <span class="h-2 w-2 rounded-full border border-warn"></span>retrying
+                  </span>
+                  <span
+                    class="flex items-center gap-1.5"
+                    title="in the address book, never successfully dialed"
+                  >
+                    <span class="h-1.5 w-1.5 rounded-full bg-dot"></span>never tried
                   </span>
                   <span class="flex items-center gap-1.5">
-                    <span class="h-1.5 w-1.5 rounded-full bg-warn"></span>dialing
+                    <span class="h-2.5 w-2.5 rounded-full border border-accent"></span>selected
                   </span>
                   <span class="flex items-center gap-1.5">
-                    <span class="h-1.5 w-1.5 rounded-full bg-dot"></span>address book
+                    <span class="block h-0 w-4 border-t-2 border-dashed border-edge"></span>
+                    <span>autoconnect</span>
+                  </span>
+                  <span class="text-sub">hover a peer for its name</span>
+                  <span class="text-sub">
+                    faded and rimmed peers are ones we have gone quiet on
                   </span>
                 </div>
               </div>
@@ -645,7 +767,7 @@ defmodule HighWireWeb.NetworkLive do
             <section>
               <h2
                 id="connections"
-                class="text-sm font-semibold uppercase tracking-wider text-faint"
+                class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint"
               >
                 Connections · {connections_header(@report)}
               </h2>
@@ -680,7 +802,10 @@ defmodule HighWireWeb.NetworkLive do
             </section>
 
             <section>
-              <h2 id="known-peers" class="text-sm font-semibold uppercase tracking-wider text-faint">
+              <h2
+                id="known-peers"
+                class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint"
+              >
                 Known peers · {length(@report["knownPeers"] || [])}
               </h2>
 
@@ -729,9 +854,19 @@ defmodule HighWireWeb.NetworkLive do
             </section>
 
             <section>
-              <h2 id="dials" class="text-sm font-semibold uppercase tracking-wider text-faint">
+              <h2
+                id="dials"
+                class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint"
+              >
                 Recent dials
               </h2>
+
+              <p class="mt-2 text-sm text-dim">
+                Addresses the dialer has tried {dial_window(@report["dialTry"])} — not
+                open sockets. <span class="text-ok">ok</span> means the last handshake
+                completed; <span class="text-warn">fails</span> counts consecutive
+                failures.
+              </p>
 
               <div :if={@report["dialTry"] in [nil, []]} class="mt-2 text-sm text-dim">
                 {if @report["partial"],
@@ -843,6 +978,27 @@ defmodule HighWireWeb.NetworkLive do
     report["blobRev"] || 0
   end
 
+  # The ledger keeps a month of rows, but what this report shows is only
+  # as wide as its oldest row; say that, rather than a window that is
+  # sometimes a day and sometimes thirty.
+  defp dial_window(rows) when is_list(rows) do
+    times = for row <- rows, is_number(row["lastTry"]), do: row["lastTry"]
+
+    case times do
+      [] ->
+        "at some point"
+
+      _ ->
+        days = (Enum.max(times) - Enum.min(times)) / 86_400_000
+
+        if days >= 1,
+          do: "over the last #{days |> round() |> max(1)} days",
+          else: "in the last day"
+    end
+  end
+
+  defp dial_window(_rows), do: "at some point"
+
   # One contiguous "1 / 8" header line — a fallback report may carry no
   # cap, and the span used to render would split the text across lines.
   defp connections_header(report) do
@@ -856,20 +1012,174 @@ defmodule HighWireWeb.NetworkLive do
 
   # -- constellation ------------------------------------------------------
 
-  # Items placed around a ring at an angle hashed from their identity
-  # key — stable across renders, so membership changes add or remove a
-  # node without reshuffling its neighbours. A single-item ring lands
-  # wherever its hash says; no item ever moves on its own.
-  defp sky_nodes(list, radius, cx, cy, key_fun)
-       when is_list(list) and is_function(key_fun, 1) do
+  defp sky_cx, do: @sky_cx
+
+  defp sky_cy, do: @sky_cy
+
+  defp sky_rings, do: Keyword.values(@sky_rings)
+
+  # The four rings, named at their apex and carrying what they hold —
+  # so the picture explains itself without a trip down to the key.
+  defp sky_ring_labels(report) do
+    [
+      {:live, "connected", length(report["connections"] || [])},
+      {:ok, "reached", length(sky_ok_rows(report))},
+      {:retry, "retrying", length(sky_retry_rows(report))},
+      {:book, "never tried", length(sky_book_rows(report))}
+    ]
+  end
+
+  defp sky_ring_ry(ring) when is_atom(ring), do: elem(Keyword.fetch!(@sky_rings, ring), 1)
+
+  # -- the connectivity ladder ------------------------------------------
+  #
+  # dialTry is a retry ledger, not a list of open sockets: its rows live
+  # for a month, and a row with attempts = 0 is an address whose last
+  # handshake succeeded. Each peer is drawn once, on the innermost rung
+  # it qualifies for, so a socket we hold now is never also a retry and a
+  # peer with dial history is never also a bare address-book entry.
+  # Returns {item, recency, x, y}.
+  defp sky_stage(report, peer_meta, :live) do
+    sky_nodes(report["connections"] || [], :live, & &1, &sky_recency(&1, peer_meta))
+  end
+
+  defp sky_stage(report, _peer_meta, :ok) do
+    sky_nodes(sky_ok_rows(report), :ok, &sky_key(&1["addr"]), &sky_recency_at(&1["lastTry"]))
+  end
+
+  defp sky_stage(report, _peer_meta, :retry) do
+    sky_nodes(
+      sky_retry_rows(report),
+      :retry,
+      &sky_key(&1["addr"]),
+      &sky_recency_at(&1["lastTry"])
+    )
+  end
+
+  defp sky_stage(report, peer_meta, :book) do
+    sky_nodes(
+      sky_book_rows(report),
+      :book,
+      &sky_key(&1["address"]),
+      &sky_recency(sky_key(&1["address"]), peer_meta)
+    )
+  end
+
+  # Dial rows, most recent first, one per peer, minus anyone already on
+  # the connected ring.
+  defp sky_dial_rows(report) do
+    connected = MapSet.new(report["connections"] || [])
+
+    (report["dialTry"] || [])
+    |> Enum.map(fn row -> {sky_key(row["addr"]), row} end)
+    |> Enum.reject(fn {key, _row} -> is_nil(key) or MapSet.member?(connected, key) end)
+    |> Enum.sort_by(fn {_key, row} -> -(row["lastTry"] || 0) end)
+    |> Enum.uniq_by(fn {key, _row} -> key end)
+    |> Enum.map(fn {_key, row} -> row end)
+  end
+
+  defp sky_ok_rows(report), do: Enum.filter(sky_dial_rows(report), &(&1["attempts"] in [0, nil]))
+
+  defp sky_retry_rows(report),
+    do: Enum.filter(sky_dial_rows(report), &(is_integer(&1["attempts"]) and &1["attempts"] > 0))
+
+  # Address book entries the dialer has no result for at all.
+  defp sky_book_rows(report) do
+    connected = MapSet.new(report["connections"] || [])
+    tried = MapSet.new(Enum.map(sky_dial_rows(report), &sky_key(&1["addr"])))
+
+    (report["knownPeers"] || [])
+    |> Enum.take(@known_peers_cap)
+    |> Enum.map(fn peer -> {sky_key(peer["address"]), peer} end)
+    |> Enum.reject(fn {key, _peer} ->
+      is_nil(key) or MapSet.member?(connected, key) or MapSet.member?(tried, key)
+    end)
+    |> Enum.uniq_by(fn {key, _peer} -> key end)
+    |> Enum.map(fn {_key, peer} -> peer end)
+  end
+
+  # "net:host:port~shs:KEY" → "@KEY.ed25519" — the same id the
+  # connections list uses, which is what lets the ladder tell one peer
+  # from another across its three naming schemes. Nil when the address
+  # carries no shs key, so such a row is dropped rather than stacked on
+  # every other nameless one.
+  defp sky_key(addr) when is_binary(addr) do
+    case String.split(addr, "~shs:", parts: 2) do
+      [_pre, key] when byte_size(key) > 0 -> "@" <> key <> ".ed25519"
+      _ -> nil
+    end
+  end
+
+  defp sky_key(_addr), do: nil
+
+  # Items placed around an elliptical ring at an angle hashed from their
+  # identity key — stable across renders, so membership changes add or
+  # remove a node without reshuffling its neighbours. The hash is the
+  # feed id, so a peer keeps its angle as it climbs the ladder inward.
+  # Each node also slides along its radius by recency: a fresh one sits
+  # inside the guide ring, a cold or unknown one drifts past it.
+  defp sky_nodes(list, ring, key_fun, recency_fun)
+       when is_list(list) and is_function(key_fun, 1) and is_function(recency_fun, 1) do
+    {rx, ry} = Keyword.fetch!(@sky_rings, ring)
+
     Enum.map(list, fn item ->
       key = key_fun.(item) || ""
       angle = 2 * :math.pi() * :erlang.phash2(key, 10_000) / 10_000
-      {item, cx + radius * :math.cos(angle), cy + radius * :math.sin(angle)}
+      recency = recency_fun.(item)
+      spread = 1.0 + @sky_spread * (0.5 - recency) * 2
+
+      {item, recency, @sky_cx + rx * spread * :math.cos(angle),
+       @sky_cy + ry * spread * :math.sin(angle)}
     end)
   end
 
-  defp sky_nodes(_list, _radius, _cx, _cy, _key_fun), do: []
+  defp sky_nodes(_list, _ring, _key_fun, _recency_fun), do: []
+
+  # 1.0 when something was noted a moment ago, sliding to 0.0 a day
+  # later — and straight to 0.0 when there is no clock to read.
+  defp sky_recency_at(t) when is_number(t),
+    do: min(1.0, max(0.0, 1.0 - (System.system_time(:millisecond) - t) / @sky_recency_span))
+
+  defp sky_recency_at(_t), do: 0.0
+
+  # The peer cache is keyed by feed id and says nothing about an address,
+  # so only the connected ring reads it; the ledger carries its own clock.
+  # The cache is a UI hint; the engine's report stays authoritative.
+  defp sky_recency(key, meta) when is_binary(key) do
+    hint = HighWire.PeersMeta.get(meta, key)
+    sky_recency_at(hint["last_activity_at"] || hint["last_connected_at"] || hint["last_seen_at"])
+  end
+
+  defp sky_recency(_key, _meta), do: 0.0
+
+  # Cold metadata fades a node back toward the panel, so the bright core
+  # of the sky is the part the engine actually knows something about.
+  defp sky_opacity(recency) when is_number(recency),
+    do: Float.round(0.35 + 0.65 * recency, 2)
+
+  # A tether that is context rather than content — an autoconnect line,
+  # say — carries a fraction of the ink, so a crowded book cannot shout
+  # over the peers that are actually connected.
+  defp sky_dim(recency, weight) when is_number(recency),
+    do: Float.round(sky_opacity(recency) * weight, 2)
+
+  # A name goes outward from the middle, past its own node, so live
+  # labels never pile up on "you" or on each other. Nodes sitting nearly
+  # above or below the centre have no outward side to favour, so they
+  # stay centred and flip upward when they are in the top half.
+  defp sky_label(x, y) do
+    dx = x - @sky_cx
+    dy = y - @sky_cy
+    dist = :math.sqrt(dx * dx + dy * dy)
+
+    cond do
+      dist < 1.0 -> %{x: x, y: y + 15, anchor: "middle"}
+      dx >= dist * 0.35 -> %{x: x + 13, y: y + 3, anchor: "start"}
+      dx <= -dist * 0.35 -> %{x: x - 13, y: y + 3, anchor: "end"}
+      dy < 0 -> %{x: x, y: y - 11, anchor: "middle"}
+      true -> %{x: x, y: y + 15, anchor: "middle"}
+    end
+  end
 
   defp sky_short_name(id, profiles) do
     name = display_name(id, profiles)
@@ -877,9 +1187,10 @@ defmodule HighWireWeb.NetworkLive do
   end
 
   defp sky_summary(report) do
-    "Constellation: #{length(report["connections"] || [])} live, " <>
-      "#{length(report["dialTry"] || [])} mid-dial, " <>
-      "#{length(report["knownPeers"] || [])} known"
+    "Constellation: #{length(report["connections"] || [])} connected, " <>
+      "#{length(sky_ok_rows(report))} reached, " <>
+      "#{length(sky_retry_rows(report))} retrying, " <>
+      "#{length(sky_book_rows(report))} never tried"
   end
 
   defp sky_empty?(report) do

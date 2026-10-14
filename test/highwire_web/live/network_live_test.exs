@@ -202,7 +202,7 @@ defmodule HighWireWeb.NetworkLiveTest do
       assert html =~ "Quiet sky"
     end
 
-    test "the constellation draws live, dialing, and known peers as rings" do
+    test "the constellation draws each rung of the connectivity ladder" do
       html =
         render_with_report(%{
           "enabled" => true,
@@ -211,19 +211,25 @@ defmodule HighWireWeb.NetworkLiveTest do
             %{"address" => "net:192.168.1.10:8008~shs:bobkey", "autoconnect" => true}
           ],
           "dialTry" => [
-            %{"addr" => "net:10.0.0.2:8008~shs:carolkey", "attempts" => 3, "lastTry" => 1}
+            %{"addr" => "net:10.0.0.2:8008~shs:carolkey", "attempts" => 3, "lastTry" => 1},
+            %{"addr" => "net:10.0.0.3:8008~shs:davekey", "attempts" => 0, "lastTry" => 1}
           ]
         })
 
       assert html =~ ~s(id="constellation")
-      # Live nodes are the only ones tethered to the center and the
-      # only green ones; dialing is amber; the address book is plain.
-      assert html =~ "fill-dot-ok"
-      assert html =~ "fill-warn"
+      # Only a session we hold is green; an address whose last handshake
+      # worked is blue; one we are backing off after is an amber open
+      # ring — still trying, so it carries less ink than a state we
+      # have attained; a book entry with no dial record is plain grey.
+      assert html =~ ~s(class="fill-dot-ok gossip-node-flare")
+      assert html =~ ~s(class="fill-info")
+      assert html =~ ~s(class="fill-none stroke-warn")
+      assert html =~ ~s(r="3.5")
       assert html =~ "10.0.0.2:8008"
+      assert html =~ "10.0.0.3:8008"
       assert html =~ "192.168.1.10:8008"
       assert html =~ ~s(role="img")
-      assert html =~ "1 live"
+      assert html =~ "1 connected"
       refute html =~ "Quiet sky"
     end
 
@@ -254,7 +260,7 @@ defmodule HighWireWeb.NetworkLiveTest do
       assert MapSet.size(sky.(peers)) == 5
     end
 
-    test "the constellation tethers autoconnect peers and mid-dials" do
+    test "the constellation tethers autoconnect peers and leaves retries on the ring" do
       html =
         render_with_report(%{
           "enabled" => true,
@@ -268,14 +274,94 @@ defmodule HighWireWeb.NetworkLiveTest do
           ]
         })
 
-      # Amber tether for the mid-dial, dashed for autoconnect, and the
-      # manual entry floats untethered — its address appears only as a
-      # node tooltip and a list row.
-      assert html =~ "stroke-warn"
+      # A peer we are not connected to gets a mark on its rung and no
+      # spoke — a sky full of spokes read as fireworks, not as a
+      # network. Retrying peers are open rings, not solid dots, and
+      # nothing is tethered out to them. Autoconnect entries in the
+      # address book stay dashed; the manual entry floats untethered,
+      # its address appearing only as a node tooltip and a list row.
+      assert html =~ ~s(class="fill-none stroke-warn")
+      refute html =~ ~r/<line[^>]*stroke-warn/s
       assert html =~ "stroke-dasharray"
       assert html =~ "10.9.9.9:8008"
       # Hit targets exist behind the clickable nodes.
       assert html =~ ~s(phx-click="sky-select")
+    end
+
+    test "a peer is drawn once, on the innermost rung it qualifies for" do
+      carol = "net:10.0.0.2:8008~shs:carolkey"
+      dave = "net:10.0.0.9:8008~shs:davekey"
+
+      html =
+        render_with_report(%{
+          "enabled" => true,
+          "connections" => ["@carolkey.ed25519"],
+          "dialTry" => [
+            %{"addr" => carol, "attempts" => 0, "lastTry" => 1},
+            %{"addr" => dave, "attempts" => 4, "lastTry" => 1}
+          ],
+          "knownPeers" => [
+            %{"address" => carol, "autoconnect" => true},
+            %{"address" => dave, "autoconnect" => true}
+          ]
+        })
+
+      # Carol holds a session, so her dial row and her address-book row
+      # are both dropped rather than drawn again on an outer rung; Dave
+      # has dial history, so his book entry is dropped too.
+      assert html =~ "connected · 1"
+      assert html =~ "reached · 0"
+      assert html =~ "retrying · 1"
+      assert html =~ "never tried · 0"
+
+      refute html =~ ~s(key="ok-#{carol}")
+      refute html =~ ~s(key="known-#{carol}")
+      refute html =~ ~s(key="known-#{dave}")
+      assert html =~ ~s(key="retry-#{dave}")
+    end
+
+    test "the same identity at two addresses is still one dot" do
+      html =
+        render_with_report(%{
+          "enabled" => true,
+          "connections" => [],
+          "knownPeers" => [],
+          "dialTry" => [
+            %{"addr" => "net:10.0.0.2:8008~shs:carolkey", "attempts" => 1, "lastTry" => 2},
+            %{"addr" => "net:10.0.0.7:8008~shs:carolkey", "attempts" => 5, "lastTry" => 1}
+          ]
+        })
+
+      # The most recently tried address wins; the other is the same peer.
+      assert html =~ "retrying · 1"
+      assert html =~ ~s(key="retry-net:10.0.0.2:8008~shs:carolkey")
+      refute html =~ ~s(key="retry-net:10.0.0.7:8008~shs:carolkey")
+    end
+
+    test "each ring names itself and counts what it carries" do
+      html =
+        render_with_report(%{
+          "enabled" => true,
+          "connections" => ["peer-one"],
+          "dialTry" => [
+            %{"addr" => "net:10.0.0.2:8008~shs:carolkey", "attempts" => 2, "lastTry" => 1}
+          ],
+          "knownPeers" => []
+        })
+
+      assert html =~ "connected · 1"
+      assert html =~ "reached · 0"
+      assert html =~ "retrying · 1"
+      assert html =~ "never tried · 0"
+    end
+
+    test "peer names are drawn but hidden until the node is hovered" do
+      html = render_with_report(%{"enabled" => true, "connections" => ["peer-one"]})
+
+      assert html =~ "sky-label"
+      assert html =~ "opacity-0 transition-opacity group-hover:opacity-100"
+      # A hidden name must not become an invisible hover zone.
+      assert html =~ ~s(pointer-events="none")
     end
 
     test "selecting a peer highlights its node ring and list row" do
@@ -353,8 +439,6 @@ defmodule HighWireWeb.NetworkLiveTest do
   end
 
   # The assigns a connected session would hold, with only the report
-  # varying per test.
-  # The assigns a connected session would hold, with only the report
   # swapped out — render_with_report/2 lets a test override anything.
   defp render_with_report(report, overrides \\ %{}) do
     assigns =
@@ -365,6 +449,7 @@ defmodule HighWireWeb.NetworkLiveTest do
           status: :ok,
           profiles: %{},
           report: report,
+          peer_meta: %{},
           active: true,
           tick_timer: nil,
           network: :dev,

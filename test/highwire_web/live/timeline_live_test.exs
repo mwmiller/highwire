@@ -351,6 +351,50 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert notify(view, feed_payload([bob, alice], now: now)) =~ "gossip-arrived"
   end
 
+  test "rows are named after their message, not their position", %{conn: conn} do
+    now = 1_700_000_000_000
+    token = fn key -> Base.url_encode64(key, padding: false) end
+
+    older =
+      ssb_msg("%older-a.sha256", "@alice.ed25519", now - 50_000, %{
+        "type" => "post",
+        "text" => "older words"
+      })
+
+    newer =
+      ssb_msg("%newer-b.sha256", "@bob.ed25519", now - 1_000, %{
+        "type" => "post",
+        "text" => "newer words"
+      })
+
+    {:ok, view, _html} = live(conn, "/")
+    html = notify(view, feed_payload([older, newer], now: now))
+
+    id_a = "row-" <> token.("%older-a.sha256")
+    id_b = "row-" <> token.("%newer-b.sha256")
+
+    assert html =~ ~s(id="#{id_a}")
+    assert html =~ ~s(id="#{id_b}")
+    # the article inside the row carries the same token, not the index
+    assert html =~ ~s(id="post-#{token.("%older-a.sha256")}")
+    assert pos(html, id_b) < pos(html, id_a)
+
+    # A newer post lands on top. Both rows shift down a place — the
+    # position changes, the identity is the message, so the id must not.
+    newest =
+      ssb_msg("%newest-c.sha256", "@carol.ed25519", now, %{
+        "type" => "post",
+        "text" => "brand new words"
+      })
+
+    html = notify(view, feed_payload([newest, older, newer], now: now))
+
+    assert html =~ ~s(id="#{id_a}")
+    assert html =~ ~s(id="#{id_b}")
+    assert pos(html, "row-" <> token.("%newest-c.sha256")) < pos(html, id_b)
+    assert pos(html, id_b) < pos(html, id_a)
+  end
+
   test "the rail badge counts gossip connections", %{conn: conn} do
     {:ok, view, html} = live(conn, "/")
     refute html =~ "· 3"
@@ -358,6 +402,22 @@ defmodule HighWireWeb.TimelineLiveTest do
     send(view.pid, {HighWire.Timeline, :gossip, %{connected: 3}})
 
     assert render(view) =~ "· 3"
+  end
+
+  test "network activity lights the header indicator and then retires", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    # Timeline is one shared process, so pin the window rather than
+    # assuming a fresh one — any earlier test may have just bumped it.
+    quiet = %{last_net_at: 1, last_gossip_at: nil, active?: false}
+    send(view.pid, {HighWire.Timeline, :transfer, quiet})
+    refute render(view) =~ ~s(id="transfer-activity")
+
+    send(view.pid, {HighWire.Timeline, :transfer, %{quiet | active?: true}})
+    assert render(view) =~ ~s(id="transfer-activity")
+
+    send(view.pid, :transfer_clear)
+    refute render(view) =~ ~s(id="transfer-activity")
   end
 
   defp ssb_msg(key, author, ts, content) do

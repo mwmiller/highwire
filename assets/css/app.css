@@ -96,21 +96,18 @@
     scrollbar-gutter: stable;
   }
   h1 {
-    @apply text-2xl m-1;
+    @apply text-2xl;
   }
   h2 {
-    @apply text-xl m-1;
+    @apply text-xl;
   }
   h3 {
-    @apply text-lg mb-1;
+    @apply text-lg;
   }
-  p {
-    @apply mt-1;
-    @apply p-1;
-  }
-  a {
-    @apply underline;
-  }
+  /* Underlines belong to prose, and .md-body turns even those off —
+     chrome reads as chrome through colour and hover, not a rule under
+     every word. A bare `a` in a template still looks like a link
+     because the app gives it a hover state. */
   ul {
     @apply list-disc;
     @apply list-inside;
@@ -137,6 +134,31 @@
   }
   body {
     scrollbar-gutter: stable;
+  }
+}
+
+/* @tailwindcss/forms hardcodes light-widget colours for checkboxes and
+   radios — a white square in a dark room, and a blue-600 tick that is
+   not this app's accent in either theme. The tokens repaint them; the
+   tick and dot marks stay white-on-accent, which is the AA pairing in
+   both schemes. */
+@layer base {
+  [type='checkbox'],
+  [type='radio'] {
+    color: var(--accent);
+    background-color: var(--bg-input);
+    border-color: var(--border);
+  }
+
+  [type='checkbox']:focus,
+  [type='radio']:focus {
+    --tw-ring-color: var(--border-focus);
+    --tw-ring-offset-color: var(--bg-panel);
+  }
+
+  [type='checkbox']:hover,
+  [type='radio']:hover {
+    border-color: var(--border-focus);
   }
 }
 
@@ -281,15 +303,28 @@ html[data-participating="off"] [data-pref-tab] {
   animation: gossip-flare 0.9s ease-out both;
 }
 
+/* Constellation labels land wherever their node's hash put it — on a
+   tether, on another name, on the ring guide. A panel-coloured halo
+   drawn under the glyphs keeps every one of them readable without
+   moving anyone out of their hashed slot. */
+.sky-label {
+  paint-order: stroke;
+  stroke: var(--bg-panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
 /* Arrival: rows replication just brought in light up once — an
-   accent edge and a raised wash that fade together. */
+   accent edge and a raised wash that fade together. --bg-active, not
+   --bg-raised: on the light scheme raised and app are the same zinc,
+   so the wash would only exist in dark. */
 .gossip-arrived {
   animation: gossip-arrive 1.6s ease-out both;
 }
 
 @keyframes gossip-arrive {
   from {
-    background-color: var(--bg-raised);
+    background-color: var(--bg-active);
     box-shadow: inset 2px 0 0 var(--accent);
   }
   to {

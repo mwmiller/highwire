@@ -141,6 +141,57 @@ defmodule HighWire.Timeline do
   end
 
   @doc """
+  How recently the engine reported network activity — the timestamps of
+  the last network and gossip events and `active?` when the network one
+  is still inside the 2.5s window the header's indicator rides.
+
+  Every bump is also pushed on the timeline PubSub topic as
+  `{HighWire.Timeline, :transfer, status}`, so a live view tracks the
+  window without polling it.
+  """
+  @spec transfer_status() :: %{
+          last_net_at: integer() | nil,
+          last_gossip_at: integer() | nil,
+          active?: boolean()
+        }
+  def transfer_status do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        %{last_net_at: nil, last_gossip_at: nil, active?: false}
+
+      pid ->
+        try do
+          GenServer.call(pid, :transfer_status, 3_000)
+        catch
+          :exit, _ -> %{last_net_at: nil, last_gossip_at: nil, active?: false}
+        end
+    end
+  end
+
+  @doc """
+  The locally cached per-peer recency hints (`last_connected_at`,
+  `last_activity_at`, `last_seen_at`) keyed by peer id or address.
+
+  Purely a UI hint — the engine's report stays authoritative — but it
+  is what lets the constellation distinguish peers it has heard from
+  from entries it only knows by name. `%{}` when the timeline is down.
+  """
+  @spec peer_meta() :: map()
+  def peer_meta do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        %{}
+
+      pid ->
+        try do
+          GenServer.call(pid, :peer_meta, 3_000)
+        catch
+          :exit, _ -> %{}
+        end
+    end
+  end
+
+  @doc """
   A feed's full profile card — `%{name, image, description}` — resolved
   through the sidecar (social-value semantics), or nil when the engine
   is down. Used by the profile page; the timeline bulk-fetches only
@@ -432,17 +483,7 @@ defmodule HighWire.Timeline do
   end
 
   def handle_call(:transfer_status, _from, state) do
-    now = System.monotonic_time(:millisecond)
-
-    active? =
-      case state.last_net_at do
-        nil -> false
-        t -> now - t < 2500
-      end
-
-    {:reply,
-     %{last_net_at: state.last_net_at, last_gossip_at: state.last_gossip_at, active?: active?},
-     state}
+    {:reply, transfer_status(state, System.monotonic_time(:millisecond)), state}
   end
 
   def handle_call(:network, _from, state) do
@@ -1302,9 +1343,9 @@ defmodule HighWire.Timeline do
   def handle_info({Client, ref, {:item, _id}}, %{blob_ls_ref: ref} = state) do
     if state.blob_timer, do: Process.cancel_timer(state.blob_timer)
     now = System.monotonic_time(:millisecond)
+    blob_timer = Process.send_after(self(), :rebroadcast, 500)
 
-    {:noreply,
-     %{state | blob_timer: Process.send_after(self(), :rebroadcast, 500), last_net_at: now}}
+    {:noreply, note_net_activity(%{state | blob_timer: blob_timer}, now)}
   end
 
   def handle_info({Client, ref, :done}, %{blob_ls_ref: ref} = state) do
@@ -1356,12 +1397,15 @@ defmodule HighWire.Timeline do
     connections = connections_of(state.network)
 
     # A peer joined or left — the rail badge's flare rides this event.
+    # The poll itself is not activity: bumping last_net_at every 11s
+    # would turn transfer_status's 2.5s window into a heartbeat that
+    # fires whether or not anything moved.
     state =
       if connections != previous do
         broadcast_gossip(%{connected: length(connections)})
-        %{state | last_gossip_at: now, last_net_at: now}
+        note_net_activity(state, now, gossip: true)
       else
-        %{state | last_net_at: now}
+        state
       end
 
     # Update peer meta with recency
@@ -1467,6 +1511,37 @@ defmodule HighWire.Timeline do
 
   defp broadcast_gossip(payload) do
     Phoenix.PubSub.broadcast(HighWire.PubSub, @gossip, {__MODULE__, :gossip, payload})
+  end
+
+  # -- transfer activity ------------------------------------------------
+
+  # A blob landed or the peer set moved: bump the window and push the
+  # new status on the timeline topic, so the header's indicator lights
+  # without anyone having to ask for it first.
+  defp note_net_activity(state, now, opts \\ []) do
+    state = %{state | last_net_at: now}
+    state = if Keyword.get(opts, :gossip), do: %{state | last_gossip_at: now}, else: state
+
+    Phoenix.PubSub.broadcast(
+      HighWire.PubSub,
+      @topic,
+      {__MODULE__, :transfer, transfer_status(state, System.monotonic_time(:millisecond))}
+    )
+
+    state
+  end
+
+  # How recently the engine reported network activity. The window is what
+  # the header's indicator rides, so the polled answer and the broadcast
+  # that turns the indicator on read it from the same place.
+  defp transfer_status(state, now) do
+    active? =
+      case state.last_net_at do
+        nil -> false
+        t -> now - t < 2500
+      end
+
+    %{last_net_at: state.last_net_at, last_gossip_at: state.last_gossip_at, active?: active?}
   end
 
   # -- flow --------------------------------------------------------------

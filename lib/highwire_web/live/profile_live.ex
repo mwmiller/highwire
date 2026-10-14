@@ -142,6 +142,15 @@ defmodule HighWireWeb.ProfileLive do
     end
   end
 
+  # LiveView keys repeated children on their id, so the row has to be
+  # named after the message rather than its position in the page.
+  defp post_dom_id(msg) do
+    case msg["key"] do
+      key when is_binary(key) -> "profile-post-" <> Base.url_encode64(key, padding: false)
+      _ -> "profile-post-anon-" <> Integer.to_string(:erlang.phash2(msg))
+    end
+  end
+
   defp heading(%{name: name}) when is_binary(name), do: name
   defp heading(_profile), do: nil
 
@@ -222,8 +231,8 @@ defmodule HighWireWeb.ProfileLive do
           </div>
 
           <div
-            :for={{msg, idx} <- Enum.with_index(@messages)}
-            id={"profile-post-" <> Integer.to_string(idx)}
+            :for={msg <- @messages}
+            id={post_dom_id(msg)}
             phx-hook="OpenPost"
             data-key={msg["key"]}
             class="cursor-pointer border-b border-edge-soft py-3 text-sm hover:bg-panel"

@@ -333,7 +333,13 @@ defmodule HighWireWeb.PostLive do
                     </span>
                   </div>
 
-                  <p class="mt-1 break-all font-mono text-[11px] text-faint">{@root["key"]}</p>
+                  <%!-- The full key is the URL of this page; on the
+                  page itself a nine-character stub plus a hover title
+                  identifies the post without a wall of base64 between
+                  the byline and the body. --%>
+                  <p class="mt-1 font-mono text-[11px] text-faint" title={@root["key"]}>
+                    {Ident.short_id(@root["key"] || "")}
+                  </p>
 
                   <div :if={text(@root) != ""} class="md-body mt-3 text-sm text-ink">
                     {raw(Markdown.to_html(text(@root), blob_rev: @blob_rev))}

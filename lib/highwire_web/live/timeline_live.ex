@@ -92,10 +92,12 @@ defmodule HighWireWeb.TimelineLive do
       # broadcasts can't fake a wave.
       |> assign(arrived: MapSet.new(), arrived_timer: nil)
       |> assign(seen_keys: top_keys(Map.get(payload, :feed, [])))
+      |> assign(:transfer, Timeline.transfer_status())
+      |> assign(transfer_timer: nil)
       |> maybe_load_page()
       |> merge_paged()
 
-    {:ok, socket}
+    {:ok, arm_transfer(socket)}
   end
 
   @impl true
@@ -119,6 +121,18 @@ defmodule HighWireWeb.TimelineLive do
 
   def handle_info(:arrived_clear, socket) do
     {:noreply, assign(socket, arrived: MapSet.new(), arrived_timer: nil)}
+  end
+
+  # Network activity: Timeline pushes the window as it bumps, so the
+  # header's indicator rides the real 2.5s window instead of a poll
+  # that would be late more often than not.
+  def handle_info({Timeline, :transfer, status}, socket) do
+    {:noreply, socket |> assign(:transfer, status) |> arm_transfer()}
+  end
+
+  def handle_info(:transfer_clear, socket) do
+    {:noreply,
+     assign(socket, transfer: %{socket.assigns.transfer | active?: false}, transfer_timer: nil)}
   end
 
   def handle_info(:peers_tick, socket) do
@@ -459,6 +473,18 @@ defmodule HighWireWeb.TimelineLive do
   defp dedupe_id(%{kind: :contact} = row), do: {:contact, author_of(row.msg)}
   defp dedupe_id(row), do: {:row, row_uid(row)}
 
+  # DOM identity for a feed row. LiveView patches repeated children by
+  # id, so a positional post-<idx> id detaches from its message the
+  # moment the feed reorders and leaves the old row in the document.
+  # Encode the uid rather than interpolating it: keys are base64 with
+  # / and = in them, and an id has to survive being used as a selector.
+  defp dom_id(prefix, row) do
+    case row_uid(row) do
+      uid when is_binary(uid) -> prefix <> Base.url_encode64(uid, padding: false)
+      nil -> prefix <> "anon-" <> Integer.to_string(:erlang.phash2(row))
+    end
+  end
+
   # -- arrival shimmer ----------------------------------------------------
 
   # The identity of the top of the feed — what a wave can change.
@@ -490,6 +516,20 @@ defmodule HighWireWeb.TimelineLive do
   defp clear_arrived_later(socket) do
     if socket.assigns.arrived_timer, do: Process.cancel_timer(socket.assigns.arrived_timer)
     assign(socket, :arrived_timer, Process.send_after(self(), :arrived_clear, 1_800))
+  end
+
+  # The activity window is 2.5s (Timeline's transfer_status). A bump
+  # turns the indicator on; this timer turns it back off, re-armed on
+  # every bump so a burst reads as one continuous glow.
+  defp arm_transfer(socket) do
+    if socket.assigns.transfer_timer, do: Process.cancel_timer(socket.assigns.transfer_timer)
+
+    timer =
+      if socket.assigns.transfer.active? do
+        Process.send_after(self(), :transfer_clear, 2_500)
+      end
+
+    assign(socket, :transfer_timer, timer)
   end
 
   defp annotate_likes(rows, like_counts) when is_map(like_counts) do
@@ -618,6 +658,14 @@ defmodule HighWireWeb.TimelineLive do
           <nav class="flex items-center gap-1" aria-label="Profile feeds">
             <.feed_tab :for={{v, label} <- @right_views} v={v} label={label} current={@view} />
           </nav>
+          <span
+            :if={@transfer.active?}
+            id="transfer-activity"
+            title="Recent engine network activity"
+            class="flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs text-info"
+          >
+            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-dot-info"></span> active
+          </span>
           <.link
             navigate="/network"
             title="Network — connections and dialing"
@@ -633,111 +681,115 @@ defmodule HighWireWeb.TimelineLive do
         </header>
 
         <div id="feed-scroller" phx-hook="FeedScroll" class="flex-1 overflow-y-auto">
-          <form
-            :if={@view == :public}
-            id="compose"
-            phx-submit="publish"
-            phx-change="compose-draft"
-            class="border-b border-edge px-4 py-3"
-          >
-            <div class="flex gap-3">
-              <Avatar.avatar
-                :if={@self_id}
-                id={@self_id}
-                size={40}
-                image={image_of(@self_id, @profiles)}
-                rev={@blob_rev}
-                class="mt-0.5 shrink-0"
-              />
-              <div class="min-w-0 flex-1">
-                <div class="relative">
-                  <textarea
-                    id="compose-body"
-                    name="body"
-                    phx-hook="Mentions"
-                    phx-debounce="300"
-                    placeholder="Write a post…"
-                    rows="3"
-                    class="w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
-                  >{@compose}</textarea>
-                  <div
-                    :if={@mention_suggestions != []}
-                    id="mention-list"
-                    class="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded border border-edge bg-panel shadow-lg"
-                  >
-                    <button
-                      :for={{id, name} <- @mention_suggestions}
-                      type="button"
-                      data-mention-option
-                      data-id={id}
-                      data-name={name}
-                      class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-raised"
+          <%!-- A reading column, not a full-bleed sheet: past about
+          eighty characters a line the eye loses the start of the
+          next one, and this feed was running to 160. --%>
+          <div class="mx-auto w-full max-w-2xl">
+            <form
+              :if={@view == :public}
+              id="compose"
+              phx-submit="publish"
+              phx-change="compose-draft"
+              class="border-b border-edge px-4 py-3"
+            >
+              <div class="flex gap-3">
+                <Avatar.avatar
+                  :if={@self_id}
+                  id={@self_id}
+                  size={40}
+                  image={image_of(@self_id, @profiles)}
+                  rev={@blob_rev}
+                  class="mt-0.5 shrink-0"
+                />
+                <div class="min-w-0 flex-1">
+                  <div class="relative">
+                    <textarea
+                      id="compose-body"
+                      name="body"
+                      phx-hook="Mentions"
+                      phx-debounce="300"
+                      placeholder="Write a post…"
+                      rows="3"
+                      class="w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
+                    >{@compose}</textarea>
+                    <div
+                      :if={@mention_suggestions != []}
+                      id="mention-list"
+                      class="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded border border-edge bg-panel shadow-lg"
                     >
-                      <Avatar.avatar
-                        id={id}
-                        size={16}
-                        image={image_of(id, @profiles)}
-                        rev={@blob_rev}
-                        class="shrink-0"
-                      />
-                      <span class="truncate text-paper">{name}</span>
-                      <span class="ml-auto shrink-0 font-mono text-[10px] text-faint">
-                        {Ident.short_id(id)}
-                      </span>
+                      <button
+                        :for={{id, name} <- @mention_suggestions}
+                        type="button"
+                        data-mention-option
+                        data-id={id}
+                        data-name={name}
+                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-raised"
+                      >
+                        <Avatar.avatar
+                          id={id}
+                          size={16}
+                          image={image_of(id, @profiles)}
+                          rev={@blob_rev}
+                          class="shrink-0"
+                        />
+                        <span class="truncate text-paper">{name}</span>
+                        <span class="ml-auto shrink-0 font-mono text-[10px] text-faint">
+                          {Ident.short_id(id)}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                  <p :if={@compose_error} role="alert" class="mt-1 text-xs text-bad">
+                    {@compose_error}
+                  </p>
+                  <div class="mt-2 flex items-center justify-end gap-3">
+                    <span :if={@self_id} class="mr-auto truncate text-xs text-faint">
+                      Posting as {display_name(@self_id, @profiles)}
+                    </span>
+                    <button type="submit" class="btn btn-primary" phx-disable-with="Publishing…">
+                      Publish
                     </button>
                   </div>
                 </div>
-                <p :if={@compose_error} role="alert" class="mt-1 text-xs text-bad">
-                  {@compose_error}
-                </p>
-                <div class="mt-2 flex items-center justify-end gap-3">
-                  <span :if={@self_id} class="mr-auto truncate text-xs text-faint">
-                    Posting as {display_name(@self_id, @profiles)}
-                  </span>
-                  <button type="submit" class="btn btn-primary" phx-disable-with="Publishing…">
-                    Publish
-                  </button>
-                </div>
               </div>
+            </form>
+
+            <p :if={@status == :connecting} class="px-4 py-3 text-sm text-info">
+              Connecting to the local SSB engine…
+            </p>
+            <p :if={@status == :loading} class="px-4 py-3 text-sm text-info">
+              Loading feeds…
+            </p>
+            <p :if={@status == :disabled} class="px-4 py-3 text-sm text-dim">
+              SSB engine disabled in this configuration.
+            </p>
+            <p
+              :if={@status == :ok and @rows == [] and @view == :private}
+              class="px-4 py-3 text-sm text-dim"
+            >
+              No private messages yet.
+            </p>
+            <p
+              :if={@status == :ok and @rows == [] and @view != :private}
+              class="px-4 py-3 text-sm text-dim"
+            >
+              No messages yet.
+            </p>
+
+            <div :for={row <- @rows} id={dom_id("row-", row)} class="border-b border-edge-soft">
+              <.post_row
+                :if={row.kind in [:thread, :post]}
+                row={row}
+                ctx={@as}
+                arrived={@arrived}
+              />
+              <.vote_row :if={row.kind == :vote} row={row} ctx={@as} />
+              <.contact_row :if={row.kind == :contact} row={row} ctx={@as} />
+              <.other_row :if={row.kind == :other} row={row} ctx={@as} />
             </div>
-          </form>
 
-          <p :if={@status == :connecting} class="px-4 py-3 text-sm text-info">
-            Connecting to the local SSB engine…
-          </p>
-          <p :if={@status == :loading} class="px-4 py-3 text-sm text-info">
-            Loading feeds…
-          </p>
-          <p :if={@status == :disabled} class="px-4 py-3 text-sm text-dim">
-            SSB engine disabled in this configuration.
-          </p>
-          <p
-            :if={@status == :ok and @rows == [] and @view == :private}
-            class="px-4 py-3 text-sm text-dim"
-          >
-            No private messages yet.
-          </p>
-          <p
-            :if={@status == :ok and @rows == [] and @view != :private}
-            class="px-4 py-3 text-sm text-dim"
-          >
-            No messages yet.
-          </p>
-
-          <div :for={{row, idx} <- Enum.with_index(@rows)} class="border-b border-edge-soft">
-            <.post_row
-              :if={row.kind in [:thread, :post]}
-              row={row}
-              ctx={@as}
-              idx={idx}
-              arrived={@arrived}
-            />
-            <.vote_row :if={row.kind == :vote} row={row} ctx={@as} />
-            <.contact_row :if={row.kind == :contact} row={row} ctx={@as} />
-            <.other_row :if={row.kind == :other} row={row} ctx={@as} />
+            <div :if={@more} id="feed-sentinel" phx-hook="InfiniteScroll" class="h-px"></div>
           </div>
-
-          <div :if={@more} id="feed-sentinel" phx-hook="InfiniteScroll" class="h-px"></div>
         </div>
       </div>
     </div>
@@ -768,7 +820,6 @@ defmodule HighWireWeb.TimelineLive do
 
   attr :row, :map, required: true
   attr :ctx, :map, required: true
-  attr :idx, :integer, required: true
   attr :arrived, :map, default: MapSet.new(), doc: "row uids lighting up this wave"
 
   defp post_row(assigns) do
@@ -796,7 +847,7 @@ defmodule HighWireWeb.TimelineLive do
 
     ~H"""
     <article
-      id={"post-" <> Integer.to_string(@idx)}
+      id={dom_id("post-", @row)}
       class={[
         "flex cursor-pointer gap-3 px-4 py-3 hover:bg-panel",
         MapSet.member?(@arrived, row_uid(@row)) && "gossip-arrived"
