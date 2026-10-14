@@ -50,6 +50,11 @@ defmodule HighWireWeb.TimelineLive do
   # markdown image syntax: ![alt](target)
   @image_re ~r/!\[([^\]]*)\]\(([^()\s]+)\)/
 
+  # How many contacts the rail shows before it offers to expand. A full
+  # follows list can run to forty names, which scrolls the rail and
+  # buries "Who to follow" and the network badge under the fold.
+  @max_sidebar_contacts 8
+
   @empty_payload %{
     feed: [],
     messages: [],
@@ -82,6 +87,8 @@ defmodule HighWireWeb.TimelineLive do
       |> assign_payload(payload)
       |> assign(:peers, Timeline.network())
       |> assign(q: "", expanded: MapSet.new(), view: :public)
+      |> assign(contacts_expanded: false)
+      |> assign(max_sidebar_contacts: @max_sidebar_contacts)
       |> assign(compose: "", compose_error: nil)
       |> assign(mention_suggestions: [])
       |> assign(paged: %{}, page_inflight: MapSet.new())
@@ -261,6 +268,10 @@ defmodule HighWireWeb.TimelineLive do
       end
 
     {:noreply, assign(socket, expanded: expanded)}
+  end
+
+  def handle_event("toggle-contacts", _params, socket) do
+    {:noreply, assign(socket, contacts_expanded: !socket.assigns.contacts_expanded)}
   end
 
   # The post row's OpenPost hook ignores clicks on links/buttons, so a
@@ -643,7 +654,7 @@ defmodule HighWireWeb.TimelineLive do
             No contacts yet — open a profile to follow someone.
           </p>
           <.link
-            :for={c <- @sidebar_contacts}
+            :for={c <- shown_contacts(@sidebar_contacts, @contacts_expanded)}
             navigate={profile_href(c)}
             class="flex items-center gap-2 px-4 py-1 text-xs text-muted hover:bg-raised hover:text-paper"
           >
@@ -655,6 +666,16 @@ defmodule HighWireWeb.TimelineLive do
             />
             <span class="min-w-0 truncate">{display_name(c, @profiles)}</span>
           </.link>
+          <button
+            :if={length(@sidebar_contacts) > @max_sidebar_contacts}
+            type="button"
+            phx-click="toggle-contacts"
+            class="w-full px-4 py-1 text-left text-[11px] text-faint transition hover:bg-raised hover:text-paper"
+          >
+            {if @contacts_expanded,
+              do: "Show fewer",
+              else: "Show all #{length(@sidebar_contacts)}"}
+          </button>
         </div>
 
         <div
@@ -1352,6 +1373,9 @@ defmodule HighWireWeb.TimelineLive do
   # Author names open that feed's neutral identity view.
   defp profile_href("@" <> _ = id), do: "/profile?id=" <> URI.encode_www_form(id)
   defp profile_href(_id), do: nil
+
+  defp shown_contacts(contacts, true), do: contacts
+  defp shown_contacts(contacts, false), do: Enum.take(contacts, @max_sidebar_contacts)
 
   defp image_of(id, _profiles) when not is_binary(id), do: nil
   defp image_of(id, %{profiles: profiles}), do: image_of(id, profiles)

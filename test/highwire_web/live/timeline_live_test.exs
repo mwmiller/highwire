@@ -43,6 +43,26 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "No contacts yet"
   end
 
+  test "the contacts rail caps the list and offers to expand it", %{conn: conn} do
+    follows = for i <- 1..20, do: "@contact#{i}:.ed25519"
+
+    {:ok, view, _html} = live(conn, "/")
+    html = notify(view, feed_payload([], follows: follows))
+
+    # Only the first few names show; the rest stay behind the toggle.
+    assert html =~ "Show all 20"
+    refute html =~ "contact9"
+
+    html = render_click(view, "toggle-contacts", %{})
+    assert html =~ "contact9"
+    assert html =~ "contact20"
+    assert html =~ "Show fewer"
+
+    html = render_click(view, "toggle-contacts", %{})
+    refute html =~ "contact9"
+    assert html =~ "Show all 20"
+  end
+
   test "reply snippets render markdown as its text, not its source" do
     msg = %{
       "value" => %{"content" => %{"text" => "**loud** take\n> quoted [link](http://x.test)"}}
@@ -593,6 +613,7 @@ defmodule HighWireWeb.TimelineLiveTest do
   # straight from the same builder the engine uses.
   defp feed_payload(msgs, opts \\ []) do
     self_id = Keyword.get(opts, :self_id)
+    follows = Keyword.get(opts, :follows, [])
     likes = HighWire.Timeline.likes_state(msgs)
     counts = HighWire.Timeline.like_counts(likes)
 
@@ -604,7 +625,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       likes_by: HighWire.Timeline.like_authors(likes),
       my_likes: HighWire.Timeline.my_likes(likes, self_id),
       index: %{},
-      follows: [],
+      follows: follows,
       self_id: self_id,
       profiles: %{},
       suggestions: []
