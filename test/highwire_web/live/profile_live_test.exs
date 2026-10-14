@@ -42,6 +42,15 @@ defmodule HighWireWeb.ProfileLiveTest do
     assert length(Regex.scan(~r/vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=/, html)) >= 2
   end
 
+  test "a short dev-era handle renders whole, not stubbed", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/profile?id=" <> URI.encode_www_form("@dtBy.ed25519"))
+
+    # Nine characters off a short handle just cuts the readable part
+    # ("dtBy.ed25"); the stub is for full base64 feed ids only.
+    assert html =~ ~r/<h1[^>]*>\s*dtBy\.ed25519\s*<\/h1>/
+    refute html =~ "dtBy.ed25<"
+  end
+
   test "the rail never sits empty without an id", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/profile")
 

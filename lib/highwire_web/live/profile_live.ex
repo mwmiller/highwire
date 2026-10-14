@@ -154,6 +154,16 @@ defmodule HighWireWeb.ProfileLive do
   defp heading(%{name: name}) when is_binary(name), do: name
   defp heading(_profile), do: nil
 
+  # A missing about falls back to the id itself: the whole handle when
+  # it is short enough to read (dev-era ids like @name.ed25519), a
+  # nine-character stub when it is a full base64 feed id — a stub of a
+  # short id just cuts the readable part off.
+  defp fallback_name("@" <> handle = id) do
+    if String.length(handle) > 15, do: Ident.short_id(id), else: handle
+  end
+
+  defp fallback_name(id) when is_binary(id), do: Ident.short_id(id)
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -169,7 +179,7 @@ defmodule HighWireWeb.ProfileLive do
             rev={@blob_rev}
           />
           <p class="mt-2 truncate text-sm font-medium text-paper">
-            {heading(@profile) || Ident.short_id(@id)}
+            {heading(@profile) || fallback_name(@id)}
           </p>
           <p class="mt-0.5 break-all font-mono text-[10px] text-dim">{@id}</p>
 
@@ -203,7 +213,7 @@ defmodule HighWireWeb.ProfileLive do
 
             <div class="min-w-0 flex-1">
               <h1 class="text-xl font-bold text-paper">
-                {heading(@profile) || Ident.short_id(@id)}
+                {heading(@profile) || fallback_name(@id)}
               </h1>
 
               <p class="mt-1 break-all font-mono text-xs text-dim">{@id}</p>
@@ -215,9 +225,13 @@ defmodule HighWireWeb.ProfileLive do
                 {raw(Markdown.to_html(@profile.description, blob_rev: @blob_rev))}
               </div>
 
+              <%!-- The relationship, not the engine: an engine status
+              here read as a personal status ("alanz — Ok"), and the
+              rail already carries the Follow control. --%>
               <div class="mt-3 flex gap-4 text-xs text-dim">
                 <span>{length(@messages)} posts</span>
-                <span class="capitalize">{@status}</span>
+                <span :if={@id == @self_id}>you</span>
+                <span :if={@id != @self_id and @id in @follows}>Following</span>
               </div>
             </div>
           </div>

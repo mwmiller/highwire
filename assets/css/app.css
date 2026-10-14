@@ -163,6 +163,12 @@
 }
 
 /* Post/description bodies rendered by HighWire.Markdown (mdex/comrak). */
+/* Long unbroken tokens — hyper:// URLs, blob refs, base64 hashes —
+   wrap inside the reading column instead of pushing a horizontal
+   scrollbar onto the page. Code blocks opt out: their lines scroll. */
+.md-body {
+  overflow-wrap: anywhere;
+}
 .md-body h1,
 .md-body h2,
 .md-body h3,
@@ -199,6 +205,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   margin: 0.5em 0;
+  overflow-wrap: normal;
   overflow-x: auto;
   padding: 0.6em 0.8em;
 }

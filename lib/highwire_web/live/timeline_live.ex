@@ -636,14 +636,17 @@ defmodule HighWireWeb.TimelineLive do
 
       <div class="flex min-w-0 flex-1 flex-col">
         <header class="flex h-11 shrink-0 items-center gap-2 border-b border-edge bg-panel px-4">
-          <nav class="flex items-center gap-1" aria-label="Feeds">
+          <nav class="flex shrink-0 items-center gap-1" aria-label="Feeds">
             <.feed_tab :for={{v, label} <- @left_views} v={v} label={label} current={@view} />
           </nav>
+          <%!-- The search takes whatever width the row can spare and
+          caps at 18rem, so narrow windows shrink the box instead of
+          clipping the Profile/Mentions tabs and the peer chip. --%>
           <form
             id="feed-search"
             phx-change="search"
             phx-submit="search"
-            class="ml-auto"
+            class="min-w-0 max-w-72 flex-1"
             role="search"
           >
             <input
@@ -652,10 +655,10 @@ defmodule HighWireWeb.TimelineLive do
               value={@q}
               phx-debounce="300"
               placeholder="Search…"
-              class="w-72 rounded border border-edge bg-input px-2 py-1 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
+              class="w-full rounded border border-edge bg-input px-2 py-1 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
             />
           </form>
-          <nav class="flex items-center gap-1" aria-label="Profile feeds">
+          <nav class="flex shrink-0 items-center gap-1" aria-label="Profile feeds">
             <.feed_tab :for={{v, label} <- @right_views} v={v} label={label} current={@view} />
           </nav>
           <span
@@ -732,7 +735,7 @@ defmodule HighWireWeb.TimelineLive do
                           rev={@blob_rev}
                           class="shrink-0"
                         />
-                        <span class="truncate text-paper">{name}</span>
+                        <span class="min-w-0 truncate text-paper">{name}</span>
                         <span class="ml-auto shrink-0 font-mono text-[10px] text-faint">
                           {Ident.short_id(id)}
                         </span>
@@ -743,7 +746,7 @@ defmodule HighWireWeb.TimelineLive do
                     {@compose_error}
                   </p>
                   <div class="mt-2 flex items-center justify-end gap-3">
-                    <span :if={@self_id} class="mr-auto truncate text-xs text-faint">
+                    <span :if={@self_id} class="mr-auto min-w-0 truncate text-xs text-faint">
                       Posting as {display_name(@self_id, @profiles)}
                     </span>
                     <button type="submit" class="btn btn-primary" phx-disable-with="Publishing…">
@@ -921,7 +924,7 @@ defmodule HighWireWeb.TimelineLive do
             <span class="shrink-0 text-xs font-medium text-muted">
               {display_name(author_of(reply), @ctx)}
             </span>
-            <span class="truncate text-xs text-sub">{snippet(reply, @ctx)}</span>
+            <span class="min-w-0 truncate text-xs text-sub">{snippet(reply, @ctx)}</span>
             <span class="ml-auto shrink-0 text-[11px] text-faint">
               <.age ts={ts(reply)} />
             </span>
@@ -953,7 +956,7 @@ defmodule HighWireWeb.TimelineLive do
           rev={@ctx.rev}
         />
       </div>
-      <p>
+      <p class="min-w-0 flex-1">
         <span class="text-ink">{display_name(author_of(@row.msg), @ctx)}</span>
         liked <span class="text-ink">{vote_target_label(@row.msg, @ctx)}</span>
       </p>
@@ -993,7 +996,11 @@ defmodule HighWireWeb.TimelineLive do
           rev={@ctx.rev}
         />
       </div>
-      <p class="min-w-0">
+      <%!-- A div, not a p: each chip carries the avatar component's
+      own div, and a div inside a p makes the HTML parser close the p —
+      which flattened the chips into siblings of this row and pushed
+      the timestamp off the page. --%>
+      <div class="min-w-0 flex-1">
         <.link
           :if={href = profile_href(@author)}
           navigate={href}
@@ -1039,7 +1046,7 @@ defmodule HighWireWeb.TimelineLive do
             show less
           </button>
         </span>
-      </p>
+      </div>
       <span class="ml-auto shrink-0 text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
     </div>
     """
@@ -1059,7 +1066,7 @@ defmodule HighWireWeb.TimelineLive do
           rev={@ctx.rev}
         />
       </div>
-      <p>
+      <p class="min-w-0 flex-1">
         <span class="not-italic text-ink">{display_name(author_of(@row.msg), @ctx)}</span>
         {other_label(@row.msg)}
       </p>

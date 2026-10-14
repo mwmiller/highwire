@@ -473,7 +473,7 @@ defmodule HighWireWeb.PostLive do
                       rev={@blob_rev}
                       class="shrink-0"
                     />
-                    <span class="truncate text-paper">{name}</span>
+                    <span class="min-w-0 truncate text-paper">{name}</span>
                     <span class="ml-auto shrink-0 font-mono text-[10px] text-faint">
                       {Ident.short_id(id)}
                     </span>
@@ -484,7 +484,7 @@ defmodule HighWireWeb.PostLive do
                 {@reply_error}
               </p>
               <div class="mt-2 flex items-center justify-end gap-3">
-                <span :if={@self_id} class="mr-auto truncate text-xs text-faint">
+                <span :if={@self_id} class="mr-auto min-w-0 truncate text-xs text-faint">
                   Replying as {display_name(@self_id, @profiles)}
                 </span>
                 <button type="submit" class="btn btn-primary" phx-disable-with="Replying…">
