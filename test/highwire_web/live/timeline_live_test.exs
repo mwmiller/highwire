@@ -109,7 +109,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       ]
 
       {:ok, view, _html} = live(conn, "/")
-      html = notify(view, feed_payload(msgs, now: now))
+      html = notify(view, feed_payload(msgs))
       dave = URI.encode_www_form("@dave:.ed25519")
 
       assert html =~ "followed"
@@ -133,7 +133,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       ]
 
       {:ok, view, _html} = live(conn, "/")
-      html = notify(view, feed_payload(msgs, now: now, self_id: me))
+      html = notify(view, feed_payload(msgs, self_id: me))
       dave = URI.encode_www_form("@dave:.ed25519")
 
       assert html =~ "my own words"
@@ -165,11 +165,11 @@ defmodule HighWireWeb.TimelineLiveTest do
       bob = URI.encode_www_form("@bob:.ed25519")
       carol = URI.encode_www_form("@carol:.ed25519")
 
-      html = notify(view, feed_payload(first, now: now))
+      html = notify(view, feed_payload(first))
       assert html =~ bob
       assert count(html, "followed") == 1
 
-      html = notify(view, feed_payload(second, now: now))
+      html = notify(view, feed_payload(second))
       refute html =~ bob
       assert html =~ carol
       assert count(html, "followed") == 1
@@ -191,7 +191,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       ]
 
       payload =
-        feed_payload(msgs, now: now)
+        feed_payload(msgs)
         |> Map.put(:profiles, %{liker => %{name: "Dana", image: nil}})
 
       {:ok, view, _html} = live(conn, "/")
@@ -214,7 +214,7 @@ defmodule HighWireWeb.TimelineLiveTest do
         })
       ]
 
-      payload = feed_payload(msgs, now: now, self_id: "@me=.ed25519")
+      payload = feed_payload(msgs, self_id: "@me=.ed25519")
 
       {:ok, view, _html} = live(conn, "/")
       html = notify(view, payload)
@@ -247,7 +247,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       ]
 
       {:ok, view, _html} = live(conn, "/")
-      html = notify(view, feed_payload(msgs, now: now))
+      html = notify(view, feed_payload(msgs))
 
       assert html =~ "subscribed to #core"
       # a leading # is not doubled when the message already carries one
@@ -268,7 +268,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       ]
 
       {:ok, view, _html} = live(conn, "/")
-      html = notify(view, feed_payload(msgs, now: now))
+      html = notify(view, feed_payload(msgs))
 
       assert html =~ "updated their profile"
       refute html =~ "sent a about"
@@ -287,7 +287,7 @@ defmodule HighWireWeb.TimelineLiveTest do
 
       {:ok, view, _html} = live(conn, "/")
       # The payload carries no profiles map entry for the author.
-      notify(view, feed_payload(msgs, now: now))
+      notify(view, feed_payload(msgs))
 
       # The request lands on the supervised Timeline as a parked want —
       # the same path cursor-page rows use once the engine is up.
@@ -298,14 +298,13 @@ defmodule HighWireWeb.TimelineLiveTest do
 
   describe "composer mentions" do
     test "the popup suggests follows and profiles, and closes cleanly", %{conn: conn} do
-      now = 1_700_000_000_000
       alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
 
       {:ok, view, html} = live(conn, "/")
       assert html =~ "phx-hook=\"Mentions\""
 
       payload =
-        feed_payload([], now: now)
+        feed_payload([])
         |> Map.put(:follows, [alice])
         |> Map.put(:profiles, %{alice => %{name: "Alice Smith", image: nil}})
 
@@ -342,13 +341,13 @@ defmodule HighWireWeb.TimelineLiveTest do
     bob = ssb_msg("%b.bob", "@bob.ed25519", now + 1, %{"type" => "post", "text" => "second"})
 
     # Empty store — the first real payload is all arrival.
-    assert notify(view, feed_payload([alice], now: now)) =~ "gossip-arrived"
+    assert notify(view, feed_payload([alice])) =~ "gossip-arrived"
 
     # The same wave again: nothing new, and the glow retires.
-    refute notify(view, feed_payload([alice], now: now)) =~ "gossip-arrived"
+    refute notify(view, feed_payload([alice])) =~ "gossip-arrived"
 
     # Replication brings a newer post: only that wave lights up.
-    assert notify(view, feed_payload([bob, alice], now: now)) =~ "gossip-arrived"
+    assert notify(view, feed_payload([bob, alice])) =~ "gossip-arrived"
   end
 
   test "rows are named after their message, not their position", %{conn: conn} do
@@ -368,7 +367,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       })
 
     {:ok, view, _html} = live(conn, "/")
-    html = notify(view, feed_payload([older, newer], now: now))
+    html = notify(view, feed_payload([older, newer]))
 
     id_a = "row-" <> token.("%older-a.sha256")
     id_b = "row-" <> token.("%newer-b.sha256")
@@ -387,7 +386,7 @@ defmodule HighWireWeb.TimelineLiveTest do
         "text" => "brand new words"
       })
 
-    html = notify(view, feed_payload([newest, older, newer], now: now))
+    html = notify(view, feed_payload([newest, older, newer]))
 
     assert html =~ ~s(id="#{id_a}")
     assert html =~ ~s(id="#{id_b}")
@@ -437,7 +436,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       })
 
     {:ok, view, _html} = live(conn, "/")
-    notify(view, feed_payload([root, reply], now: now))
+    notify(view, feed_payload([root, reply]))
 
     # The reply's text appears in no rendered root — only the window's
     # flat message list carries it — yet searching it surfaces the row.
@@ -452,20 +451,114 @@ defmodule HighWireWeb.TimelineLiveTest do
     refute html =~ "the main topic"
   end
 
+  describe "feed coherence" do
+    test "a reply bumps an already-shown thread to the top", %{conn: conn} do
+      base = 1_700_000_000_000
+
+      root_a =
+        ssb_msg("%root-a.sha256", "@alice.ed25519", base - 5_000, %{
+          "type" => "post",
+          "text" => "thread A"
+        })
+
+      root_b =
+        ssb_msg("%root-b.sha256", "@bob.ed25519", base - 1_000, %{
+          "type" => "post",
+          "text" => "thread B"
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      html = notify(view, feed_payload([root_a, root_b]))
+      assert pos(html, "thread B") < pos(html, "thread A")
+
+      # A reply to the older thread lands in the window: it must overtake
+      # B, not stay frozen at its original position.
+      reply_a =
+        ssb_msg("%reply-a.sha256", "@carol.ed25519", base, %{
+          "type" => "post",
+          "text" => "bumping reply",
+          "root" => "%root-a.sha256"
+        })
+
+      html = notify(view, feed_payload([reply_a, root_a, root_b]))
+      assert pos(html, "thread A") < pos(html, "thread B")
+    end
+
+    test "a reply aging out of the window never sinks a loaded thread", %{conn: conn} do
+      base = 1_700_000_000_000
+
+      root_a =
+        ssb_msg("%root-a.sha256", "@alice.ed25519", base - 5_000, %{
+          "type" => "post",
+          "text" => "thread A"
+        })
+
+      reply_a =
+        ssb_msg("%reply-a.sha256", "@carol.ed25519", base, %{
+          "type" => "post",
+          "text" => "hot reply",
+          "root" => "%root-a.sha256"
+        })
+
+      root_b =
+        ssb_msg("%root-b.sha256", "@bob.ed25519", base - 1_000, %{
+          "type" => "post",
+          "text" => "thread B"
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      html = notify(view, feed_payload([reply_a, root_a, root_b]))
+      assert pos(html, "thread A") < pos(html, "thread B")
+
+      # The window slid: A's reply aged out, so the fresh row's activity
+      # dropped back to the root's time. The already-earned position
+      # stays — the merge is raise-only.
+      html = notify(view, feed_payload([root_a, root_b]))
+      assert pos(html, "thread A") < pos(html, "thread B")
+    end
+
+    test "a bumped thread keeps its reply previews after the bump", %{conn: conn} do
+      base = 1_700_000_000_000
+
+      root =
+        ssb_msg("%root-a.sha256", "@alice.ed25519", base - 10_000, %{
+          "type" => "post",
+          "text" => "the thread"
+        })
+
+      reply =
+        ssb_msg("%reply-a.sha256", "@bob.ed25519", base, %{
+          "type" => "post",
+          "text" => "the bumping reply",
+          "root" => "%root-a.sha256"
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload([reply, root]))
+      assert html =~ "the bumping reply"
+
+      # A later heartbeat without the reply in the slice must not lose
+      # the preview the bump earned.
+      html = notify(view, feed_payload([root]))
+      assert html =~ "the bumping reply"
+    end
+  end
+
   defp ssb_msg(key, author, ts, content) do
     %{"key" => key, "value" => %{"author" => author, "timestamp" => ts, "content" => content}}
   end
 
   # A Timeline payload as finalize/1 broadcasts it — the window rows come
   # straight from the same builder the engine uses.
-  defp feed_payload(msgs, opts) do
-    now = Keyword.fetch!(opts, :now)
+  defp feed_payload(msgs, opts \\ []) do
     self_id = Keyword.get(opts, :self_id)
     likes = HighWire.Timeline.likes_state(msgs)
     counts = HighWire.Timeline.like_counts(likes)
 
     %{
-      feed: HighWire.Timeline.build_feed(msgs, self_id, counts, now),
+      feed: HighWire.Timeline.build_feed(msgs, self_id, counts),
       messages: msgs,
       reply_counts: %{},
       like_counts: counts,

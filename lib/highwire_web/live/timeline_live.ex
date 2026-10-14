@@ -438,7 +438,6 @@ defmodule HighWireWeb.TimelineLive do
 
   defp merge_into(view, entry, socket) do
     self_id = socket.assigns.self_id
-    known = MapSet.new(entry.rows, &row_uid/1)
 
     {fresh_contacts, fresh_rows} =
       socket.assigns.feed
@@ -453,15 +452,50 @@ defmodule HighWireWeb.TimelineLive do
     kept_contacts =
       Enum.reject(entry_contacts, &MapSet.member?(contact_authors, author_of(&1.msg)))
 
-    fresh_rows = Enum.reject(fresh_rows, &MapSet.member?(known, row_uid(&1)))
+    # A fresh row for an already-loaded thread raises that row's activity
+    # in place instead of being discarded — a new reply must move the
+    # thread up. Raise-only: the window slice slides (a reply ages out),
+    # and a lower activity must never sink a row that already earned its
+    # position. The loaded row keeps its content: a cursor page carries
+    # the true reply rollup the window can't see.
+    known = MapSet.new(entry_rest, &row_uid/1)
+    fresh_by_uid = Map.new(fresh_rows, &{row_uid(&1), &1})
+
+    entry_rest =
+      Enum.map(entry_rest, fn loaded ->
+        case Map.fetch(fresh_by_uid, row_uid(loaded)) do
+          {:ok, fresh} -> raise_activity(fresh, loaded)
+          :error -> loaded
+        end
+      end)
+
+    added = Enum.reject(fresh_rows, &MapSet.member?(known, row_uid(&1)))
 
     rows =
-      (fresh_rows ++ fresh_contacts ++ kept_contacts ++ entry_rest)
+      (added ++ fresh_contacts ++ kept_contacts ++ entry_rest)
       |> annotate_likes(socket.assigns.like_counts)
       |> Enum.sort_by(& &1.activity, :desc)
       |> Enum.uniq_by(&dedupe_id/1)
 
     %{entry | rows: rows}
+  end
+
+  # A window row's activity raised above the loaded row's: adopt the
+  # newer activity (so the sort moves it up) and the window's reply
+  # previews (they include the reply that caused the bump), while the
+  # loaded row keeps its identity and its engine-true reply count —
+  # the window only counts replies its slice happened to see.
+  defp raise_activity(fresh, loaded) do
+    if fresh.activity > loaded.activity do
+      %{
+        loaded
+        | activity: fresh.activity,
+          recent: fresh.recent,
+          replies: max(loaded.replies, fresh.replies)
+      }
+    else
+      loaded
+    end
   end
 
   # Thread identity is the root key — a window row whose root never

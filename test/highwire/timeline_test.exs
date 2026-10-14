@@ -184,7 +184,7 @@ defmodule HighWire.TimelineTest do
     end
   end
 
-  describe "build_feed/4" do
+  describe "build_feed/3" do
     # Thread factory: root nil → a rootless (own-key) post. Keys carry
     # the .sha256 suffix msg_id?/1 requires of thread root references.
     defp post(author, key, ts, root \\ nil) do
@@ -197,7 +197,7 @@ defmodule HighWire.TimelineTest do
       root = post("@alice", "%root.sha256", 1_000)
       reply = post("@bob", "%reply.sha256", 2_000, "%root.sha256")
 
-      assert [row] = Timeline.build_feed([root, reply], "@me", %{"%root.sha256" => 2}, 10_000)
+      assert [row] = Timeline.build_feed([root, reply], "@me", %{"%root.sha256" => 2})
       assert row.likes == 2
     end
 
@@ -207,7 +207,7 @@ defmodule HighWire.TimelineTest do
       # a client that set root to its parent instead of the thread head
       deep = post("@carol", "%deep.sha256", 3_000, "%mid.sha256")
 
-      assert [row] = Timeline.build_feed([root, mid, deep], "@me", %{}, 10_000)
+      assert [row] = Timeline.build_feed([root, mid, deep], "@me", %{})
       assert row.root_key == "%root.sha256"
       assert row.msg["key"] == "%root.sha256"
       assert row.rooted?
@@ -221,7 +221,7 @@ defmodule HighWire.TimelineTest do
       older = post("@bob", "%older.sha256", 1_500, "%gone.sha256")
       deep = post("@carol", "%deep.sha256", 3_000, "%mid.sha256")
 
-      assert [row] = Timeline.build_feed([mid, older, deep], "@me", %{}, 10_000)
+      assert [row] = Timeline.build_feed([mid, older, deep], "@me", %{})
       refute row.rooted?
       assert row.root_key == "%gone.sha256"
 
@@ -235,7 +235,7 @@ defmodule HighWire.TimelineTest do
       root = post("@alice", "%root.sha256", 1_000)
       reply = post("@bob", "%reply.sha256", 2_000, "%root.sha256")
 
-      assert [row] = Timeline.build_feed([root, reply], "@me", %{}, 10_000)
+      assert [row] = Timeline.build_feed([root, reply], "@me", %{})
       assert row.msg["key"] == "%root.sha256"
       assert Enum.map(row.recent, & &1["key"]) == ["%reply.sha256"]
     end
@@ -244,7 +244,7 @@ defmodule HighWire.TimelineTest do
       a = post("@alice", "%a.sha256", 1_000, "%b.sha256")
       b = post("@bob", "%b.sha256", 2_000, "%a.sha256")
 
-      assert is_list(Timeline.build_feed([a, b], "@me", %{}, 10_000))
+      assert is_list(Timeline.build_feed([a, b], "@me", %{}))
     end
   end
 
@@ -889,7 +889,7 @@ defmodule HighWire.TimelineTest do
         "latestReplies" => [old, mid, new]
       }
 
-      row = Timeline.root_row(item, nil, 10_000, false)
+      row = Timeline.root_row(item, nil, false)
 
       assert Enum.map(row.recent, & &1["key"]) == ["%new=.sha256", "%mid=.sha256", "%old=.sha256"]
       assert row.replies == 3
@@ -912,7 +912,7 @@ defmodule HighWire.TimelineTest do
         "latestReplies" => replies
       }
 
-      row = Timeline.root_row(item, nil, 10_000, false)
+      row = Timeline.root_row(item, nil, false)
 
       assert Enum.map(row.recent, & &1["key"]) == ["%r4=.sha256", "%r3=.sha256", "%r2=.sha256"]
     end

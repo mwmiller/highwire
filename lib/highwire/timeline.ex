@@ -874,11 +874,10 @@ defmodule HighWire.Timeline do
     props = Map.merge(%{"limit" => 30, "reverse" => true}, extra)
     props = if is_integer(resume), do: Map.put(props, "resume", resume), else: props
     self_id = state.self_id
-    now = System.system_time(:millisecond)
 
     if is_pid(state.client) and Process.alive?(state.client) do
       case Client.stream(state.client, ["patchwork", feed, "roots"], [props], self()) do
-        {:ok, ref} -> roots_page(ref, state, self_id, now, private?)
+        {:ok, ref} -> roots_page(ref, state, self_id, private?)
         _ -> empty_page()
       end
     else
@@ -888,7 +887,7 @@ defmodule HighWire.Timeline do
     _, _ -> empty_page()
   end
 
-  defp roots_page(ref, state, self_id, now, private?) do
+  defp roots_page(ref, state, self_id, private?) do
     {markers, items} = drain_stream(ref, []) |> Enum.split_with(&(&1["marker"] == true))
     cursor = private_cursor(markers)
 
@@ -900,7 +899,7 @@ defmodule HighWire.Timeline do
 
     rows =
       Enum.map(items, fn item ->
-        row = root_row(item, self_id, now, private?)
+        row = root_row(item, self_id, private?)
         Map.put(row, :likes, Map.get(like_counts, item["key"], row.likes))
       end)
 
@@ -1850,7 +1849,6 @@ defmodule HighWire.Timeline do
   end
 
   defp build_payload(state) do
-    now = System.system_time(:millisecond)
     # The window (acc) plus the store-wide contact drain: follow events
     # are rare and old, so they routinely sit outside the per-feed
     # window and would otherwise age out of every payload.
@@ -1866,10 +1864,10 @@ defmodule HighWire.Timeline do
     # smaller than the message count anyway.
     messages =
       acc
-      |> Enum.sort_by(&clamped_ts(&1, now), :desc)
+      |> Enum.sort_by(&bump_ts/1, :desc)
       |> Enum.take(2000)
 
-    feed = build_feed(acc, state.self_id, like_counts, now)
+    feed = build_feed(acc, state.self_id, like_counts)
 
     # Suggestion rows need names/avatars too, or the sidebar shows bare
     # short ids for strangers — profile fetch covers them on top of the
@@ -2068,7 +2066,7 @@ defmodule HighWire.Timeline do
   # rootless posts are their own rows; contact messages collapse into
   # one row per author listing who they followed.
   @doc false
-  def build_feed(acc, self_id, like_counts, now) do
+  def build_feed(acc, self_id, like_counts) do
     # Boxed (encrypted) messages never form public rows — the Private tab
     # shows them decrypted, straight from privateFeed.
     acc = Enum.reject(acc, &boxed?/1)
@@ -2082,7 +2080,7 @@ defmodule HighWire.Timeline do
       |> Enum.group_by(&thread_root(&1, by_key))
       |> Enum.map(fn {root_key, group} ->
         root_msg = Map.get(by_key, root_key)
-        sorted = Enum.sort_by(group, &clamped_ts(&1, now), :desc)
+        sorted = Enum.sort_by(group, &bump_ts/1, :desc)
         row_msg = root_msg || hd(sorted)
 
         # The head never previews itself; a fallback head (root absent
@@ -2101,7 +2099,7 @@ defmodule HighWire.Timeline do
 
         likes = thread_likes(group, root_key, like_counts)
 
-        activity = sorted |> Enum.map(&clamped_ts(&1, now)) |> Enum.max()
+        activity = sorted |> Enum.map(&bump_ts/1) |> Enum.max()
 
         participants = thread_participants(group, root_msg)
 
@@ -2118,7 +2116,7 @@ defmodule HighWire.Timeline do
         )
       end)
 
-    contact_entries = contact_rows(contacts, self_id, now)
+    contact_entries = contact_rows(contacts, self_id)
 
     other_entries =
       standalone
@@ -2129,7 +2127,7 @@ defmodule HighWire.Timeline do
         build_entry(
           kind,
           msg,
-          clamped_ts(msg, now),
+          bump_ts(msg),
           [msg["value"]["author"]],
           0,
           Map.get(like_counts, msg["key"] || "", 0),
@@ -2148,21 +2146,21 @@ defmodule HighWire.Timeline do
   # A run of "X followed a", "X followed b" messages collapses into ONE
   # row per author — listing everyone they followed (the UI shows their
   # avatars) — positioned at the latest follow.
-  defp contact_rows(msgs, self_id, now) do
+  defp contact_rows(msgs, self_id) do
     msgs
     |> Enum.filter(fn msg ->
       is_binary(msg["value"]["author"]) and is_binary(content(msg)["contact"])
     end)
     |> Enum.group_by(& &1["value"]["author"])
     |> Enum.map(fn {author, group} ->
-      latest = Enum.max_by(group, &clamped_ts(&1, now))
+      latest = Enum.max_by(group, &bump_ts/1)
 
       followed =
         group
         |> Enum.map(&content(&1)["contact"])
         |> Enum.uniq()
 
-      build_entry(:contact, latest, clamped_ts(latest, now), [author], 0, 0, [],
+      build_entry(:contact, latest, bump_ts(latest), [author], 0, 0, [],
         self_id: self_id,
         rooted: true
       )
@@ -2192,7 +2190,7 @@ defmodule HighWire.Timeline do
   # like a feed row, so the timeline renders it with the same
   # components. private? marks it for the private badge.
   @doc false
-  def root_row(item, self_id, now, private?) do
+  def root_row(item, self_id, private?) do
     msg = %{
       "key" => item["key"],
       "value" => item["value"],
@@ -2208,7 +2206,7 @@ defmodule HighWire.Timeline do
     author = msg["value"]["author"]
 
     activity =
-      [clamped_ts(msg, now) | Enum.map(recent, &clamped_ts(&1, now))]
+      [bump_ts(msg) | Enum.map(recent, &bump_ts/1)]
       |> Enum.max()
 
     row =
@@ -2286,12 +2284,21 @@ defmodule HighWire.Timeline do
   defp msg_id?(<<"%", _::binary>> = id), do: String.ends_with?(id, ".sha256")
   defp msg_id?(_), do: false
 
-  # Poncho's get-timestamp guard: never trust future-dated claimed times
-  # (true arrival order needs a local receive-time index; not on the wire).
-  defp clamped_ts(msg, now) do
-    case msg["value"]["timestamp"] do
-      ts when is_number(ts) -> min(round(ts), now)
-      _ -> 0
+  # Mirrors silkpurse_threads' sort_ts/2 — the engine's own bump metric —
+  # so client and engine agree on feed order. min(claimed, received)
+  # contains future-dated claimed times without a `now` dependency: the
+  # same message always gets the same activity across rebuilds, so rows
+  # can't drift on heartbeats. Either side falls back when unreadable,
+  # exactly as the engine does.
+  defp bump_ts(msg) do
+    claimed = msg["value"]["timestamp"]
+    received = msg["timestamp"]
+
+    cond do
+      is_number(claimed) and is_number(received) -> min(round(claimed), round(received))
+      is_number(claimed) -> round(claimed)
+      is_number(received) -> round(received)
+      true -> 0
     end
   end
 
