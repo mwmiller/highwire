@@ -1160,7 +1160,7 @@ defmodule HighWireWeb.TimelineLive do
       </div>
       <p class="min-w-0 flex-1">
         <span class="not-italic text-ink">{display_name(author_of(@row.msg), @ctx)}</span>
-        {other_label(@row.msg)}
+        {other_label(@row.msg, @ctx)}
       </p>
       <span class="ml-auto not-italic text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
     </div>
@@ -1450,14 +1450,84 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
-  defp other_label(msg) do
+  # Each of these types carries a specific payload, so name the specific
+  # thing rather than echoing the raw protocol type at the reader. A bare
+  # "sent a post-edit message" tells the reader nothing they can act on.
+  defp other_label(msg, ctx) do
     case content(msg) do
       c when map_size(c) == 0 -> "sent a private message"
       %{"type" => "channel"} = c -> channel_label(c)
-      %{"type" => "about"} -> "updated their profile"
-      %{"type" => type} when is_binary(type) -> "sent a #{type} message"
+      %{"type" => "about"} = c -> about_label(c, ctx)
+      %{"type" => "pub"} = c -> pub_label(c)
+      %{"type" => "room/alias"} = c -> alias_label(c)
+      %{"type" => "post-edit"} = c -> edit_label(c, msg, ctx)
+      %{"type" => type} when is_binary(type) -> "sent a #{humanize_type(type)} message"
       _ -> "sent a message"
     end
+  end
+
+  # An about message sets a name/description for the feed it points at.
+  # Resolve that feed to a display name when we can; fall back to the
+  # generic phrase when the target isn't in the index.
+  defp about_label(%{"about" => about} = c, ctx) when is_binary(about) do
+    target = Map.get(ctx.index, about) || about
+
+    cond do
+      is_binary(c["name"]) -> "set #{display_name(target, ctx)}'s display name"
+      is_binary(c["description"]) -> "wrote #{display_name(target, ctx)}'s bio"
+      true -> "updated #{display_name(target, ctx)}'s profile"
+    end
+  end
+
+  defp about_label(c, _ctx) do
+    cond do
+      Map.has_key?(c, "name") -> "set a display name"
+      Map.has_key?(c, "description") -> "wrote a bio"
+      true -> "updated a profile"
+    end
+  end
+
+  defp pub_label(%{"address" => %{"host" => host}}) when is_binary(host),
+    do: "announced the pub #{host}"
+
+  defp pub_label(_), do: "announced a pub"
+
+  defp alias_label(%{"alias" => alias} = c) when is_binary(alias) do
+    room = if is_binary(c["room"]), do: " on #{c["room"]}", else: ""
+    "registered the alias #{alias}#{room}"
+  end
+
+  defp alias_label(_), do: "registered a room alias"
+
+  # A post-edit points at the post it revises via revisionRoot/revisionBranch.
+  # Resolve that key to a name through the index so the row reads as
+  # "edited their post" or "edited <name>'s post" instead of naming the
+  # protocol type.
+  defp edit_label(c, msg, ctx) do
+    root = c["revisionRoot"] || c["revisionBranch"] || c["root"]
+    author = author_of(msg)
+
+    cond do
+      is_nil(root) ->
+        "edited a post"
+
+      Map.get(ctx.index, root) == author ->
+        "edited their post"
+
+      target = Map.get(ctx.index, root) ->
+        "edited #{display_name(target, ctx)}'s post"
+
+      true ->
+        "edited an older post"
+    end
+  end
+
+  # The last-resort fallback: strip protocol punctuation so an unknown
+  # type reads as a phrase, not as "sent a room/alias message".
+  defp humanize_type(type) do
+    type
+    |> String.replace(["/", "_", "-"], " ")
+    |> String.downcase()
   end
 
   # Subscription toggles get a sentence of their own: "sent a channel

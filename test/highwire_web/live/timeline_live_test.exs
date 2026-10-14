@@ -281,21 +281,87 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ "toggled a channel subscription"
     end
 
-    test "about updates read as profile updates", %{conn: conn} do
+    test "about updates name the profile they touch", %{conn: conn} do
       now = 1_700_000_000_000
 
       msgs = [
         ssb_msg("%about-alice.sha256", "@alice:.ed25519", now - 1_000, %{
           "type" => "about",
+          "about" => "@alice:.ed25519",
           "name" => "Alice"
+        }),
+        ssb_msg("%about-bob.sha256", "@alice:.ed25519", now - 500, %{
+          "type" => "about",
+          "about" => "@bob:.ed25519",
+          "description" => "Bob's bio"
         })
       ]
 
       {:ok, view, _html} = live(conn, "/")
       html = notify(view, feed_payload(msgs))
 
-      assert html =~ "updated their profile"
+      # No profiles are loaded in this payload, so the target resolves to
+      # its short id — the label still names the profile it touched,
+      # which is the point.
+      alice = HighWire.Avatar.short_id("@alice:.ed25519")
+      bob = HighWire.Avatar.short_id("@bob:.ed25519")
+
+      assert html =~ "set #{alice}"
+      assert html =~ "display name"
+      assert html =~ "wrote #{bob}"
+      assert html =~ "bio"
       refute html =~ "sent a about"
+    end
+
+    test "pub, room alias and post-edit rows read as sentences, not protocol types", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%pub-freesocial.sha256", "@alice:.ed25519", now - 3_000, %{
+          "type" => "pub",
+          "address" => %{"host" => "pub.freesocial.co", "port" => 8008}
+        }),
+        ssb_msg("%alias-linuxuser.sha256", "@alice:.ed25519", now - 2_000, %{
+          "type" => "room/alias",
+          "alias" => "linuxuser",
+          "room" => "@room=.ed25519"
+        }),
+        ssb_msg("%edit-root.sha256", "@alice:.ed25519", now - 1_500, %{
+          "type" => "post",
+          "text" => "the original post"
+        }),
+        ssb_msg("%edit-rev.sha256", "@alice:.ed25519", now - 1_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%edit-root.sha256",
+          "text" => "the revised post"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      assert html =~ "announced the pub pub.freesocial.co"
+      assert html =~ "registered the alias linuxuser"
+      assert html =~ "edited their post"
+
+      refute html =~ "sent a pub message"
+      refute html =~ "sent a room/alias message"
+      refute html =~ "sent a post-edit message"
+    end
+
+    test "an unknown protocol type still reads as a phrase, not a slug", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%weird.sha256", "@alice:.ed25519", now - 1_000, %{
+          "type" => "secret/thing"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      assert html =~ "sent a secret thing message"
     end
 
     test "rendered rows ask Timeline to profile authors no payload carried", %{conn: conn} do
@@ -600,15 +666,26 @@ defmodule HighWireWeb.TimelineLiveTest do
   end
 
   # Mirrors the payload's search projection: only key, author and the
-  # post text's type/root survive the wire. Search reads nothing else.
+  # post text's type/root survive the wire — plus the few extra fields
+  # each event type's sentence is built from. Search reads nothing else.
   defp slim(msg) do
     c = msg["value"]["content"]
+    base = ["type", "text", "root"]
+
+    fields =
+      case c do
+        %{"type" => type} when is_binary(type) ->
+          Map.get(HighWire.Timeline.event_projection_fields(), type, [])
+
+        _ ->
+          []
+      end
 
     %{
       "key" => msg["key"],
       "value" => %{
         "author" => msg["value"]["author"],
-        "content" => Map.take(c, ["type", "text", "root"])
+        "content" => Map.take(c, base ++ fields)
       }
     }
   end
@@ -628,7 +705,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       like_counts: counts,
       likes_by: HighWire.Timeline.like_authors(likes),
       my_likes: HighWire.Timeline.my_likes(likes, self_id),
-      index: %{},
+      index: Map.new(msgs, fn m -> {m["key"], m["value"]["author"]} end),
       follows: follows,
       self_id: self_id,
       profiles: %{},

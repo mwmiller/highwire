@@ -2455,14 +2455,41 @@ defmodule HighWire.Timeline do
   # text's type/root. Everything else — signature, previous, hash, the
   # full value — is carried in the feed rows and never searched, so it
   # only ever rode along as bytes on first paint.
+  #
+  # The event types the feed renders as a sentence (not as a post) keep
+  # the few extra fields that sentence is built from, so the row can
+  # name what actually happened — "announced the pub pub.freesocial.co",
+  # "set Alice's display name", "edited their post" — instead of
+  # echoing the protocol type at the reader. Posts carry no extra cost:
+  # this branch only fires for the event types below.
+  @event_projection_fields %{
+    "about" => ["about", "name", "description"],
+    "pub" => ["address"],
+    "room/alias" => ["alias", "aliasURL", "room", "action"],
+    "post-edit" => ["revisionRoot", "revisionBranch", "root"]
+  }
+
+  @doc false
+  def event_projection_fields, do: @event_projection_fields
+
   defp search_projection(msg) do
     c = content(msg)
+    base = ["type", "text", "root"]
+
+    fields =
+      case c do
+        %{"type" => type} when is_binary(type) ->
+          Map.get(@event_projection_fields, type, [])
+
+        _ ->
+          []
+      end
 
     %{
       "key" => msg["key"],
       "value" => %{
         "author" => msg["value"]["author"],
-        "content" => Map.take(c, ["type", "text", "root"])
+        "content" => Map.take(c, base ++ fields)
       }
     }
   end
