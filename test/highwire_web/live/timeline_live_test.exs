@@ -49,18 +49,22 @@ defmodule HighWireWeb.TimelineLiveTest do
     {:ok, view, _html} = live(conn, "/")
     html = notify(view, feed_payload([], follows: follows))
 
-    # Only the first few names show; the rest stay behind the toggle.
+    # Collapsed shows a random handful; the rest stay behind the toggle.
     assert html =~ "Show all 20"
-    refute html =~ "contact9"
+    visible = count_visible_contacts(html, follows)
+    assert visible == HighWireWeb.TimelineLive.max_sidebar_contacts()
 
     html = render_click(view, "toggle-contacts", %{})
     assert html =~ "contact9"
     assert html =~ "contact20"
     assert html =~ "Show fewer"
+    assert count_visible_contacts(html, follows) == 20
 
     html = render_click(view, "toggle-contacts", %{})
-    refute html =~ "contact9"
     assert html =~ "Show all 20"
+
+    assert count_visible_contacts(html, follows) ==
+             HighWireWeb.TimelineLive.max_sidebar_contacts()
   end
 
   test "reply snippets render markdown as its text, not its source" do
@@ -649,6 +653,20 @@ defmodule HighWireWeb.TimelineLiveTest do
   end
 
   defp count(html, needle) do
-    html |> String.split(needle) |> length() |> Kernel.-(1)
+    html
+    |> String.split(needle)
+    |> length()
+    |> Kernel.-(1)
+  end
+
+  # How many of the known follow ids actually appear in the rendered
+  # HTML. The rail links each visible contact to its profile, and these
+  # test ids are unique strings that appear nowhere else, so a simple
+  # containment check counts the visible rows without depending on which
+  # random handful the rail picked.
+  # The rail renders each contact by its short id (Ident.short_id/1), so
+  # containment has to look for that, not the full feed id.
+  defp count_visible_contacts(html, follows) do
+    Enum.count(follows, fn id -> String.contains?(html, HighWire.Avatar.short_id(id)) end)
   end
 end

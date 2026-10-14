@@ -271,7 +271,21 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   def handle_event("toggle-contacts", _params, socket) do
-    {:noreply, assign(socket, contacts_expanded: !socket.assigns.contacts_expanded)}
+    expanded? = !socket.assigns.contacts_expanded
+
+    # Re-roll the visible handful each time the rail collapses, so
+    # folding the full list away surfaces a different set of faces.
+    sidebar =
+      if expanded? do
+        socket.assigns.sidebar_contacts
+      else
+        Enum.take(Enum.shuffle(socket.assigns.all_contacts), @max_sidebar_contacts)
+      end
+
+    {:noreply,
+     socket
+     |> assign(contacts_expanded: expanded?)
+     |> assign(sidebar_contacts: sidebar)}
   end
 
   # The post row's OpenPost hook ignores clicks on links/buttons, so a
@@ -523,6 +537,9 @@ defmodule HighWireWeb.TimelineLive do
   @doc false
   def max_tab_rows, do: @max_tab_rows
 
+  @doc false
+  def max_sidebar_contacts, do: @max_sidebar_contacts
+
   # Thread identity is the root key — a window row whose root never
   # reached the window still carries it, while a cursor row IS the root.
   defp row_uid(%{root_key: root}) when is_binary(root), do: root
@@ -654,7 +671,7 @@ defmodule HighWireWeb.TimelineLive do
             No contacts yet — open a profile to follow someone.
           </p>
           <.link
-            :for={c <- shown_contacts(@sidebar_contacts, @contacts_expanded)}
+            :for={c <- if(@contacts_expanded, do: @all_contacts, else: @sidebar_contacts)}
             navigate={profile_href(c)}
             class="flex items-center gap-2 px-4 py-1 text-xs text-muted hover:bg-raised hover:text-paper"
           >
@@ -667,14 +684,14 @@ defmodule HighWireWeb.TimelineLive do
             <span class="min-w-0 truncate">{display_name(c, @profiles)}</span>
           </.link>
           <button
-            :if={length(@sidebar_contacts) > @max_sidebar_contacts}
+            :if={length(@all_contacts) > @max_sidebar_contacts}
             type="button"
             phx-click="toggle-contacts"
             class="w-full px-4 py-1 text-left text-[11px] text-faint transition hover:bg-raised hover:text-paper"
           >
             {if @contacts_expanded,
               do: "Show fewer",
-              else: "Show all #{length(@sidebar_contacts)}"}
+              else: "Show all #{length(@all_contacts)}"}
           </button>
         </div>
 
@@ -1166,6 +1183,14 @@ defmodule HighWireWeb.TimelineLive do
       |> Enum.reject(&(&1 == payload.self_id))
       |> Enum.sort_by(&String.downcase(display_name(&1, profiles)))
 
+    # The collapsed rail is a random handful, reshuffled when a fresh
+    # payload lands so the same handful of faces don't sit there forever
+    # while the rest of the follows go unseen. Shuffled once per payload
+    # (not per render) so a re-render doesn't reshuffle under the user.
+    # The expanded list stays the alphabetical roll above — the stable
+    # order you want when you're actually looking someone up.
+    sidebar_contacts = Enum.take(Enum.shuffle(contacts), @max_sidebar_contacts)
+
     socket
     |> assign(:feed, feed)
     |> assign(:messages, Map.get(payload, :messages, []))
@@ -1177,7 +1202,8 @@ defmodule HighWireWeb.TimelineLive do
     |> assign(:self_id, payload.self_id)
     |> assign(:profiles, profiles)
     |> assign(:blob_rev, Map.get(payload, :blob_rev, 0))
-    |> assign(:sidebar_contacts, contacts)
+    |> assign(:sidebar_contacts, sidebar_contacts)
+    |> assign(:all_contacts, contacts)
     |> assign(:suggestions, Map.get(payload, :suggestions, []))
   end
 
@@ -1194,6 +1220,7 @@ defmodule HighWireWeb.TimelineLive do
     |> assign(:profiles, Map.get(socket.assigns, :profiles, %{}))
     |> assign(:blob_rev, 0)
     |> assign(:sidebar_contacts, Map.get(socket.assigns, :sidebar_contacts, []))
+    |> assign(:all_contacts, Map.get(socket.assigns, :all_contacts, []))
     |> assign(:suggestions, @empty_payload.suggestions)
   end
 
@@ -1373,9 +1400,6 @@ defmodule HighWireWeb.TimelineLive do
   # Author names open that feed's neutral identity view.
   defp profile_href("@" <> _ = id), do: "/profile?id=" <> URI.encode_www_form(id)
   defp profile_href(_id), do: nil
-
-  defp shown_contacts(contacts, true), do: contacts
-  defp shown_contacts(contacts, false), do: Enum.take(contacts, @max_sidebar_contacts)
 
   defp image_of(id, _profiles) when not is_binary(id), do: nil
   defp image_of(id, %{profiles: profiles}), do: image_of(id, profiles)
