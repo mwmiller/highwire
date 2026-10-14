@@ -407,7 +407,11 @@ defmodule HighWire.Timeline do
       reload_timer: nil,
       profile_fetching?: false,
       profile_wants: MapSet.new(),
-      done_count: 0
+      done_count: 0,
+      last_net_at: nil,
+      last_gossip_at: nil,
+      net_dirty: false,
+      peer_meta: HighWire.PeersMeta.load()
     }
 
     if Sidecar.enabled?() do
@@ -427,8 +431,26 @@ defmodule HighWire.Timeline do
     {:reply, run_probes(state), state}
   end
 
+  def handle_call(:transfer_status, _from, state) do
+    now = System.monotonic_time(:millisecond)
+
+    active? =
+      case state.last_net_at do
+        nil -> false
+        t -> now - t < 2500
+      end
+
+    {:reply,
+     %{last_net_at: state.last_net_at, last_gossip_at: state.last_gossip_at, active?: active?},
+     state}
+  end
+
   def handle_call(:network, _from, state) do
     {:reply, Map.get(state, :network), state}
+  end
+
+  def handle_call(:peer_meta, _from, state) do
+    {:reply, Map.get(state, :peer_meta, %{}), state}
   end
 
   def handle_call({:profile, id}, _from, state) do
@@ -1279,7 +1301,10 @@ defmodule HighWire.Timeline do
   # causes one re-render).
   def handle_info({Client, ref, {:item, _id}}, %{blob_ls_ref: ref} = state) do
     if state.blob_timer, do: Process.cancel_timer(state.blob_timer)
-    {:noreply, %{state | blob_timer: Process.send_after(self(), :rebroadcast, 500)}}
+    now = System.monotonic_time(:millisecond)
+
+    {:noreply,
+     %{state | blob_timer: Process.send_after(self(), :rebroadcast, 500), last_net_at: now}}
   end
 
   def handle_info({Client, ref, :done}, %{blob_ls_ref: ref} = state) do
@@ -1323,14 +1348,24 @@ defmodule HighWire.Timeline do
   # follow" section simply stay hidden.
   def handle_info({:network, gen}, %{gen: current} = state) when gen == current do
     state = %{state | network_timer: nil}
-    previous = connections_of(Map.get(state, :network))
-    state = Map.put(state, :network, fetch_network(Map.get(state, :client)))
+    old_net = Map.get(state, :network)
+    previous = connections_of(old_net)
+    now = System.monotonic_time(:millisecond)
+    new_net = fetch_network(Map.get(state, :client))
+    state = Map.put(state, :network, new_net)
     connections = connections_of(state.network)
 
     # A peer joined or left — the rail badge's flare rides this event.
-    if connections != previous do
-      broadcast_gossip(%{connected: length(connections)})
-    end
+    state =
+      if connections != previous do
+        broadcast_gossip(%{connected: length(connections)})
+        %{state | last_gossip_at: now, last_net_at: now}
+      else
+        %{state | last_net_at: now}
+      end
+
+    # Update peer meta with recency
+    state = update_peer_recency(state, old_net, new_net)
 
     old = Map.get(state, :suggestions, [])
 
@@ -1346,7 +1381,7 @@ defmodule HighWire.Timeline do
         state
       end
 
-    {:noreply, schedule_network(state, 11_000)}
+    {:noreply, schedule_network(state, 11_003)}
   end
 
   def handle_info({:network, _stale}, state), do: {:noreply, state}
@@ -2327,4 +2362,70 @@ defmodule HighWire.Timeline do
   end
 
   defp schedule_reconnect, do: Process.send_after(self(), :connect, 3_000)
+
+  defp update_peer_recency(state, _old_net, nil), do: state
+
+  defp update_peer_recency(state, old_net, new_net) do
+    now = System.system_time(:millisecond)
+
+    old_conns = connections_of(old_net || %{})
+    new_conns = connections_of(new_net)
+
+    meta =
+      state
+      |> Map.get(:peer_meta, %{})
+      |> update_conns_recency(new_conns, old_conns, now)
+      |> update_known_recency(new_net, now)
+
+    if meta != Map.get(state, :peer_meta, %{}) do
+      state = %{state | peer_meta: meta, net_dirty: true}
+      maybe_persist_peer_meta(state)
+    else
+      state
+    end
+  end
+
+  defp update_conns_recency(meta, new_conns, old_conns, now) do
+    Enum.reduce(new_conns, meta, fn id, acc ->
+      was_connected = id in old_conns
+      m = HighWire.PeersMeta.get(acc, id)
+
+      m1 =
+        if was_connected and Map.has_key?(m, "last_connected_at") do
+          m
+        else
+          Map.put(m, "last_connected_at", now)
+        end
+
+      m2 = Map.put(m1, "last_activity_at", now)
+      Map.put(acc, id, m2)
+    end)
+  end
+
+  defp update_known_recency(meta, %{"knownPeers" => peers} = _net, now)
+       when is_list(peers) do
+    Enum.reduce(peers, meta, fn
+      %{"address" => addr} = peer, acc when is_binary(addr) ->
+        m = HighWire.PeersMeta.get(acc, addr)
+        m = Map.put(m, "last_seen_at", now)
+        m = if peer["source"], do: Map.put_new(m, "source", peer["source"]), else: m
+        Map.put(acc, addr, m)
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp update_known_recency(meta, _net, _now), do: meta
+
+  defp maybe_persist_peer_meta(state) do
+    case state do
+      %{net_dirty: true, peer_meta: meta} ->
+        _ = HighWire.PeersMeta.save(meta)
+        %{state | net_dirty: false}
+
+      _ ->
+        state
+    end
+  end
 end
