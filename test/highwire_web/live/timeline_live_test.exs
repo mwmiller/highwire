@@ -544,6 +544,31 @@ defmodule HighWireWeb.TimelineLiveTest do
       html = notify(view, feed_payload([root]))
       assert html =~ "the bumping reply"
     end
+
+    test "the window's rows are capped so first paint isn't a wall of rows", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      # More standalone roots than the tab cap; `words 1` is oldest.
+      msgs =
+        for i <- 1..(HighWireWeb.TimelineLive.max_tab_rows() + 40) do
+          ssb_msg("%root-#{i}.sha256", "@bob:.ed25519", now - (200 - i) * 1_000, %{
+            "type" => "post",
+            "text" => "words #{i}"
+          })
+        end
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      capped = HighWireWeb.TimelineLive.max_tab_rows()
+      assert count(html, "id=\"post-") == capped
+
+      # The newest (highest-activity) rows survive the cap...
+      assert html =~ "words #{capped + 40}"
+      assert html =~ "words #{capped + 39}"
+      # ...and the oldest were dropped, not all rendered.
+      refute html =~ "words 1#{~s(</p>)}"
+    end
   end
 
   defp ssb_msg(key, author, ts, content) do
@@ -588,6 +613,10 @@ defmodule HighWireWeb.TimelineLiveTest do
 
   defp notify(view, payload) do
     send(view.pid, {HighWire.Timeline, :updated, payload})
+    # The send is async, so render/1 would return the pre-payload rows.
+    # "expand" with a no-op key is a synchronous no-op that still forces
+    # LiveView to drain the mailbox (and process the payload) first.
+    _ = render_click(view, "expand", %{"key" => "__notify__"})
     render(view)
   end
 

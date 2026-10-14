@@ -436,6 +436,16 @@ defmodule HighWireWeb.TimelineLive do
   # carries boxed messages, so there is nothing to merge in.
   defp merge_into(:private, entry, _socket), do: entry
 
+  # Cap on rows a single tab accumulates. The window's flat feed can
+  # build hundreds of rows (its whole job is surfacing activity the
+  # roots view hasn't indexed yet), and merge_into prepends them to the
+  # cursor pages — left uncapped that defeats the pagination and paints
+  # a wall of rows on first load. The list is already sorted by
+  # activity here, so dropping the tail loses only the stalest window
+  # rows; a dropped row whose root is in a cursor page survives the
+  # dedupe via that page.
+  @max_tab_rows 120
+
   defp merge_into(view, entry, socket) do
     self_id = socket.assigns.self_id
 
@@ -475,6 +485,7 @@ defmodule HighWireWeb.TimelineLive do
       (added ++ fresh_contacts ++ kept_contacts ++ entry_rest)
       |> annotate_likes(socket.assigns.like_counts)
       |> Enum.sort_by(& &1.activity, :desc)
+      |> Enum.take(@max_tab_rows)
       |> Enum.uniq_by(&dedupe_id/1)
 
     %{entry | rows: rows}
@@ -497,6 +508,9 @@ defmodule HighWireWeb.TimelineLive do
       loaded
     end
   end
+
+  @doc false
+  def max_tab_rows, do: @max_tab_rows
 
   # Thread identity is the root key — a window row whose root never
   # reached the window still carries it, while a cursor row IS the root.
