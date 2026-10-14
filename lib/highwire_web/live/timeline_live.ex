@@ -563,7 +563,7 @@ defmodule HighWireWeb.TimelineLive do
 
     assigns =
       assign(assigns,
-        rows: Enum.filter(page.rows, &matches_query?(&1, assigns.q)),
+        rows: search_rows(assigns, page.rows),
         views: @views,
         left_views: Enum.filter(@views, fn {v, _} -> v in @left_views end),
         right_views: Enum.filter(@views, fn {v, _} -> v in @right_views end),
@@ -767,13 +767,19 @@ defmodule HighWireWeb.TimelineLive do
               SSB engine disabled in this configuration.
             </p>
             <p
-              :if={@status == :ok and @rows == [] and @view == :private}
+              :if={@status == :ok and @rows == [] and @q != ""}
+              class="px-4 py-3 text-sm text-dim"
+            >
+              Nothing matches “{@q}”.
+            </p>
+            <p
+              :if={@status == :ok and @rows == [] and @view == :private and @q == ""}
               class="px-4 py-3 text-sm text-dim"
             >
               No private messages yet.
             </p>
             <p
-              :if={@status == :ok and @rows == [] and @view != :private}
+              :if={@status == :ok and @rows == [] and @view != :private and @q == ""}
               class="px-4 py-3 text-sm text-dim"
             >
               No messages yet.
@@ -1123,6 +1129,59 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   # -- row selection ------------------------------------------------------
+  # Search runs over everything the client holds, not just the rows the
+  # viewport happened to load: the direct row filter (root author/text,
+  # followed ids) plus every window message — replies included, which the
+  # row filter alone never sees — mapped back to its thread row.
+  defp search_rows(assigns, page_rows) do
+    case assigns.q do
+      "" ->
+        page_rows
+
+      q ->
+        direct = Enum.filter(page_rows, &matches_query?(&1, q))
+        known = MapSet.new(direct, &row_uid/1)
+
+        window_rows = matched_threads(assigns.messages, q)
+
+        window =
+          assigns.feed
+          |> Enum.filter(fn row ->
+            in_scope?(assigns.view, row, assigns.self_id) and
+              row_uid(row) in window_rows and
+              not MapSet.member?(known, row_uid(row))
+          end)
+
+        Enum.sort_by(direct ++ window, & &1.activity, :desc)
+    end
+  end
+
+  defp matched_threads(messages, q) do
+    ql = String.downcase(q)
+
+    messages
+    |> Enum.filter(fn msg ->
+      String.contains?(String.downcase(author_of(msg)), ql) or
+        String.contains?(String.downcase(text(msg)), ql)
+    end)
+    |> Enum.map(&thread_id/1)
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
+  end
+
+  # The row a message belongs to: a reply rides its root's row, a
+  # rootless post is its own. Non-posts (votes, abouts) never key a row
+  # the same way, so they contribute nothing.
+  defp thread_id(msg) do
+    c = content(msg)
+
+    cond do
+      c["type"] != "post" -> nil
+      is_binary(c["root"]) -> c["root"]
+      true -> msg["key"]
+    end
+  end
+
   defp matches_query?(_row, ""), do: true
 
   defp matches_query?(row, q) do

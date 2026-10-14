@@ -420,6 +420,38 @@ defmodule HighWireWeb.TimelineLiveTest do
     refute render(view) =~ ~s(id="transfer-activity")
   end
 
+  test "search reaches replies, not just rendered roots", %{conn: conn} do
+    now = System.system_time(:millisecond)
+
+    root =
+      ssb_msg("%root-x.sha256", "@alice.ed25519", now - 1_000, %{
+        "type" => "post",
+        "text" => "the main topic"
+      })
+
+    reply =
+      ssb_msg("%reply-x.sha256", "@bob.ed25519", now, %{
+        "type" => "post",
+        "text" => "obscure side point",
+        "root" => "%root-x.sha256"
+      })
+
+    {:ok, view, _html} = live(conn, "/")
+    notify(view, feed_payload([root, reply], now: now))
+
+    # The reply's text appears in no rendered root — only the window's
+    # flat message list carries it — yet searching it surfaces the row.
+    html = render_change(view, "search", %{"q" => "obscure"})
+    assert html =~ "the main topic"
+
+    html = render_change(view, "search", %{"q" => "main topic"})
+    assert html =~ "the main topic"
+
+    html = render_change(view, "search", %{"q" => "zzznope"})
+    assert html =~ "Nothing matches"
+    refute html =~ "the main topic"
+  end
+
   defp ssb_msg(key, author, ts, content) do
     %{"key" => key, "value" => %{"author" => author, "timestamp" => ts, "content" => content}}
   end
@@ -434,7 +466,7 @@ defmodule HighWireWeb.TimelineLiveTest do
 
     %{
       feed: HighWire.Timeline.build_feed(msgs, self_id, counts, now),
-      messages: [],
+      messages: msgs,
       reply_counts: %{},
       like_counts: counts,
       likes_by: HighWire.Timeline.like_authors(likes),
