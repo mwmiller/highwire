@@ -1859,13 +1859,16 @@ defmodule HighWire.Timeline do
     like_counts = like_counts(likes)
     index = author_index(acc)
 
-    # Flat list (order-of-arrival view). Generous cap — the LiveView
-    # paginates display for infinite scroll; grouping means the feed is
-    # smaller than the message count anyway.
+    # Flat list (order-of-arrival view). The LiveView's search reads only
+    # author, text, type/root and key (for rootless posts), so each message
+    # is projected down to those before it leaves the payload — the full
+    # value/signature/hash bloat was pure bytes on first paint. Same
+    # newest-first ordering, same generous cap for infinite scroll.
     messages =
       acc
       |> Enum.sort_by(&bump_ts/1, :desc)
       |> Enum.take(2000)
+      |> Enum.map(&search_projection/1)
 
     feed = build_feed(acc, state.self_id, like_counts)
 
@@ -2445,6 +2448,23 @@ defmodule HighWire.Timeline do
       %{"value" => %{"content" => c}} when is_map(c) -> c
       _ -> %{}
     end
+  end
+
+  # A payload message trimmed to only what the LiveView's search reads:
+  # the key (rootless posts key a row by it), the author, and the post
+  # text's type/root. Everything else — signature, previous, hash, the
+  # full value — is carried in the feed rows and never searched, so it
+  # only ever rode along as bytes on first paint.
+  defp search_projection(msg) do
+    c = content(msg)
+
+    %{
+      "key" => msg["key"],
+      "value" => %{
+        "author" => msg["value"]["author"],
+        "content" => Map.take(c, ["type", "text", "root"])
+      }
+    }
   end
 
   defp reconnect(state) do

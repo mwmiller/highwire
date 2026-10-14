@@ -550,6 +550,20 @@ defmodule HighWireWeb.TimelineLiveTest do
     %{"key" => key, "value" => %{"author" => author, "timestamp" => ts, "content" => content}}
   end
 
+  # Mirrors the payload's search projection: only key, author and the
+  # post text's type/root survive the wire. Search reads nothing else.
+  defp slim(msg) do
+    c = msg["value"]["content"]
+
+    %{
+      "key" => msg["key"],
+      "value" => %{
+        "author" => msg["value"]["author"],
+        "content" => Map.take(c, ["type", "text", "root"])
+      }
+    }
+  end
+
   # A Timeline payload as finalize/1 broadcasts it — the window rows come
   # straight from the same builder the engine uses.
   defp feed_payload(msgs, opts \\ []) do
@@ -559,7 +573,7 @@ defmodule HighWireWeb.TimelineLiveTest do
 
     %{
       feed: HighWire.Timeline.build_feed(msgs, self_id, counts),
-      messages: msgs,
+      messages: Enum.map(msgs, &slim/1),
       reply_counts: %{},
       like_counts: counts,
       likes_by: HighWire.Timeline.like_authors(likes),
