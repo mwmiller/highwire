@@ -1139,12 +1139,18 @@ defmodule HighWire.Timeline do
     alive? = is_pid(client) and Process.alive?(client)
     per = Keyword.get(Sidecar.config(), :messages_per_feed, 10)
 
+    # The history probe also samples the first item's key: the get probe
+    # fetches that real message, because `get` is a message-key API —
+    # asking it for a feed id returns "message not found" on a perfectly
+    # healthy engine, which is the false alarm this avoids.
+    {stream_probe, sample_key} = stream_count_probe(alive?, client, state.self_id, per)
+
     %{
       sidecar: Sidecar.status(),
       window: window_summary(state, per),
       probes: [
-        stream_count_probe(alive?, client, state.self_id, per),
-        get_shape_probe(alive?, client, state.self_id),
+        stream_probe,
+        get_shape_probe(alive?, client, sample_key),
         roots_count_probe(alive?, client, "publicFeed", %{}, false),
         roots_count_probe(alive?, client, "participatingFeed", %{}, false)
       ]
@@ -1153,28 +1159,38 @@ defmodule HighWire.Timeline do
 
   # createHistoryStream — the per-feed window the whole timeline rests on.
   # Zero items on the account's own feed means nothing is reaching us.
+  # Returns {probe, sample_key}.
   defp stream_count_probe(false, _client, _self_id, _per),
-    do: probe(:createHistoryStream, :fail, "no engine client")
+    do: {probe(:createHistoryStream, :fail, "no engine client"), nil}
 
   defp stream_count_probe(true, client, self_id, per) when is_binary(self_id) do
     case count_stream(client, ["createHistoryStream"], [%{"id" => self_id, "limit" => per}]) do
-      {:ok, n} when n > 0 -> probe(:createHistoryStream, :ok, "#{n} items on own feed")
-      {:ok, 0} -> probe(:createHistoryStream, :fail, "0 items on own feed")
-      {:error, reason} -> probe(:createHistoryStream, :fail, "error: #{inspect(reason)}")
+      {:ok, {0, _key}} ->
+        {probe(:createHistoryStream, :fail, "0 items on own feed"), nil}
+
+      {:ok, {n, key}} ->
+        {probe(:createHistoryStream, :ok, "#{n} items on own feed"), key}
+
+      {:error, reason} ->
+        {probe(:createHistoryStream, :fail, error_note(reason)), nil}
     end
   end
 
   defp stream_count_probe(true, _client, nil, _per),
-    do: probe(:createHistoryStream, :warn, "no self id yet")
+    do: {probe(:createHistoryStream, :warn, "no self id yet"), nil}
 
-  # get — the unbox path. A real message must come back author-shaped; the
-  # engine's error-map leak (%{"name" => "Error", …}) is the regression the
-  # client now rejects, so this check confirms the fix holds end to end.
-  defp get_shape_probe(false, _client, _self_id),
+  # get — the unbox path, asked of a real message sampled from the own
+  # feed. The engine's error-map leak (%{"name" => "Error", …}) is the
+  # regression the client now rejects, so this check confirms the fix
+  # holds end to end.
+  defp get_shape_probe(false, _client, _key),
     do: probe(:get, :fail, "no engine client")
 
-  defp get_shape_probe(true, client, self_id) when is_binary(self_id) do
-    case Client.call(client, ["get"], [%{"id" => self_id, "private" => true}], 5_000) do
+  defp get_shape_probe(true, _client, nil),
+    do: probe(:get, :warn, "no own message to fetch yet")
+
+  defp get_shape_probe(true, client, key) do
+    case Client.call(client, ["get"], [%{"id" => key, "private" => true}], 5_000) do
       {:ok, %{"author" => _}} ->
         probe(:get, :ok, "returns a real message")
 
@@ -1185,13 +1201,11 @@ defmodule HighWire.Timeline do
         probe(:get, :warn, "unexpected get shape")
 
       {:error, reason} ->
-        probe(:get, :fail, "error: #{inspect(reason)}")
+        probe(:get, :fail, error_note(reason))
     end
   catch
-    _, reason -> probe(:get, :fail, "error: #{inspect(reason)}")
+    _, reason -> probe(:get, :fail, error_note(reason))
   end
-
-  defp get_shape_probe(true, _client, nil), do: probe(:get, :warn, "no self id yet")
 
   # patchwork.<Feed>.roots — the paged tabs. Zero rows while the engine is
   # up usually means the view index is broken, not that the feed is empty.
@@ -1202,33 +1216,41 @@ defmodule HighWire.Timeline do
     props = Map.merge(%{"limit" => 1, "reverse" => true}, extra)
 
     case count_stream(client, ["patchwork", feed, "roots"], [props], private?) do
-      {:ok, n} when n > 0 -> probe(String.to_atom(feed), :ok, "#{n} roots")
-      {:ok, 0} -> probe(String.to_atom(feed), :fail, "0 roots")
-      {:error, reason} -> probe(String.to_atom(feed), :fail, "error: #{inspect(reason)}")
+      {:ok, {n, _key}} when n > 0 -> probe(String.to_atom(feed), :ok, "#{n} roots")
+      {:ok, {0, _key}} -> probe(String.to_atom(feed), :fail, "0 roots")
+      {:error, reason} -> probe(String.to_atom(feed), :fail, error_note(reason))
     end
   end
 
-  # Drain a source stream, counting items until :done / error / timeout.
-  # Mirrors fetch_thread's mailbox drain but tallies instead of collecting.
+  # Drain a source stream, counting items and remembering the first
+  # item's key until :done / error / timeout.
   defp count_stream(client, name, args, private? \\ false) do
     case Client.stream(client, name, args, self()) do
-      {:ok, ref} -> {:ok, drain_count(ref, 0, private?)}
+      {:ok, ref} -> {:ok, drain_count(ref, 0, nil, private?)}
       {:error, reason} -> {:error, reason}
     end
   catch
     _, reason -> {:error, reason}
   end
 
-  defp drain_count(ref, n, private?) do
+  defp drain_count(ref, n, key, private?) do
     receive do
-      {Client, ^ref, {:item, %{"sync" => true}}} -> n
-      {Client, ^ref, {:item, _}} -> drain_count(ref, n + 1, private?)
-      {Client, ^ref, :done} -> n
-      {Client, ^ref, {:error, _}} -> n
+      {Client, ^ref, {:item, %{"sync" => true}}} -> {n, key}
+      {Client, ^ref, {:item, item}} -> drain_count(ref, n + 1, key || item_key(item), private?)
+      {Client, ^ref, :done} -> {n, key}
+      {Client, ^ref, {:error, _}} -> {n, key}
     after
-      8_000 -> n
+      8_000 -> {n, key}
     end
   end
+
+  defp item_key(%{"key" => key}) when is_binary(key), do: key
+  defp item_key(_item), do: nil
+
+  # The engine's errors ride as maps carrying message/name/stack; only
+  # the message is worth a health page.
+  defp error_note(%{"message" => message}) when is_binary(message), do: "error: #{message}"
+  defp error_note(reason), do: "error: #{inspect(reason)}"
 
   defp window_summary(state, per) do
     %{
