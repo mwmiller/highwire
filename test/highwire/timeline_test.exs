@@ -193,6 +193,89 @@ defmodule HighWire.TimelineTest do
       msg(author, key, ts, content)
     end
 
+    test "a post-edit collapses onto the post it revises, newest text wins" do
+      root = post("@alice", "%root.sha256", 1_000)
+
+      edit =
+        msg("@alice", "%edit.sha256", 2_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%root.sha256",
+          "text" => "revised"
+        })
+
+      assert [row] = Timeline.build_feed([root, edit], "@me", %{})
+      assert row.root_key == "%root.sha256"
+      assert row.msg["key"] == "%edit.sha256"
+      assert row.msg["value"]["content"]["text"] == "revised"
+      assert row.edited_by == ["@alice"]
+      # the edit is activity on the post, so the row sits at the edit's time
+      assert row.activity == 2_000
+    end
+
+    test "the newest revision wins when several edits land" do
+      root = post("@alice", "%root.sha256", 1_000)
+
+      first =
+        msg("@alice", "%e1.sha256", 2_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%root.sha256",
+          "text" => "one"
+        })
+
+      second =
+        msg("@alice", "%e2.sha256", 3_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%root.sha256",
+          "text" => "two"
+        })
+
+      assert [row] = Timeline.build_feed([root, first, second], "@me", %{})
+      assert row.msg["value"]["content"]["text"] == "two"
+      assert row.edited_by == ["@alice", "@alice"]
+    end
+
+    test "an edit of a reply joins the reply's thread, not its own row" do
+      root = post("@alice", "%root.sha256", 1_000)
+      reply = post("@bob", "%reply.sha256", 2_000, "%root.sha256")
+
+      edit =
+        msg("@bob", "%edit.sha256", 3_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%reply.sha256",
+          "text" => "revised reply"
+        })
+
+      assert [row] = Timeline.build_feed([root, reply, edit], "@me", %{})
+      assert row.root_key == "%root.sha256"
+      assert row.edited_by == ["@bob"]
+    end
+
+    test "an edit whose target is outside the window stands alone" do
+      edit =
+        msg("@alice", "%edit.sha256", 2_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%gone.sha256",
+          "text" => "orphan"
+        })
+
+      assert [row] = Timeline.build_feed([edit], "@me", %{})
+      assert row.kind == :other
+    end
+
+    test "an edit never lets one message head two rows" do
+      root = post("@alice", "%root.sha256", 1_000)
+
+      edit =
+        msg("@alice", "%edit.sha256", 2_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%root.sha256",
+          "text" => "revised"
+        })
+
+      assert [row] = Timeline.build_feed([root, edit, edit], "@me", %{})
+      assert row.root_key == "%root.sha256"
+    end
+
     test "root likes count once when the root sits in the window" do
       root = post("@alice", "%root.sha256", 1_000)
       reply = post("@bob", "%reply.sha256", 2_000, "%root.sha256")

@@ -342,7 +342,12 @@ defmodule HighWireWeb.TimelineLiveTest do
 
       assert html =~ "announced the pub pub.freesocial.co"
       assert html =~ "registered the alias linuxuser"
-      assert html =~ "edited their post"
+
+      # The post-edit revises a post in the window, so it collapses onto
+      # that post's row: the row carries the newest text rather than a
+      # bare "edited their post" line pointing nowhere.
+      assert html =~ "the revised post"
+      refute html =~ "the original post"
 
       refute html =~ "sent a pub message"
       refute html =~ "sent a room/alias message"

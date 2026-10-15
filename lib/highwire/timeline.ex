@@ -2075,16 +2075,42 @@ defmodule HighWire.Timeline do
     acc = Enum.reject(acc, &boxed?/1)
 
     by_key = Map.new(acc, fn msg -> {msg["key"], msg} end)
+    # An edit revises the post named by revisionRoot/revisionBranch/root.
+    # It threads under that post instead of standing alone, so the row it
+    # lands on carries the newest text rather than a bare "edited a post"
+    # line pointing nowhere. `edited_by` records every revision the row
+    # absorbed, newest-first.
+    edit_index = edit_index(acc)
     {contacts, rest} = Enum.split_with(acc, &contact?/1)
-    {threaded, standalone} = Enum.split_with(rest, &(thread_root(&1, by_key) != nil))
+
+    {threaded, standalone} =
+      Enum.split_with(rest, fn msg ->
+        thread_root(msg, by_key) != nil or edit_thread(msg, by_key, edit_index) != nil
+      end)
 
     thread_entries =
       threaded
-      |> Enum.group_by(&thread_root(&1, by_key))
+      |> Enum.group_by(fn msg ->
+        thread_root(msg, by_key) || edit_thread(msg, by_key, edit_index)
+      end)
       |> Enum.map(fn {root_key, group} ->
         root_msg = Map.get(by_key, root_key)
+
+        edits =
+          group
+          |> Enum.filter(&edit?/1)
+          |> Enum.sort_by(&bump_ts/1, :desc)
+
+        # A row's text is the newest revision of the post it shows —
+        # otherwise the feed renders the pre-edit body forever and the
+        # edit is a row the reader can't act on.
+        row_msg =
+          case edits do
+            [latest | _] -> latest
+            [] -> root_msg || hd(Enum.sort_by(group, &bump_ts/1, :desc))
+          end
+
         sorted = Enum.sort_by(group, &bump_ts/1, :desc)
-        row_msg = root_msg || hd(sorted)
 
         # The head never previews itself; a fallback head (root absent
         # from the window) is excluded too, else it greets its own row.
@@ -2102,6 +2128,8 @@ defmodule HighWire.Timeline do
 
         likes = thread_likes(group, root_key, like_counts)
 
+        # The edit is activity on the post: a revision moves the row up
+        # the feed exactly like a reply does.
         activity = sorted |> Enum.map(&bump_ts/1) |> Enum.max()
 
         participants = thread_participants(group, root_msg)
@@ -2117,6 +2145,7 @@ defmodule HighWire.Timeline do
           mentioned?: mentioned?,
           root_key: root_key
         )
+        |> Map.put(:edited_by, Enum.map(edits, & &1["value"]["author"]))
       end)
 
     contact_entries = contact_rows(contacts, self_id)
@@ -2286,6 +2315,44 @@ defmodule HighWire.Timeline do
 
   defp msg_id?(<<"%", _::binary>> = id), do: String.ends_with?(id, ".sha256")
   defp msg_id?(_), do: false
+
+  defp edit?(msg), do: content(msg)["type"] == "post-edit"
+
+  # key → the post an edit revises. revisionRoot is the protocol's own
+  # pointer; revisionBranch and root cover clients that set only one.
+  defp edit_index(acc) do
+    Enum.reduce(acc, %{}, fn
+      msg, idx ->
+        if key = edit_target_key(msg) do
+          Map.put(idx, msg["key"], key)
+        else
+          idx
+        end
+    end)
+  end
+
+  defp edit_target_key(msg) do
+    if edit?(msg) do
+      c = content(msg)
+      key = c["revisionRoot"] || c["revisionBranch"] || c["root"]
+      if msg_id?(key), do: key
+    end
+  end
+
+  # The thread an edit belongs to. Revisions point at the post they
+  # revise, so resolve that post the same way a reply resolves its root:
+  # an edit of a rootless post heads that post's row, an edit of a reply
+  # joins the reply's thread. An edit whose target never made it into the
+  # window is unanchorable — it stands alone rather than guessing.
+  defp edit_thread(msg, by_key, edit_index) do
+    with true <- edit?(msg),
+         target when is_binary(target) <- Map.get(edit_index, msg["key"]),
+         parent when not is_nil(parent) <- Map.get(by_key, target) do
+      thread_root(parent, by_key) || target
+    else
+      _ -> nil
+    end
+  end
 
   # Mirrors silkpurse_threads' sort_ts/2 — the engine's own bump metric —
   # so client and engine agree on feed order. min(claimed, received)
