@@ -410,6 +410,61 @@ defmodule HighWireWeb.TimelineLiveTest do
       wants = :sys.get_state(HighWire.Timeline).profile_wants
       assert MapSet.member?(wants, author)
     end
+
+    test "an edited post is marked edited", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%ed-root.sha256", "@alice:.ed25519", now - 2_000, %{
+          "type" => "post",
+          "text" => "first draft"
+        }),
+        ssb_msg("%ed-rev.sha256", "@alice:.ed25519", now - 1_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%ed-root.sha256",
+          "text" => "final draft"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      # The row shows the revision's text and admits it was revised.
+      assert html =~ "final draft"
+      refute html =~ "first draft"
+      assert html =~ "edited"
+      refute html =~ "edited by"
+    end
+
+    test "a post revised by several feeds names them", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%multi-root.sha256", "@alice:.ed25519", now - 3_000, %{
+          "type" => "post",
+          "text" => "v1"
+        }),
+        ssb_msg("%multi-e1.sha256", "@alice:.ed25519", now - 2_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%multi-root.sha256",
+          "text" => "v2"
+        }),
+        ssb_msg("%multi-e2.sha256", "@bob:.ed25519", now - 1_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%multi-root.sha256",
+          "text" => "v3"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      alice = HighWire.Avatar.short_id("@alice:.ed25519")
+      bob = HighWire.Avatar.short_id("@bob:.ed25519")
+
+      assert html =~ "v3"
+      assert html =~ "edited by #{bob}, #{alice}"
+    end
   end
 
   describe "composer mentions" do

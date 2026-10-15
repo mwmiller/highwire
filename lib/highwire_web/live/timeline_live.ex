@@ -981,6 +981,7 @@ defmodule HighWireWeb.TimelineLive do
           else: ""
         )
       )
+      |> assign(:edit_note, edit_note(assigns.row, assigns.ctx))
 
     ~H"""
     <article
@@ -1013,6 +1014,9 @@ defmodule HighWireWeb.TimelineLive do
           <span class="text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
           <span :if={@row.activity > ts(@row.msg)} class="text-xs text-faint">
             · active <.age ts={@row.activity} />
+          </span>
+          <span :if={@edit_note} class="text-xs text-faint" title={@edit_note}>
+            · {@edit_note}
           </span>
           <span
             :if={@private?}
@@ -1486,6 +1490,24 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   defp meta_line(_row, _ctx), do: nil
+
+  # The row already carries the newest revision's text; `edited_by`
+  # (the author of each absorbed revision) is the only sign the reader
+  # gets that what they see is a revision. A lone editor is the author
+  # already on the row, so it reads as a plain "edited"; several name
+  # everyone who touched it.
+  defp edit_note(row, ctx) do
+    case Enum.uniq(Map.get(row, :edited_by, [])) do
+      [] -> nil
+      [_single] -> "edited"
+      editors -> "edited by " <> editors_label(editors, ctx)
+    end
+  end
+
+  defp editors_label(editors, ctx) do
+    shown = editors |> Enum.take(2) |> Enum.map_join(", ", &display_name(&1, ctx))
+    if length(editors) > 2, do: "#{shown} +#{length(editors) - 2}", else: shown
+  end
 
   # The message a row's heart votes on: the thread root for threads
   # (counts aggregate the whole thread), the message itself otherwise.
