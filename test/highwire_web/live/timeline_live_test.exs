@@ -872,6 +872,59 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ "ancient 5"
       assert count(html, "id=\"post-") == capped + 10
     end
+
+    test "a page the engine failed to return does not end the feed", %{conn: conn} do
+      now = 1_700_000_000_000
+      capped = HighWireWeb.TimelineLive.max_tab_rows()
+
+      msgs =
+        for i <- 1..(capped + 5) do
+          ssb_msg("%root-#{i}.sha256", "@bob:.ed25519", now - (200 - i) * 1_000, %{
+            "type" => "post",
+            "text" => "words #{i}"
+          })
+        end
+
+      {:ok, view, _html} = live(conn, "/")
+      notify(view, feed_payload(msgs))
+
+      # One page arrives, then the request for the next never comes back.
+      older =
+        for i <- 1..3 do
+          ssb_msg("%old-#{i}.sha256", "@carol:.ed25519", now - (1_000 + i) * 1_000, %{
+            "type" => "post",
+            "text" => "deeper #{i}"
+          })
+        end
+
+      page = %{rows: HighWire.Timeline.build_feed(older, nil, %{}), resume: 42, more: true}
+      send(view.pid, {:page_loaded, :public, nil, page})
+      html = render(view)
+      assert html =~ "deeper 1"
+      assert html =~ "feed-sentinel"
+
+      send(view.pid, {:page_failed, :public, 42})
+      html = render(view)
+
+      # A failed load is not an empty last page. The rows already paged in
+      # survive, `more` still stands, and the sentinel stays — so the feed
+      # keeps its way into the past instead of quietly declaring itself
+      # finished for good.
+      assert html =~ "deeper 1"
+      assert html =~ "feed-sentinel"
+    end
+
+    test "a failed page retries on a capped exponential backoff" do
+      delay = &HighWireWeb.TimelineLive.page_retry_delay/1
+
+      assert delay.(0) == 1_000
+      assert delay.(1) == 2_000
+      assert delay.(2) == 4_000
+      # The cap keeps a long outage from stretching the retries without
+      # bound.
+      assert delay.(10) == 30_000
+      assert delay.(50) == 30_000
+    end
   end
 
   defp ssb_msg(key, author, ts, content) do

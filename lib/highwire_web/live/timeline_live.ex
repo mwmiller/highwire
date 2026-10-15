@@ -54,6 +54,12 @@ defmodule HighWireWeb.TimelineLive do
   # Reply snippets are memoized; 31 minutes matches the Markdown cache.
   @snippet_ttl_ms 1_860_000
 
+  # Backoff for a page the engine failed to return: 1s doubling up to 30s.
+  # Long enough not to hammer a restarting engine, short enough that the
+  # feed picks itself back up without the reader doing anything.
+  @page_retry_ms 1_000
+  @page_retry_max_ms 30_000
+
   # How many contacts the rail shows before it offers to expand. A full
   # follows list can run to forty names, which scrolls the rail and
   # buries "Who to follow" and the network badge under the fold.
@@ -106,7 +112,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(max_sidebar_contacts: @max_sidebar_contacts)
       |> assign(compose: "", compose_error: nil)
       |> assign(mention_suggestions: [])
-      |> assign(paged: %{}, page_inflight: MapSet.new())
+      |> assign(paged: %{}, page_inflight: MapSet.new(), page_retries: %{})
       |> assign(active: true, peers_timer: peers_timer)
       # Arrival shimmer: rows the next wave brings that this store
       # never saw. seen_keys is the top-window baseline — it only
@@ -200,18 +206,55 @@ defmodule HighWireWeb.TimelineLive do
     socket =
       socket
       |> assign(:page_inflight, MapSet.delete(socket.assigns.page_inflight, {view, resume}))
+      |> assign(:page_retries, Map.delete(socket.assigns.page_retries, {view, resume}))
       |> assign(:paged, Map.put(socket.assigns.paged, view, merge_into(view, entry, socket)))
 
     {:noreply, merge_paged(socket)}
   end
 
+  # A page that never arrived is not the end of the feed. Leave `more` and
+  # `resume` exactly as they were so the sentinel stays and the reader can
+  # carry on, and try again on a backoff. The retry is not optional: the
+  # sentinel only asks for more on an intersection *change*, so a failure
+  # while the reader sits at the bottom would otherwise strand them — the
+  # feed would look finished and never continue.
   def handle_info({:page_failed, view, resume}, socket) do
-    # Clear the in-flight mark; the next payload retries the load.
-    {:noreply,
-     assign(socket, :page_inflight, MapSet.delete(socket.assigns.page_inflight, {view, resume}))}
+    socket =
+      socket
+      |> assign(:page_inflight, MapSet.delete(socket.assigns.page_inflight, {view, resume}))
+      |> schedule_page_retry(view, resume)
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:retry_page, view, resume}, socket) do
+    # A view the reader has left is not paging anymore; the tab switch
+    # re-mounts the sentinel, which fires its own initial observation.
+    cond do
+      socket.assigns.view != view ->
+        {:noreply,
+         assign(socket, :page_retries, Map.delete(socket.assigns.page_retries, {view, resume}))}
+
+      MapSet.member?(socket.assigns.page_inflight, {view, resume}) ->
+        {:noreply, socket}
+
+      true ->
+        case Map.get(socket.assigns.paged, view) do
+          %{more: true, resume: ^resume} -> {:noreply, request_page(socket, view, resume)}
+          _ -> {:noreply, socket}
+        end
+    end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
+
+  defp schedule_page_retry(socket, view, resume) do
+    key = {view, resume}
+    attempts = Map.get(socket.assigns.page_retries, key, 0)
+
+    Process.send_after(self(), {:retry_page, view, resume}, page_retry_delay(attempts))
+    assign(socket, :page_retries, Map.put(socket.assigns.page_retries, key, attempts + 1))
+  end
 
   @impl true
   def handle_event("search", %{"q" => q}, socket) do
@@ -416,10 +459,9 @@ defmodule HighWireWeb.TimelineLive do
 
     spawn(fn ->
       message =
-        try do
-          {:page_loaded, view, resume, Timeline.feed(view, resume)}
-        catch
-          _kind, _reason -> {:page_failed, view, resume}
+        case Timeline.feed(view, resume) do
+          {:ok, page} -> {:page_loaded, view, resume, page}
+          {:error, _reason} -> {:page_failed, view, resume}
         end
 
       send(owner, message)
@@ -592,6 +634,18 @@ defmodule HighWireWeb.TimelineLive do
 
   @doc false
   def max_sidebar_contacts, do: @max_sidebar_contacts
+
+  # Exponential backoff, capped, for retrying a page the engine failed to
+  # return. The exponent is clamped too: past a handful of attempts the
+  # delay is pinned at the cap anyway, and the counter keeps climbing for
+  # as long as the engine is out.
+  #
+  # Exposed for the test: the retry itself is a timer, which is awkward to
+  # assert directly.
+  @doc false
+  def page_retry_delay(attempts) when is_integer(attempts) and attempts >= 0 do
+    min(@page_retry_ms * Integer.pow(2, min(attempts, 5)), @page_retry_max_ms)
+  end
 
   # The rail opens at a random point in the alphabetized roll so it does
   # not always lead with the same faces. A list that already fits never

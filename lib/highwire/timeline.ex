@@ -277,7 +277,12 @@ defmodule HighWire.Timeline do
           resume: integer() | nil,
           more: boolean()
         }
-  def private_feed(resume \\ nil), do: feed(:private, resume)
+  def private_feed(resume \\ nil) do
+    case feed(:private, resume) do
+      {:ok, page} -> page
+      {:error, _reason} -> empty_page()
+    end
+  end
 
   @doc """
   One page of a timeline feed tab: the engine's paged thread-root view
@@ -286,24 +291,25 @@ defmodule HighWire.Timeline do
   `:participating`, `:profile` (this account's roots) and `:mentions`.
 
   `resume` is the cursor from the previous page's marker. Returns
-  `%{rows, resume, more}`; rows are shaped like feed rows.
+  `{:ok, %{rows, resume, more}}`; rows are shaped like feed rows. Returns
+  `{:error, reason}` when the timeline isn't running or the engine did
+  not answer in time — a page that never arrived is not an empty final
+  page, and the caller has to be able to tell the two apart.
   """
-  @spec feed(:public | :private | :participating | :profile | :mentions, integer() | nil) :: %{
-          rows: [map()],
-          resume: integer() | nil,
-          more: boolean()
-        }
+  @spec feed(:public | :private | :participating | :profile | :mentions, integer() | nil) ::
+          {:ok, %{rows: [map()], resume: integer() | nil, more: boolean()}}
+          | {:error, :offline | :timeout}
   def feed(view, resume \\ nil)
       when view in [:public, :private, :participating, :profile, :mentions] do
     case Process.whereis(__MODULE__) do
       nil ->
-        empty_page()
+        {:error, :offline}
 
       pid ->
         try do
-          GenServer.call(pid, {:feed, view, resume}, 15_000)
+          {:ok, GenServer.call(pid, {:feed, view, resume}, 15_000)}
         catch
-          :exit, _ -> empty_page()
+          :exit, _ -> {:error, :timeout}
         end
     end
   end
