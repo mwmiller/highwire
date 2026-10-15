@@ -240,8 +240,19 @@ defmodule HighWireWeb.TimelineLive do
 
       true ->
         case Map.get(socket.assigns.paged, view) do
-          %{more: true, resume: ^resume} -> {:noreply, request_page(socket, view, resume)}
-          _ -> {:noreply, socket}
+          %{more: true, resume: ^resume} ->
+            {:noreply, request_page(socket, view, resume)}
+
+          # Nothing outstanding for this cursor anymore. Drop the count,
+          # or the reader would be told the feed is still loading long
+          # after it stopped.
+          _ ->
+            {:noreply,
+             assign(
+               socket,
+               :page_retries,
+               Map.delete(socket.assigns.page_retries, {view, resume})
+             )}
         end
     end
   end
@@ -647,6 +658,14 @@ defmodule HighWireWeb.TimelineLive do
     min(@page_retry_ms * Integer.pow(2, min(attempts, 5)), @page_retry_max_ms)
   end
 
+  # Whether the reader's tab has a page outstanding — requested, or
+  # waiting out the backoff before it is requested again. Both sets are
+  # keyed {view, resume} and a switch of tab strands neither: the count
+  # for an abandoned view is dropped when its timer next fires.
+  defp pending_page?(pending, view) do
+    Enum.any?(pending, fn {pending_view, _resume} -> pending_view == view end)
+  end
+
   # The rail opens at a random point in the alphabetized roll so it does
   # not always lead with the same faces. A list that already fits never
   # rotates, so its offset is meaningless and stays put.
@@ -774,14 +793,31 @@ defmodule HighWireWeb.TimelineLive do
   @impl true
   def render(assigns) do
     page = Map.get(assigns.paged, assigns.view, %{rows: [], more: false})
+    rows = search_rows(assigns, page.rows)
+
+    # The tail of the feed reads three ways: a page on its way back, more
+    # rows still to ask for, or the true end. A reader used to have to
+    # guess between them — an invisible load and the end of history looked
+    # identical. Both lines require rows on screen, so an empty feed keeps
+    # its own message and a feed that has not landed a page yet claims
+    # nothing about how far back it goes.
+    loading? =
+      rows != [] and
+        (pending_page?(assigns.page_inflight, assigns.view) or
+           pending_page?(assigns.page_retries, assigns.view))
+
+    finished? =
+      rows != [] and not page.more and Map.get(page, :loaded?, false) and assigns.q == ""
 
     assigns =
       assign(assigns,
-        rows: search_rows(assigns, page.rows),
+        rows: rows,
         views: @views,
         left_views: Enum.filter(@views, fn {v, _} -> v in @left_views end),
         right_views: Enum.filter(@views, fn {v, _} -> v in @right_views end),
         more: page.more,
+        loading?: loading?,
+        finished?: finished?,
         as: %{
           expanded: assigns.expanded,
           index: assigns.index,
@@ -1021,7 +1057,20 @@ defmodule HighWireWeb.TimelineLive do
               <.other_row :if={row.kind == :other} row={row} ctx={@as} />
             </div>
 
+            <p
+              :if={@loading?}
+              id="feed-loading"
+              role="status"
+              class="px-4 py-3 text-sm text-info"
+            >
+              Loading more…
+            </p>
+
             <div :if={@more} id="feed-sentinel" phx-hook="InfiniteScroll" class="h-px"></div>
+
+            <p :if={@finished?} id="feed-end" class="px-4 py-3 text-sm text-dim">
+              End of feed.
+            </p>
           </div>
         </div>
       </div>

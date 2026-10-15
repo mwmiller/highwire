@@ -925,6 +925,80 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert delay.(10) == 30_000
       assert delay.(50) == 30_000
     end
+
+    test "a page in flight tells the reader it is loading more", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs =
+        for i <- 1..8 do
+          ssb_msg("%root-#{i}.sha256", "@bob:.ed25519", now - i * 1_000, %{
+            "type" => "post",
+            "text" => "words #{i}"
+          })
+        end
+
+      {:ok, view, _html} = live(conn, "/")
+      notify(view, feed_payload(msgs))
+
+      # With nothing outstanding the tail is silent.
+      page = %{rows: HighWire.Timeline.build_feed(msgs, nil, %{}), resume: 42, more: true}
+      send(view.pid, {:page_loaded, :public, nil, page})
+      html = render(view)
+      assert html =~ "feed-sentinel"
+      refute html =~ "feed-loading"
+
+      # Ask for the next page: the request is in flight, and says so.
+      html = render_click(view, "load-more", %{})
+      assert html =~ "feed-loading"
+      assert html =~ "Loading more…"
+
+      # It clears when the answer lands.
+      send(view.pid, {:page_loaded, :public, 42, %{rows: [], resume: nil, more: false}})
+      html = render(view)
+      refute html =~ "feed-loading"
+    end
+
+    test "the feed says when it has run out, and stays quiet while searching", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs =
+        for i <- 1..8 do
+          ssb_msg("%root-#{i}.sha256", "@bob:.ed25519", now - i * 1_000, %{
+            "type" => "post",
+            "text" => "words #{i}"
+          })
+        end
+
+      {:ok, view, _html} = live(conn, "/")
+      notify(view, feed_payload(msgs))
+
+      # More history below the fold: a sentinel, and no claim of an end.
+      page = %{rows: HighWire.Timeline.build_feed(msgs, nil, %{}), resume: 42, more: true}
+      send(view.pid, {:page_loaded, :public, nil, page})
+      html = render(view)
+      assert html =~ "feed-sentinel"
+      refute html =~ "feed-end"
+
+      # The next page reports nothing further back — that is the end.
+      send(view.pid, {:page_loaded, :public, 42, %{rows: [], resume: nil, more: false}})
+      html = render(view)
+      refute html =~ "feed-sentinel"
+      assert html =~ "End of feed."
+
+      # A search is over matches, not over depth: the footer must not
+      # read as "no more results" underneath the matches.
+      html = render_click(view, "search", %{"q" => "words"})
+      assert html =~ "words 1"
+      refute html =~ "feed-end"
+    end
+
+    test "an empty feed does not claim to have reached the end", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload([]))
+
+      refute html =~ "feed-end"
+      assert html =~ "No messages yet."
+    end
   end
 
   defp ssb_msg(key, author, ts, content) do
