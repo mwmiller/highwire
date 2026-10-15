@@ -1236,6 +1236,9 @@ defmodule HighWireWeb.TimelineLive do
   attr :ctx, :map, required: true
 
   defp other_row(assigns) do
+    assigns =
+      assign(assigns, :href, profile_href(author_of(assigns.row.msg)))
+
     ~H"""
     <div class="flex items-center gap-3 px-4 py-2.5 text-sm italic text-faint hover:bg-panel">
       <div class="w-10 shrink-0">
@@ -1247,7 +1250,12 @@ defmodule HighWireWeb.TimelineLive do
         />
       </div>
       <p class="min-w-0 flex-1">
-        <span class="not-italic text-ink">{display_name(author_of(@row.msg), @ctx)}</span>
+        <span class="not-italic text-ink">
+          <.link :if={@href} navigate={@href} class="hover:underline">
+            {display_name(author_of(@row.msg), @ctx)}
+          </.link>
+          <span :if={@href == nil}>{display_name(author_of(@row.msg), @ctx)}</span>
+        </span>
         {other_label(@row.msg, @ctx)}
       </p>
       <span class="ml-auto not-italic text-xs text-faint"><.age ts={ts(@row.msg)} /></span>

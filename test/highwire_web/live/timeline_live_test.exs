@@ -369,6 +369,12 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ "wrote #{bob}"
       assert html =~ "bio"
       refute html =~ "sent a about"
+
+      # The author's name is the row's only affordance and links to their
+      # profile. Both messages here are authored by @alice; the about
+      # *subject* (@bob) is named in the sentence but is not the link.
+      assert html =~ ~s(href="/profile?id=#{URI.encode_www_form("@alice:.ed25519")}")
+      refute html =~ ~s(href="/profile?id=#{URI.encode_www_form("@bob:.ed25519")}")
     end
 
     test "pub, room alias and post-edit rows read as sentences, not protocol types", %{conn: conn} do
