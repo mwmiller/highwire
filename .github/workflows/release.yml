@@ -41,12 +41,6 @@ jobs:
             triple: aarch64-apple-darwin
             sidecar: highwire-backend-aarch64-apple-darwin
             tauri_conf: ""
-          - os: macos-15-intel
-            burrito_target: macos_intel
-            backend: highwire_macos_intel
-            triple: x86_64-apple-darwin
-            sidecar: highwire-backend-x86_64-apple-darwin
-            tauri_conf: ""
           - os: ubuntu-22.04
             burrito_target: linux
             backend: highwire_linux
