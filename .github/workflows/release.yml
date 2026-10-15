@@ -374,13 +374,16 @@ jobs:
             src-tauri/target/release/bundle/windows/*.exe
           if-no-files-found: error
 
-  # Tag-only: a workflow_dispatch dry run exercises every build leg
-  # without touching the GitHub release.
-  publish:
-    if: github.ref_type == 'tag'
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
+      - name: Verify version matches tag
+        run: |
+          TAG=${GITHUB_REF#refs/tags/v}
+          MIX=$(grep -m1 'version:' mix.exs | sed -E 's/.*version: *"([^"]+)".*/\1/')
+          CONF=$(jq -r .version src-tauri/tauri.conf.json)
+          CARGOT=$(grep -m1 '^version =' src-tauri/Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
+          if [ "$MIX" != "$TAG" ] || [ "$CONF" != "$TAG" ] || [ "$CARGOT" != "$TAG" ]; then
+            echo "Version mismatch: tag=v$TAG mix=$MIX tauri=$CONF cargo=$CARGOT" >&2
+            exit 1
+          fi
       - uses: actions/download-artifact@v4
         with:
           path: dist
