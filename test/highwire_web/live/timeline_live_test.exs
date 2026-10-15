@@ -88,6 +88,43 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert length(rotated) == HighWireWeb.TimelineLive.max_sidebar_contacts()
   end
 
+  test "the rail window is a ring that wraps from the bottom back to the top" do
+    contacts = for i <- 1..11, do: "@c#{i}:.ed25519"
+
+    # offset 0 leads with the top of the roll.
+    assert HighWireWeb.TimelineLive.contact_window(contacts, 0) == Enum.take(contacts, 8)
+
+    # stepping past the last contact wraps to the front.
+    assert HighWireWeb.TimelineLive.contact_window(contacts, 10) ==
+             [Enum.at(contacts, 10) | Enum.take(contacts, 7)]
+
+    # a full lap lands exactly back where it started.
+    assert HighWireWeb.TimelineLive.contact_window(contacts, 11) ==
+             HighWireWeb.TimelineLive.contact_window(contacts, 0)
+
+    # a roll that already fits has nothing to rotate.
+    short = Enum.take(contacts, 8)
+    assert HighWireWeb.TimelineLive.contact_window(short, 3) == short
+  end
+
+  test "the rail opens at a random point in the roll, not always the top" do
+    follows = ["@me:.ed25519" | for(i <- 1..40, do: "@c#{i}:.ed25519")]
+    payload = %{follows: follows, self_id: "@me:.ed25519"}
+
+    # self is excluded: 40 follows remain, so the offset is a valid index.
+    offsets = for _ <- 1..100, do: HighWireWeb.TimelineLive.initial_contacts_offset(payload)
+    assert Enum.all?(offsets, &(&1 in 0..39))
+    assert length(Enum.uniq(offsets)) > 1
+
+    # a roll that fits, or a payload without follows, never rotates.
+    assert HighWireWeb.TimelineLive.initial_contacts_offset(%{
+             follows: ["@a:.ed25519"],
+             self_id: nil
+           }) == 0
+
+    assert HighWireWeb.TimelineLive.initial_contacts_offset(%{}) == 0
+  end
+
   test "reply snippets render markdown as its text, not its source" do
     msg = %{
       "value" => %{"content" => %{"text" => "**loud** take\n> quoted [link](http://x.test)"}}

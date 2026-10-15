@@ -98,7 +98,7 @@ defmodule HighWireWeb.TimelineLive do
       socket
       |> assign(:page_title, "Timeline")
       |> assign(:status, status)
-      |> assign(:contacts_offset, 0)
+      |> assign(:contacts_offset, initial_contacts_offset(payload))
       |> assign_payload(payload)
       |> assign(:peers, live_network(Timeline.network()))
       |> assign(q: "", expanded: MapSet.new(), view: :public)
@@ -172,14 +172,16 @@ defmodule HighWireWeb.TimelineLive do
 
   # The collapsed rail walks one step along the alphabetized contacts on
   # a slow clock, so faces surface over time without the churn of a
-  # reshuffle on every payload.
+  # reshuffle on every payload. The roll is a ring: a step past the last
+  # contact wraps back to the top.
   def handle_info(:contacts_rotate, socket) do
-    offset = socket.assigns.contacts_offset + 1
+    contacts = socket.assigns.all_contacts
+    offset = rotate_offset(socket.assigns.contacts_offset, length(contacts))
 
     {:noreply,
      socket
      |> assign(:contacts_offset, offset)
-     |> assign(:sidebar_contacts, contact_window(socket.assigns.all_contacts, offset))
+     |> assign(:sidebar_contacts, contact_window(contacts, offset))
      |> schedule_contacts()}
   end
 
@@ -569,13 +571,31 @@ defmodule HighWireWeb.TimelineLive do
   @doc false
   def max_sidebar_contacts, do: @max_sidebar_contacts
 
+  # The rail opens at a random point in the alphabetized roll so it does
+  # not always lead with the same faces. A list that already fits never
+  # rotates, so its offset is meaningless and stays put.
+  @doc false
+  def initial_contacts_offset(%{follows: follows, self_id: self_id}) when is_list(follows) do
+    count = follows |> Enum.reject(&(&1 == self_id)) |> length()
+
+    if count > @max_sidebar_contacts, do: :rand.uniform(count) - 1, else: 0
+  end
+
+  def initial_contacts_offset(_payload), do: 0
+
+  # One step along the ring: past the last contact it wraps back to the
+  # top, so the rail keeps walking through the whole roll.
+  defp rotate_offset(_offset, count) when count <= @max_sidebar_contacts, do: 0
+  defp rotate_offset(offset, count), do: rem(offset + 1, count)
+
   # The visible slice of the alphabetized contacts: a max-sized window
   # starting at the offset, wrapping at the end. When the list already
   # fits there is nothing to rotate and the whole roll shows in order.
-  defp contact_window(contacts, _offset) when length(contacts) <= @max_sidebar_contacts,
+  @doc false
+  def contact_window(contacts, _offset) when length(contacts) <= @max_sidebar_contacts,
     do: contacts
 
-  defp contact_window(contacts, offset) do
+  def contact_window(contacts, offset) when is_list(contacts) and is_integer(offset) do
     contacts
     |> Stream.cycle()
     |> Stream.drop(rem(offset, length(contacts)))
