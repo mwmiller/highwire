@@ -67,8 +67,11 @@ tag-triggered release workflow (`.github/workflows/release.yml`).
   its own Burrito backend, then publishes the installers to the
   GitHub release for that tag. The workflow is also runnable by hand
   (workflow_dispatch) as a build-only dry run.
-- Known gap: the Windows enacl build needs `sodium.dll` beside the
-  backend at runtime.
+- The engine's `enacl` sodium NIF is dlopen'd, so the bundlers never
+  see it; the release copies libsodium next to the NIF and repoints the
+  NIF at its own directory, keeping the engine self-contained on Linux
+  and macOS whatever the host provides. Known gap: the Windows build
+  still needs `sodium.dll` beside the backend at runtime.
 - The Intel macOS leg rides `macos-15-intel`, the last x86_64 image
   on GitHub Actions (EOL Aug 2027).
 

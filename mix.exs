@@ -23,7 +23,7 @@ defmodule HighWire.MixProject do
     [
       highwire: [
         include_executables_for: [:unix],
-        steps: [:assemble, &Burrito.wrap/1],
+        steps: [:assemble, &HighWire.Release.bundle_libsodium/1, &Burrito.wrap/1],
         burrito: [
           targets: [
             macos: [os: :darwin, cpu: :aarch64],

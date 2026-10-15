@@ -216,8 +216,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
+          # patchelf lets the release step (HighWire.Release) repoint each
+          # bundled enacl NIF at the libsodium it copies beside it.
           sudo apt-get install -y libsodium-dev libwebkit2gtk-4.1-dev \
-            libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+            libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       # The engine the sidecar spawns: erlbutt's prod release — its own
       # ERTS (so the shipped app needs no system Erlang), the real
