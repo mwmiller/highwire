@@ -560,7 +560,7 @@ defmodule HighWireWeb.NetworkLive do
                       phx-click="sky-select"
                       phx-value-addr={peer["address"]}
                     />
-                    <title>{peer["address"]}</title>
+                    <title>{sky_peer_title(peer["address"])}</title>
                   </g>
 
                   <g
@@ -592,8 +592,8 @@ defmodule HighWireWeb.NetworkLive do
                     />
                     <title>
                       {"retrying " <>
-                        (try_row["addr"] || "") <>
-                        " — #{try_row["attempts"] || 0} fails, backing off"}
+                        sky_peer_title(try_row["addr"]) <>
+                        " — #{try_row["attempts"] || 0} fails"}
                     </title>
                   </g>
 
@@ -619,8 +619,8 @@ defmodule HighWireWeb.NetworkLive do
                     />
                     <title>
                       {"reached " <>
-                        (try_row["addr"] || "") <>
-                        " — last handshake completed"}
+                        sky_peer_title(try_row["addr"]) <>
+                        " — last handshake"}
                     </title>
                   </g>
 
@@ -1214,4 +1214,13 @@ defmodule HighWireWeb.NetworkLive do
     report["connections"] in [nil, []] and report["dialTry"] in [nil, []] and
       report["knownPeers"] in [nil, []]
   end
+
+  # A report the engine could not produce — down, starting, or an erlutt
+  # older than the admin RPCs — is not the same as an engine reporting an
+  # empty network. Falling back to the cache keeps the constellation
+  # populated from the last session that did answer, so the page opens on
+  # the peers we know rather than on nothing.
+  defp report_or_seed(nil, peer_meta), do: HighWire.PeersMeta.seed_report(peer_meta)
+  defp report_or_seed(report, _peer_meta) when is_map(report), do: report
+  defp report_or_seed(_report, peer_meta), do: HighWire.PeersMeta.seed_report(peer_meta)
 end
