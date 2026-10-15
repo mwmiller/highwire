@@ -1363,13 +1363,16 @@ defmodule HighWire.Timeline do
 
   # blobs.ls live tail: newly stored blobs — heal any generated image
   # placeholder by bumping the revision (debounced so a burst of arrivals
-  # causes one re-render).
+  # causes one re-render). The activity/transfer broadcast rides the same
+  # debounce: firing it per item flooded every subscribed LiveView with a
+  # message per blob, and each one forced a full feed re-render, so a
+  # store replay left the window thousands of renders behind.
   def handle_info({Client, ref, {:item, _id}}, %{blob_ls_ref: ref} = state) do
     if state.blob_timer, do: Process.cancel_timer(state.blob_timer)
     now = System.monotonic_time(:millisecond)
     blob_timer = Process.send_after(self(), :rebroadcast, 500)
 
-    {:noreply, note_net_activity(%{state | blob_timer: blob_timer}, now)}
+    {:noreply, %{state | blob_timer: blob_timer, last_net_at: now}}
   end
 
   def handle_info({Client, ref, :done}, %{blob_ls_ref: ref} = state) do
@@ -1400,6 +1403,9 @@ defmodule HighWire.Timeline do
   end
 
   def handle_info(:rebroadcast, state) do
+    # One activity broadcast per debounce window, alongside the revision
+    # bump — not one per blob (see the blobs.ls tail above).
+    state = note_net_activity(state, System.monotonic_time(:millisecond))
     rev = state.blob_rev + 1
     payload = %{state.messages | blob_rev: rev}
     Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
