@@ -377,6 +377,35 @@ defmodule HighWireWeb.TimelineLiveTest do
       refute html =~ ~s(href="/profile?id=#{URI.encode_www_form("@bob:.ed25519")}")
     end
 
+    test "a post body clamps to four lines and carries an expand toggle", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%long-post.sha256", "@alice:.ed25519", now, %{
+          "type" => "post",
+          "text" => "a long post body"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      # The body renders clamped and the toggle ships hidden: whether a
+      # body actually overflows depends on width and markdown, so the
+      # ClampRows hook measures and reveals it — the server never decides.
+      assert html =~ "line-clamp-4"
+      assert html =~ "data-clamp-toggle"
+      assert html =~ ~s(phx-value-key="%long-post.sha256")
+      assert html =~ "show more"
+
+      html = render_click(view, "expand", %{"key" => "%long-post.sha256"})
+
+      # Expanded: the clamp is gone and the toggle now offers to collapse.
+      refute html =~ "line-clamp-4"
+      assert html =~ ~s(data-expanded="true")
+      assert html =~ "show less"
+    end
+
     test "pub, room alias and post-edit rows read as sentences, not protocol types", %{conn: conn} do
       now = 1_700_000_000_000
 

@@ -857,7 +857,7 @@ defmodule HighWireWeb.TimelineLive do
           <%!-- A reading column, not a full-bleed sheet: past about
           eighty characters a line the eye loses the start of the
           next one, and this feed was running to 160. --%>
-          <div class="mx-auto w-full max-w-2xl">
+          <div id="feed-column" phx-hook="ClampRows" class="mx-auto w-full max-w-2xl">
             <form
               :if={@view == :public}
               id="compose"
@@ -1024,6 +1024,7 @@ defmodule HighWireWeb.TimelineLive do
         )
       )
       |> assign(:edit_note, edit_note(assigns.row, assigns.ctx))
+      |> assign(:expanded?, MapSet.member?(assigns.ctx.expanded, assigns.row.msg["key"]))
 
     ~H"""
     <article
@@ -1072,9 +1073,30 @@ defmodule HighWireWeb.TimelineLive do
           {meta.prefix}<.age ts={meta.ts} />
         </p>
 
-        <div :if={@body_html != ""} class="md-body mt-1 line-clamp-4 text-sm leading-5 text-ink">
+        <div
+          :if={@body_html != ""}
+          class={["md-body mt-1 text-sm leading-5 text-ink", not @expanded? and "line-clamp-4"]}
+          data-clamp-body
+        >
           {raw(@body_html)}
         </div>
+
+        <%!-- Rendered hidden: whether a body actually overflows four lines
+        depends on width and markdown, which the server cannot know. The
+        ClampRows hook measures and reveals this only where it does
+        something. --%>
+        <button
+          :if={@body_html != ""}
+          type="button"
+          phx-click="expand"
+          phx-value-key={@row.msg["key"]}
+          data-clamp-toggle
+          data-expanded={to_string(@expanded?)}
+          hidden
+          class="mt-1 text-xs text-accent hover:underline"
+        >
+          {if @expanded?, do: "show less", else: "show more"}
+        </button>
 
         <div class="mt-1.5 flex items-center gap-4 text-xs text-dim">
           <span :if={@row.replies > 0}>{@row.replies} replies</span>

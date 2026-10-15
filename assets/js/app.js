@@ -294,6 +294,51 @@ let FeedScroll = {
   }
 }
 
+// Clamp toggle: a post body renders clamped to four lines so one long
+// post cannot take over the feed, but the server cannot know whether a
+// given body actually overflows — that depends on column width and on
+// what the markdown turned out to be. So the server renders every toggle
+// hidden, and this measures the rendered bodies and reveals only the
+// ones that clamp (plus anything already expanded, so "show less" stays
+// reachable). Reads are batched ahead of writes so a pass costs one
+// layout for the whole feed rather than one per row.
+//
+// Acked via phx:update rather than the hook's own updated(): the hook
+// sits on the whole column, whose attributes rarely change, so updated()
+// does not fire for the child-only patches that add rows.
+let ClampRows = {
+  mounted() {
+    this.onUpdate = () => this.sync()
+    // Narrowing the window re-wraps bodies and can newly clamp them; no
+    // server patch announces that.
+    this.onResize = () => {
+      cancelAnimationFrame(this.frame)
+      this.frame = requestAnimationFrame(() => this.sync())
+    }
+    window.addEventListener("phx:update", this.onUpdate)
+    window.addEventListener("resize", this.onResize)
+    this.sync()
+  },
+  destroyed() {
+    window.removeEventListener("phx:update", this.onUpdate)
+    window.removeEventListener("resize", this.onResize)
+    cancelAnimationFrame(this.frame)
+  },
+  sync() {
+    const bodies = this.el.querySelectorAll("[data-clamp-body]")
+    const clamped = []
+    for (const body of bodies) {
+      clamped.push(body.scrollHeight > body.clientHeight + 1)
+    }
+    bodies.forEach((body, i) => {
+      const btn = body.parentElement.querySelector("[data-clamp-toggle]")
+      if (!btn) return
+      const expanded = btn.dataset.expanded === "true"
+      btn.hidden = !(clamped[i] || expanded)
+    })
+  }
+}
+
 // Composer mentions: typing @ or ~ before a word opens the popup the
 // server renders from mention-query. Picking splices the feed id into
 // the draft here in the browser — string indices stay UTF-16-safe
@@ -568,7 +613,7 @@ document.addEventListener("auxclick", e => {
 
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions, SkyScroll, FeedScroll}
+  hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions, SkyScroll, FeedScroll, ClampRows}
 })
 
 // Show progress bar on live navigation and form submits
