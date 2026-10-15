@@ -49,7 +49,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     {:ok, view, _html} = live(conn, "/")
     html = notify(view, feed_payload([], follows: follows))
 
-    # Collapsed shows a random handful; the rest stay behind the toggle.
+    # Collapsed shows a max-sized window; the rest stay behind the toggle.
     assert html =~ "Show all 20"
     visible = count_visible_contacts(html, follows)
     assert visible == HighWireWeb.TimelineLive.max_sidebar_contacts()
@@ -65,6 +65,27 @@ defmodule HighWireWeb.TimelineLiveTest do
 
     assert count_visible_contacts(html, follows) ==
              HighWireWeb.TimelineLive.max_sidebar_contacts()
+  end
+
+  test "the collapsed rail holds still across payloads and rotates on the timer", %{conn: conn} do
+    follows = for i <- 1..20, do: "@contact#{i}:.ed25519"
+
+    {:ok, view, _html} = live(conn, "/")
+    html = notify(view, feed_payload([], follows: follows))
+    window = visible_contacts(html, follows)
+    assert length(window) == HighWireWeb.TimelineLive.max_sidebar_contacts()
+
+    # Payloads arrive on every broadcast; they must not reshuffle the
+    # window out from under the reader.
+    same = notify(view, feed_payload([], follows: follows))
+    assert visible_contacts(same, follows) == window
+
+    # The rotate clock advances the window one step along the alphabetical
+    # roll: the head drops off and the next follow enters the tail.
+    send(view.pid, :contacts_rotate)
+    rotated = visible_contacts(render(view), follows)
+    refute rotated == window
+    assert length(rotated) == HighWireWeb.TimelineLive.max_sidebar_contacts()
   end
 
   test "reply snippets render markdown as its text, not its source" do
@@ -750,5 +771,11 @@ defmodule HighWireWeb.TimelineLiveTest do
   # containment has to look for that, not the full feed id.
   defp count_visible_contacts(html, follows) do
     Enum.count(follows, fn id -> String.contains?(html, HighWire.Avatar.short_id(id)) end)
+  end
+
+  # Which of the known follow ids appear, in the given order — enough to
+  # tell whether the collapsed window held or moved between renders.
+  defp visible_contacts(html, follows) do
+    Enum.filter(follows, &String.contains?(html, HighWire.Avatar.short_id(&1)))
   end
 end
