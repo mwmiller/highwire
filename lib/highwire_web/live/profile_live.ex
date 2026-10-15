@@ -68,17 +68,20 @@ defmodule HighWireWeb.ProfileLive do
     id = socket.assigns.id
 
     if socket.assigns.more and is_binary(id) do
-      %{rows: rows, resume: resume, more: more} =
-        Timeline.profile_feed(id, socket.assigns.resume)
+      case Timeline.profile_feed(id, socket.assigns.resume) do
+        {:ok, %{rows: rows, resume: resume, more: more}} ->
+          new = Enum.filter(rows, &post?/1)
 
-      new = Enum.filter(rows, &post?/1)
+          {:noreply,
+           assign(socket,
+             messages: socket.assigns.messages ++ new,
+             resume: resume,
+             more: more
+           )}
 
-      {:noreply,
-       assign(socket,
-         messages: socket.assigns.messages ++ new,
-         resume: resume,
-         more: more
-       )}
+        {:error, _reason} ->
+          {:noreply, socket}
+      end
     else
       {:noreply, socket}
     end
@@ -103,21 +106,40 @@ defmodule HighWireWeb.ProfileLive do
 
   defp load(socket, id) do
     {status, payload} = Timeline.snapshot()
-    %{rows: rows, resume: resume, more: more} = Timeline.profile_feed(id)
-    posts = Enum.filter(rows, &post?/1)
 
-    socket
-    |> assign(
-      status: status,
-      id: id,
-      profile: Timeline.profile(id),
-      messages: posts,
-      resume: resume,
-      more: more,
-      follows: Map.get(payload, :follows, []),
-      self_id: Map.get(payload, :self_id),
-      blob_rev: Map.get(payload, :blob_rev, 0)
-    )
+    case Timeline.profile_feed(id) do
+      {:ok, %{rows: rows, resume: resume, more: more}} ->
+        posts = Enum.filter(rows, &post?/1)
+
+        socket
+        |> assign(
+          status: status,
+          id: id,
+          profile: Timeline.profile(id),
+          messages: posts,
+          resume: resume,
+          more: more,
+          follows: Map.get(payload, :follows, []),
+          self_id: Map.get(payload, :self_id),
+          blob_rev: Map.get(payload, :blob_rev, 0)
+        )
+
+      {:error, _reason} ->
+        posts = []
+
+        socket
+        |> assign(
+          status: status,
+          id: id,
+          profile: Timeline.profile(id),
+          messages: posts,
+          resume: nil,
+          more: false,
+          follows: Map.get(payload, :follows, []),
+          self_id: Map.get(payload, :self_id),
+          blob_rev: Map.get(payload, :blob_rev, 0)
+        )
+    end
   end
 
   # Guarded: private messages carry an encrypted binary `content`.

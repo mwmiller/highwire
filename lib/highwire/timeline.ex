@@ -244,21 +244,19 @@ defmodule HighWire.Timeline do
   `resume` is the cursor from the previous page's marker. Returns
   `%{rows, resume, more}` where `more` says another page exists.
   """
-  @spec profile_feed(binary(), integer() | nil) :: %{
-          rows: [map()],
-          resume: integer() | nil,
-          more: boolean()
-        }
+  @spec profile_feed(binary(), integer() | nil) ::
+          {:ok, %{rows: [map()], resume: integer() | nil, more: boolean()}}
+          | {:error, :offline | :timeout}
   def profile_feed(id, resume \\ nil) when is_binary(id) do
     case Process.whereis(__MODULE__) do
       nil ->
-        %{rows: [], resume: nil, more: false}
+        {:error, :offline}
 
       pid ->
         try do
-          GenServer.call(pid, {:profile_feed, id, resume}, 15_000)
+          {:ok, GenServer.call(pid, {:profile_feed, id, resume}, 15_000)}
         catch
-          :exit, _ -> %{rows: [], resume: nil, more: false}
+          :exit, _ -> {:error, :timeout}
         end
     end
   end
