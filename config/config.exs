@@ -50,6 +50,20 @@ config :logger, :console,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Render memoization. The Eviction strategy bounds the cache by the
+# memory it occupies: once the cached ETS tables exceed max_threshold
+# bytes, the least-recently-read entries are dropped down to
+# min_threshold. Thresholds are bytes, not entry counts — Markdown
+# bodies vary wildly in size, so bytes track the real cost. Entries
+# also expire 31 minutes after they are cached, so a stale blob
+# revision never outlives a restart's working set by much.
+config :memoize,
+  cache_strategy: Memoize.CacheStrategy.Eviction
+
+config :memoize, Memoize.CacheStrategy.Eviction,
+  min_threshold: 6_000_000,
+  max_threshold: 8_000_000
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

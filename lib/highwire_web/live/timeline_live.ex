@@ -19,6 +19,7 @@ defmodule HighWireWeb.TimelineLive do
   """
 
   use HighWireWeb, :live_view
+  use Memoize
 
   require Logger
 
@@ -49,6 +50,9 @@ defmodule HighWireWeb.TimelineLive do
 
   # markdown image syntax: ![alt](target)
   @image_re ~r/!\[([^\]]*)\]\(([^()\s]+)\)/
+
+  # Reply snippets are memoized; 31 minutes matches the Markdown cache.
+  @snippet_ttl_ms 1_860_000
 
   # How many contacts the rail shows before it offers to expand. A full
   # follows list can run to forty names, which scrolls the rail and
@@ -1416,10 +1420,18 @@ defmodule HighWireWeb.TimelineLive do
   # the line clamps. Public (with @doc false) for direct tests.
   @doc false
   def snippet(msg, ctx \\ %{rev: nil}) do
-    msg
-    |> text()
+    snippet_of(text(msg), Map.get(ctx, :rev))
+  end
+
+  # The rendered HTML is immediately stripped back to text, so the
+  # preview depends only on the source — the blob revision only ever
+  # changes a tag we drop. Memoize on the source alone: this ran once
+  # per reply per timeline render and was, by the profiler, the single
+  # hottest frame in the VM.
+  defmemop snippet_of(source, rev), expires_in: @snippet_ttl_ms do
+    source
     |> String.replace(@image_re, "[image]")
-    |> Markdown.to_html(blob_rev: Map.get(ctx, :rev))
+    |> Markdown.to_html(blob_rev: rev)
     |> String.replace(~r/<[^>]*>/, " ")
     |> String.replace("&lt;", "<")
     |> String.replace("&gt;", ">")

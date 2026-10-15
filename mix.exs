@@ -70,6 +70,7 @@ defmodule HighWire.MixProject do
       {:jason, "~> 1.2"},
       {:excon, "~> 4.1"},
       {:mdex, "~> 0.14.2"},
+      {:memoize, "~> 1.4"},
       {:enacl,
        git: "https://github.com/cmoid/enacl", ref: "3be2ed2e4ee1fdfbd73c04207c0b572fcde49720"},
       {:bandit, "~> 1.0"},

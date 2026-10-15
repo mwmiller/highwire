@@ -18,8 +18,13 @@ defmodule HighWire.Markdown do
   can `raw/1` it.
   """
 
+  use Memoize
+
   alias HighWire.Blob
   alias MDEx.{Code, CodeBlock, Document, HtmlBlock, Image, Link, Raw, Text}
+
+  # 31 minutes, in milliseconds.
+  @ttl_ms 1_860_000
 
   @extension [table: true, strikethrough: true, autolink: true, shortcodes: true]
   @render [unsafe: false, hardbreaks: true]
@@ -36,7 +41,16 @@ defmodule HighWire.Markdown do
   """
   @spec to_html(String.t(), keyword()) :: String.t()
   def to_html(body, opts \\ []) when is_binary(body) do
-    ctx = %{rev: Keyword.get(opts, :blob_rev), in_link: false}
+    render(body, Keyword.get(opts, :blob_rev))
+  end
+
+  # Pure in (body, rev) and re-run on every timeline render, so memoize
+  # it: the feed rebuilds rows it has already drawn on nearly every
+  # broadcast, and the comrak pass is the expensive part. The cache is
+  # bounded by bytes and entries expire, so a stale `rev`'d body does
+  # not linger.
+  defmemop render(body, rev), expires_in: @ttl_ms do
+    ctx = %{rev: rev, in_link: false}
 
     body
     |> MDEx.parse_document!(extension: @extension)
