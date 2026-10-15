@@ -689,17 +689,17 @@ defmodule HighWire.Timeline do
   # gossip.peers is the whole report in one call. Public (with @doc
   # false) so tests can drive the assembly without a live engine.
   @doc false
-  def fetch_network(client) do
+  def fetch_network(client, peer_meta \\ %{}) do
     if is_pid(client) and Process.alive?(client) do
       case gossip_report(client) do
-        nil -> fallback_report(client)
+        nil -> fallback_report(client, peer_meta)
         net -> Map.put(net, "knownPeers", fetch_known_peers(client))
       end
     else
-      nil
+      HighWire.PeersMeta.seed_report(peer_meta)
     end
   catch
-    _, _ -> nil
+    _, _ -> HighWire.PeersMeta.seed_report(peer_meta)
   end
 
   defp gossip_report(client) do
@@ -713,9 +713,12 @@ defmodule HighWire.Timeline do
   # same dashboard out of the admin namespace alone. Dialer state and
   # live connections are present there; candidate counts and dial
   # history are not, so the report omits them — "partial" marks it and
-  # the view renders what it gets. nil when neither RPC answers: no
-  # report beats a fabricated one.
-  defp fallback_report(client) do
+  # the view renders what it gets. Neither RPC answering leaves a cache-
+  # seeded report rather than nil: the engine being down is not the same
+  # as having no peers, and the constellation should still open on the
+  # peers the last working session knew. "seeded" marks it, so the view
+  # can say the numbers are the cache's and not the engine's.
+  defp fallback_report(client, peer_meta) do
     {enabled, dialer_answered} =
       case Client.call(client, ["admin", "dialer", "status"], [], 2_000) do
         {:ok, %{"enabled" => value}} when is_boolean(value) -> {value, true}
@@ -736,10 +739,10 @@ defmodule HighWire.Timeline do
 
       if is_nil(enabled), do: report, else: Map.put(report, "enabled", enabled)
     else
-      nil
+      HighWire.PeersMeta.seed_report(peer_meta)
     end
   catch
-    _, _ -> nil
+    _, _ -> HighWire.PeersMeta.seed_report(peer_meta)
   end
 
   # admin.peers.connected answers one-entry [{id}] rows; unwrapped to
@@ -1413,7 +1416,7 @@ defmodule HighWire.Timeline do
     old_net = Map.get(state, :network)
     previous = connections_of(old_net)
     now = System.monotonic_time(:millisecond)
-    new_net = fetch_network(Map.get(state, :client))
+    new_net = fetch_network(Map.get(state, :client), Map.get(state, :peer_meta, %{}))
     state = Map.put(state, :network, new_net)
     connections = connections_of(state.network)
 

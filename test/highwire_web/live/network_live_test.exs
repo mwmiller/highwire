@@ -68,43 +68,42 @@ defmodule HighWireWeb.NetworkLiveTest do
   end
 
   describe "dialer controls (engine down)" do
-    test "are present but disabled without a report", %{conn: conn} do
+    test "are present but disabled when the engine is not answering", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/network")
 
       assert html =~ "Dialer"
       assert html =~ "Turn auto-dial on"
       assert html =~ "Dial now"
       assert html =~ "auto-dial unknown"
-      assert html =~ ~r/No report from the local engine/
 
-      # Disabled: no live engine to command. (The handlers also guard
-      # against a report that goes nil mid-click, but the DOM never
-      # offers that path — LiveViewTest refuses to click disabled
-      # elements, matching browsers.)
+      # A cache-seeded report has no live engine to command, so the
+      # controls disable and the notice says the numbers are the cache's.
+      assert html =~ "The local engine is not answering"
       assert html =~ ~r/<button[^>]*phx-click="dialer-toggle"[^>]*disabled/
       assert html =~ ~r/<button[^>]*phx-click="dialer-trigger"[^>]*disabled/
     end
   end
 
   describe "known peers (engine down)" do
-    test "empty-book copy shows without a report", %{conn: conn} do
+    test "sections still open on the cached report, each saying what it lacks", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/network")
 
-      # The whole report-dependent block (connections, book, dials) is
-      # hidden; only the no-report explanation stands in.
-      refute html =~ "Known peers"
-      refute html =~ "Recent dials"
-      refute html =~ "Connections"
+      # The page no longer hides behind a nil report: it opens on the
+      # peer cache, so every section stands and states what it knows.
+      assert html =~ "The local engine is not answering"
+      assert html =~ "Connections ·"
+      assert html =~ "No peers connected."
+      assert html =~ "Known peers · 0"
+      assert html =~ "The address book is empty"
+      assert html =~ "Recent dials"
     end
 
-    test "the rail only jump-links sections that render", %{conn: conn} do
+    test "the rail jump-links every section", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/network")
 
-      assert html =~ ~s(href="#which-network")
-      assert html =~ ~s(href="#dialer")
-      refute html =~ ~s(href="#connections")
-      refute html =~ ~s(href="#known-peers")
-      refute html =~ ~s(href="#dials")
+      for href <- ~w(which-network dialer constellation connections known-peers dials) do
+        assert html =~ ~s(href="##{href}")
+      end
     end
   end
 

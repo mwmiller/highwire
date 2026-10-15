@@ -1091,8 +1091,32 @@ defmodule HighWire.TimelineTest do
       assert report["partial"] == true
     end
 
-    test "an engine that answers nothing yields no report at all" do
-      assert Timeline.fetch_network(NetworkClient.start(%{})) == nil
+    test "an engine that answers nothing falls back to the peer cache" do
+      report = Timeline.fetch_network(NetworkClient.start(%{}))
+
+      assert report["seeded"]
+      refute Map.has_key?(report, "enabled")
+      assert report["connections"] == []
+      assert report["dialTry"] == []
+    end
+
+    test "the seeded report carries the cached peers, newest first" do
+      now = System.system_time(:millisecond)
+
+      meta = %{
+        "net:old.example:8008~shs:@old.ed25519" => %{"last_seen_at" => now - 10_000},
+        "net:new.example:8008~shs:@new.ed25519" => %{"last_seen_at" => now},
+        "@feed.ed25519" => %{"last_activity_at" => now}
+      }
+
+      report = Timeline.fetch_network(NetworkClient.start(%{}), meta)
+
+      # Feed-id entries describe connection recency, not an address, so
+      # they have no place in the book ring and are left out.
+      assert [%{"address" => "net:new.example:8008~shs:@new.ed25519"}, oldest] =
+               report["knownPeers"]
+
+      assert oldest["address"] == "net:old.example:8008~shs:@old.ed25519"
     end
 
     test "gossip answers but the address book fails: knownPeers goes empty" do
@@ -1102,12 +1126,12 @@ defmodule HighWire.TimelineTest do
       assert report["knownPeers"] == []
     end
 
-    test "no client (or a dead one) is no report" do
-      assert Timeline.fetch_network(nil) == nil
+    test "no client (or a dead one) is the seeded report, not nothing" do
+      assert %{"seeded" => true} = Timeline.fetch_network(nil)
 
       pid = NetworkClient.start(%{})
       :ok = GenServer.stop(pid)
-      assert Timeline.fetch_network(pid) == nil
+      assert %{"seeded" => true} = Timeline.fetch_network(pid)
     end
   end
 end

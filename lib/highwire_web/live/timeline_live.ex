@@ -85,7 +85,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(:page_title, "Timeline")
       |> assign(:status, status)
       |> assign_payload(payload)
-      |> assign(:peers, Timeline.network())
+      |> assign(:peers, live_network(Timeline.network()))
       |> assign(q: "", expanded: MapSet.new(), view: :public)
       |> assign(contacts_expanded: false)
       |> assign(max_sidebar_contacts: @max_sidebar_contacts)
@@ -148,7 +148,7 @@ defmodule HighWireWeb.TimelineLive do
 
     if socket.assigns.active and connected?(socket) do
       Timeline.set_activity(self(), true)
-      {:noreply, socket |> assign(:peers, Timeline.network()) |> schedule_peers()}
+      {:noreply, socket |> assign(:peers, live_network(Timeline.network())) |> schedule_peers()}
     else
       {:noreply, socket}
     end
@@ -1318,6 +1318,14 @@ defmodule HighWireWeb.TimelineLive do
   # /network: the live peer count when a report exists, a status-aware
   # fallback otherwise. It never hides — a hidden chip is exactly when
   # users need the dialing page most.
+  # A cache-seeded report is the peers we last knew, not the peers we are
+  # talking to now. The chip speaks for the engine's present state, so a
+  # seeded report is dropped here and the helpers below fall through to
+  # their status-aware (nil) branches rather than claiming a live count
+  # the engine never gave us.
+  defp live_network(%{"seeded" => true}), do: nil
+  defp live_network(network), do: network
+
   defp peer_count(network) when is_map(network), do: length(network["connections"] || [])
 
   defp peer_label(nil, :connecting), do: "Connecting…"

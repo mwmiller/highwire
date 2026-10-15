@@ -85,7 +85,7 @@ defmodule HighWireWeb.NetworkLive do
      |> assign(:page_title, "Network")
      |> assign(:status, status)
      |> assign(:profiles, Map.get(payload, :profiles, %{}))
-     |> assign(:report, Timeline.network())
+     |> assign(:report, report_or_seed(Timeline.network(), Timeline.peer_meta()))
      |> assign(:peer_meta, Timeline.peer_meta())
      |> assign(active: true, tick_timer: tick_timer)
      |> assign(selected: nil)
@@ -109,13 +109,14 @@ defmodule HighWireWeb.NetworkLive do
     if socket.assigns.active and connected?(socket) do
       Timeline.set_activity(self(), true)
       {status, payload} = Timeline.snapshot()
+      peer_meta = Timeline.peer_meta()
 
       socket =
         socket
         |> assign(:status, status)
         |> assign(:profiles, Map.get(payload, :profiles, %{}))
-        |> assign(:report, Timeline.network())
-        |> assign(:peer_meta, Timeline.peer_meta())
+        |> assign(:report, report_or_seed(Timeline.network(), peer_meta))
+        |> assign(:peer_meta, peer_meta)
 
       {:noreply, assign(socket, :tick_timer, Process.send_after(self(), :tick, 7_000))}
     else
@@ -177,11 +178,7 @@ defmodule HighWireWeb.NetworkLive do
 
   def handle_info({:dialer_result, :enable, {:ok, _}}, socket) do
     # Optimistic flip: the next report poll confirms from the engine.
-    report =
-      case socket.assigns.report do
-        nil -> nil
-        r -> Map.put(r, "enabled", true)
-      end
+    report = Map.put(socket.assigns.report, "enabled", true)
 
     {:noreply,
      socket
@@ -190,11 +187,7 @@ defmodule HighWireWeb.NetworkLive do
   end
 
   def handle_info({:dialer_result, :disable, {:ok, _}}, socket) do
-    report =
-      case socket.assigns.report do
-        nil -> nil
-        r -> Map.put(r, "enabled", false)
-      end
+    report = Map.put(socket.assigns.report, "enabled", false)
 
     {:noreply,
      socket
@@ -275,7 +268,7 @@ defmodule HighWireWeb.NetworkLive do
       socket.assigns.dialing ->
         {:noreply, socket}
 
-      socket.assigns.report == nil ->
+      socket.assigns.report["seeded"] ->
         {:noreply, assign(socket, :dial_notice, "No engine report — is the engine up?")}
 
       true ->
@@ -302,7 +295,7 @@ defmodule HighWireWeb.NetworkLive do
       socket.assigns.dialing ->
         {:noreply, socket}
 
-      socket.assigns.report == nil ->
+      socket.assigns.report["seeded"] ->
         {:noreply, assign(socket, :dial_notice, "No engine report — is the engine up?")}
 
       true ->
@@ -345,10 +338,10 @@ defmodule HighWireWeb.NetworkLive do
         <Nav.rail_label>On this page</Nav.rail_label>
         <Nav.rail_link href="#which-network">Which network</Nav.rail_link>
         <Nav.rail_link href="#dialer">Dialer</Nav.rail_link>
-        <Nav.rail_link :if={@report != nil} href="#constellation">Constellation</Nav.rail_link>
-        <Nav.rail_link :if={@report != nil} href="#connections">Connections</Nav.rail_link>
-        <Nav.rail_link :if={@report != nil} href="#known-peers">Known peers</Nav.rail_link>
-        <Nav.rail_link :if={@report != nil} href="#dials">Recent dials</Nav.rail_link>
+        <Nav.rail_link href="#constellation">Constellation</Nav.rail_link>
+        <Nav.rail_link href="#connections">Connections</Nav.rail_link>
+        <Nav.rail_link href="#known-peers">Known peers</Nav.rail_link>
+        <Nav.rail_link href="#dials">Recent dials</Nav.rail_link>
       </Nav.rail>
 
       <section class="flex-1 overflow-y-auto">
@@ -420,24 +413,20 @@ defmodule HighWireWeb.NetworkLive do
 
             <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
               <span class={[
-                @report != nil && @report["enabled"] == true && "text-ok",
-                @report != nil && @report["enabled"] == false && "text-dim",
-                @report != nil && is_nil(@report["enabled"]) && "text-dim",
-                @report == nil && "text-dim"
+                @report["enabled"] == true && "text-ok",
+                @report["enabled"] == false && "text-dim",
+                is_nil(@report["enabled"]) && "text-dim"
               ]}>
                 {cond do
-                  @report == nil or is_nil(@report["enabled"]) -> "auto-dial unknown"
+                  is_nil(@report["enabled"]) -> "auto-dial unknown"
                   @report["enabled"] -> "auto-dial on"
                   true -> "auto-dial off"
                 end}
               </span>
-              <span :if={@report != nil and not is_nil(@report["lanCandidates"])} class="text-dim">
+              <span :if={not is_nil(@report["lanCandidates"])} class="text-dim">
                 {@report["lanCandidates"]} on LAN
               </span>
-              <span
-                :if={@report != nil and not is_nil(@report["autoconnectCandidates"])}
-                class="text-dim"
-              >
+              <span :if={not is_nil(@report["autoconnectCandidates"])} class="text-dim">
                 {@report["autoconnectCandidates"]} announced
               </span>
             </div>
@@ -447,10 +436,10 @@ defmodule HighWireWeb.NetworkLive do
                 type="button"
                 class="pref-choice"
                 phx-click="dialer-toggle"
-                aria-pressed={to_string(@report != nil and @report["enabled"])}
-                disabled={@dialing or @report == nil}
+                aria-pressed={to_string(@report["enabled"])}
+                disabled={@dialing or @report["seeded"]}
               >
-                {if @report != nil and @report["enabled"],
+                {if @report["enabled"],
                   do: "Turn auto-dial off",
                   else: "Turn auto-dial on"}
               </button>
@@ -458,7 +447,7 @@ defmodule HighWireWeb.NetworkLive do
                 type="button"
                 class="pref-choice"
                 phx-click="dialer-trigger"
-                disabled={@dialing or @report == nil}
+                disabled={@dialing or @report["seeded"]}
               >
                 Dial now
               </button>
@@ -469,12 +458,12 @@ defmodule HighWireWeb.NetworkLive do
             </p>
           </section>
 
-          <p :if={@report == nil} class="mt-6 text-sm text-dim">
-            No report from the local engine — it is starting up, disabled, or the
-            running erlbutt predates the admin RPCs this page reads.
+          <p :if={@report["seeded"]} class="mt-6 text-sm text-dim" role="status">
+            The local engine is not answering, so this is the cache from the last
+            session that did — connections and dial history are unknown.
           </p>
 
-          <div :if={@report != nil} class="mt-8 space-y-8">
+          <div class="mt-8 space-y-8">
             <%!-- The sky: the lists below stated in one glance. Self at
             centre, rings outward as a ladder of connectivity — a muxrpc
             session open now (tethered, green, named), an address whose
@@ -1111,6 +1100,34 @@ defmodule HighWireWeb.NetworkLive do
   end
 
   defp sky_key(_addr), do: nil
+
+  # "net:host:port~shs:KEY" → "host:port" — the part of the address a
+  # person actually recognises. Nil when the address carries no host, so
+  # callers fall back to the short key form.
+  defp sky_host(addr) when is_binary(addr) do
+    addr
+    |> String.split("~", parts: 2)
+    |> hd()
+    |> case do
+      "net:" <> hostport -> hostport
+      _ -> nil
+    end
+  end
+
+  defp sky_host(_addr), do: nil
+
+  # The hover label for a peer we are not talking to: the name it goes
+  # by and where it lives, not the full multi-hundred-character address
+  # plus a sentence of protocol narrative. The address stays in the
+  # list row below, which has room for it.
+  defp sky_peer_title(addr) do
+    case {sky_key(addr), sky_host(addr)} do
+      {nil, nil} -> addr || ""
+      {key, nil} -> key
+      {nil, host} -> host
+      {key, host} -> "#{key} · #{host}"
+    end
+  end
 
   # Items placed around an elliptical ring at an angle hashed from their
   # identity key — stable across renders, so membership changes add or
