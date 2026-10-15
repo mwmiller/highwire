@@ -777,6 +777,66 @@ defmodule HighWireWeb.TimelineLiveTest do
       # ...and the oldest were dropped, not all rendered.
       refute html =~ "words 1#{~s(</p>)}"
     end
+
+    test "rows paged in past the window survive the cap", %{conn: conn} do
+      now = 1_700_000_000_000
+      capped = HighWireWeb.TimelineLive.max_tab_rows()
+
+      # A window with more roots than the tab cap: first paint paints
+      # exactly `capped` of them, the newest.
+      msgs =
+        for i <- 1..(capped + 40) do
+          ssb_msg("%root-#{i}.sha256", "@bob:.ed25519", now - (200 - i) * 1_000, %{
+            "type" => "post",
+            "text" => "words #{i}"
+          })
+        end
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+      assert count(html, "id=\"post-") == capped
+
+      # The next cursor page is older than everything the window
+      # carried, which is the whole point of scrolling for it.
+      older =
+        for i <- 1..5 do
+          ssb_msg("%old-#{i}.sha256", "@carol:.ed25519", now - (1_000 + i) * 1_000, %{
+            "type" => "post",
+            "text" => "deeper #{i}"
+          })
+        end
+
+      page = %{rows: HighWire.Timeline.build_feed(older, nil, %{}), resume: 42, more: true}
+      send(view.pid, {:page_loaded, :public, nil, page})
+      html = render(view)
+
+      assert html =~ "deeper 1"
+      assert count(html, "id=\"post-") == capped + 5
+
+      # A later heartbeat (same window) must not re-trim what the reader
+      # paged in — the cap has to be idempotent, or the feed slides back
+      # up on every broadcast.
+      html = notify(view, feed_payload(msgs))
+      assert html =~ "deeper 1"
+      assert count(html, "id=\"post-") == capped + 5
+
+      # And a second page keeps going deeper, beyond anything the window
+      # could reach.
+      deeper =
+        for i <- 1..5 do
+          ssb_msg("%deeper-#{i}.sha256", "@carol:.ed25519", now - (2_000 + i) * 1_000, %{
+            "type" => "post",
+            "text" => "ancient #{i}"
+          })
+        end
+
+      page = %{rows: HighWire.Timeline.build_feed(deeper, nil, %{}), resume: 84, more: true}
+      send(view.pid, {:page_loaded, :public, nil, page})
+      html = render(view)
+
+      assert html =~ "ancient 5"
+      assert count(html, "id=\"post-") == capped + 10
+    end
   end
 
   defp ssb_msg(key, author, ts, content) do

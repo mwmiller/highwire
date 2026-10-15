@@ -431,7 +431,12 @@ defmodule HighWireWeb.TimelineLive do
   # Cursor pages append at the tail, deduped in favour of the page row:
   # a quiet feed carries the same root in the window's rows too, and the
   # roots view has the true reply rollup and the newest replies.
+  # Page rows are tagged: they are the reader's scroll into the past and
+  # merge_into carries them whole instead of re-trimming them against the
+  # window's cap.
   defp append_page(%{rows: rows} = entry, page_rows) do
+    page_rows = Enum.map(page_rows, &Map.put(&1, :paged, true))
+
     merged =
       (rows ++ page_rows)
       |> Enum.reverse()
@@ -492,14 +497,14 @@ defmodule HighWireWeb.TimelineLive do
   # carries boxed messages, so there is nothing to merge in.
   defp merge_into(:private, entry, _socket), do: entry
 
-  # Cap on rows a single tab accumulates. The window's flat feed can
-  # build hundreds of rows (its whole job is surfacing activity the
-  # roots view hasn't indexed yet), and merge_into prepends them to the
-  # cursor pages — left uncapped that defeats the pagination and paints
-  # a wall of rows on first load. The list is already sorted by
-  # activity here, so dropping the tail loses only the stalest window
-  # rows; a dropped row whose root is in a cursor page survives the
-  # dedupe via that page.
+  # Cap on the rows a single tab's window contributes. The window's
+  # flat feed can build hundreds of rows (its whole job is surfacing
+  # activity the roots view hasn't indexed yet), and merge_into
+  # prepends them to the cursor pages — left uncapped that paints a
+  # wall of rows on first load. It bounds the window only: the cursor
+  # pages are the reader's way into the past and are never dropped.
+  # Losing the tail loses only the stalest window rows; a row whose
+  # root is in a cursor page survives the dedupe via that page.
   @max_tab_rows 120
 
   defp merge_into(view, entry, socket) do
@@ -537,11 +542,28 @@ defmodule HighWireWeb.TimelineLive do
 
     added = Enum.reject(fresh_rows, &MapSet.member?(known, row_uid(&1)))
 
-    rows =
-      (added ++ fresh_contacts ++ kept_contacts ++ entry_rest)
-      |> annotate_likes(socket.assigns.like_counts)
+    # The cap bounds the window's contribution, not the accumulated
+    # list: the window is the only source of "too much, too soon", and
+    # paging deeper is exactly what the reader asked for. Trimming the
+    # union instead pinned the tab at the cap — every cursor page was
+    # older than the 120 newest window rows, so it arrived and was
+    # sorted straight back off the bottom.
+    #
+    # Page rows (tagged by append_page) are therefore carried whole.
+    # Everything else is a window row, either fresh or carried from the
+    # last merge; the trimmed tail comes back through `added` next time
+    # and loses the same sort, so the cap is idempotent.
+    {paged_rows, window_carried} = Enum.split_with(entry_rest, &Map.get(&1, :paged, false))
+
+    window_rows =
+      (added ++ window_carried ++ fresh_contacts ++ kept_contacts)
       |> Enum.sort_by(& &1.activity, :desc)
       |> Enum.take(@max_tab_rows)
+
+    rows =
+      (window_rows ++ paged_rows)
+      |> annotate_likes(socket.assigns.like_counts)
+      |> Enum.sort_by(& &1.activity, :desc)
       |> Enum.uniq_by(&dedupe_id/1)
 
     %{entry | rows: rows}
