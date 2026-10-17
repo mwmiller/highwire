@@ -696,8 +696,13 @@ defmodule HighWire.Timeline do
   def fetch_network(client, peer_meta \\ %{}) do
     if is_pid(client) and Process.alive?(client) do
       case gossip_report(client) do
-        nil -> fallback_report(client, peer_meta)
-        net -> Map.put(net, "knownPeers", fetch_known_peers(client))
+        nil ->
+          merge_cache_into_report(fallback_report(client, peer_meta), peer_meta)
+
+        net ->
+          net = Map.put(net, "knownPeers", fetch_known_peers(client))
+          peer_meta = update_dial_outcomes(peer_meta, net)
+          merge_cache_into_report(net, peer_meta)
       end
     else
       HighWire.PeersMeta.seed_report(peer_meta)
@@ -781,6 +786,59 @@ defmodule HighWire.Timeline do
   catch
     _, _ -> []
   end
+
+  # When the engine is live, fold cached peer hints (from other sessions)
+  # into the report so recent activity elsewhere still helps understand
+  # connectivity. Only address-keyed cache entries can be meaningfully
+  # placed; deduplicate by address/id, preferring engine data.
+  defp merge_cache_into_report(%{"knownPeers" => known} = report, peer_meta)
+       when is_list(known) and is_map(peer_meta) do
+    known_list = Enum.filter(known, &is_map/1)
+
+    present =
+      known_list
+      |> Enum.flat_map(fn
+        %{"address" => addr} when is_binary(addr) -> [addr]
+        %{"id" => id} when is_binary(id) -> [id]
+        _ -> []
+      end)
+      |> MapSet.new()
+
+    cached =
+      peer_meta
+      |> Enum.filter(fn {k, v} ->
+        is_binary(k) and is_map(v) and String.starts_with?(k, "net:")
+      end)
+      |> Enum.reduce([], fn {addr, v}, acc ->
+        if MapSet.member?(present, addr) do
+          acc
+        else
+          p = %{"address" => addr}
+
+          p = if s = v["source"], do: Map.put(p, "source", s), else: p
+          p = if seen = v["last_seen_at"], do: Map.put(p, "last_seen_at", seen), else: p
+          p = if act = v["last_activity_at"], do: Map.put(p, "last_activity_at", act), else: p
+          p = if conn = v["last_connected_at"], do: Map.put(p, "last_connected_at", conn), else: p
+
+          if p["source"] || p["last_seen_at"] || p["last_activity_at"] || p["last_connected_at"] do
+            [p | acc]
+          else
+            acc
+          end
+        end
+      end)
+      |> Enum.reverse()
+
+    report
+    |> Map.put("knownPeers", known_list ++ cached)
+    |> Map.put("peer_meta", peer_meta)
+  end
+
+  defp merge_cache_into_report(%{} = report, peer_meta) do
+    Map.put(report, "peer_meta", peer_meta)
+  end
+
+  defp merge_cache_into_report(report, _peer_meta), do: report
 
   # stats.whoToFollow — active feeds we do not follow, ranked by
   # activity with follower counts. Each row is a plain string-keyed map
@@ -2607,6 +2665,7 @@ defmodule HighWire.Timeline do
       |> Map.get(:peer_meta, %{})
       |> update_conns_recency(new_conns, old_conns, now)
       |> update_known_recency(new_net, now)
+      |> update_dial_outcomes(new_net)
 
     if meta != Map.get(state, :peer_meta, %{}) do
       state = %{state | peer_meta: meta, net_dirty: true}
@@ -2648,6 +2707,40 @@ defmodule HighWire.Timeline do
   end
 
   defp update_known_recency(meta, _net, _now), do: meta
+
+  # The dial ledger is the engine's own record of how an address
+  # behaved: `attempts` counts consecutive failures since its last
+  # handshake, and `lastOk` is when it last completed one — 0, the
+  # column's default, when it never has. Only the handful of most
+  # recent rows ride the report, so remember each verdict as it passes:
+  # a row that rotates out must not take its answer with it. A success
+  # is remembered for good (the key is the max ever seen), because an
+  # address that has answered once is not an address that never will;
+  # the failure count tracks the latest row.
+  defp update_dial_outcomes(meta, %{"dialTry" => rows}) when is_list(rows) do
+    Enum.reduce(rows, meta, fn
+      %{"addr" => addr} = row, acc when is_binary(addr) ->
+        m = HighWire.PeersMeta.get(acc, addr)
+        m = put_dial_attempts(m, row["attempts"])
+        m = put_dial_ok_at(m, row["lastOk"])
+        Map.put(acc, addr, m)
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp update_dial_outcomes(meta, _net), do: meta
+
+  defp put_dial_attempts(m, attempts) when is_integer(attempts),
+    do: Map.put(m, "dial_attempts", attempts)
+
+  defp put_dial_attempts(m, _attempts), do: m
+
+  defp put_dial_ok_at(m, ok) when is_integer(ok) and ok > 0,
+    do: Map.put(m, "dial_ok_at", max(ok, m["dial_ok_at"] || 0))
+
+  defp put_dial_ok_at(m, _ok), do: m
 
   defp maybe_persist_peer_meta(state) do
     case state do

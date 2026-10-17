@@ -49,6 +49,11 @@ defmodule HighWireWeb.NetworkLive do
   # never buries the dial attempts below it.
   @known_peers_cap 50
 
+  # Consecutive failed dials, with no handshake at all on record, before
+  # an address is marked as one that never replies. A single failure is
+  # a blip — the engine backs off and tries again, and most do answer.
+  @no_reply_min_attempts 2
+
   # The sky's centre and its four rings as {rx, ry} pairs. The rings are
   # ellipses rather than circles because the panel is wide: a circle
   # sized to the height strands a third of the width unused. They are a
@@ -821,6 +826,14 @@ defmodule HighWireWeb.NetworkLive do
                   <span class="min-w-0 flex-1 break-all font-mono text-sub">
                     {addr_text(peer["address"])}
                   </span>
+                  <span
+                    :if={no_reply?(peer["address"], @peer_meta)}
+                    class="shrink-0 text-bad"
+                    data-no-reply={peer["address"]}
+                    title={no_reply_note(peer["address"], @peer_meta)}
+                  >
+                    no reply
+                  </span>
                   <span :if={peer["source"]} class="w-16 shrink-0 text-right text-faint">
                     {peer["source"]}
                   </span>
@@ -945,6 +958,26 @@ defmodule HighWireWeb.NetworkLive do
   end
 
   defp addr_text(other), do: other
+
+  # An address the engine has dialed and never once seen answer. The
+  # verdict comes from the peer cache, which the timeline keeps from
+  # every report the engine sends: the ledger itself carries only the
+  # most recent rows, so the cache is what lets the mark outlive a row
+  # that has rotated away. A handshake anywhere on record clears it — an
+  # address that has answered once is not one that never will.
+  defp no_reply?(addr, peer_meta) when is_binary(addr) do
+    m = HighWire.PeersMeta.get(peer_meta, addr)
+
+    is_integer(m["dial_attempts"]) and m["dial_attempts"] >= @no_reply_min_attempts and
+      (m["dial_ok_at"] || 0) == 0
+  end
+
+  defp no_reply?(_addr, _peer_meta), do: false
+
+  defp no_reply_note(addr, peer_meta) do
+    m = HighWire.PeersMeta.get(peer_meta, addr)
+    "dialed #{m["dial_attempts"]} times, never completed a handshake"
+  end
 
   defp profile_href("@" <> _ = id), do: "/profile?id=" <> URI.encode_www_form(id)
   defp profile_href(_id), do: "/"

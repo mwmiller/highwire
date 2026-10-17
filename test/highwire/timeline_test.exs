@@ -1134,4 +1134,97 @@ defmodule HighWire.TimelineTest do
       assert %{"seeded" => true} = Timeline.fetch_network(pid)
     end
   end
+
+  describe "network dial outcomes accumulate into peer meta" do
+    test "records failed dials without clearing a past success" do
+      addr = "net:dead.example:8008~shs:@dead.ed25519"
+
+      client =
+        NetworkClient.start(%{
+          "gossip.peers" =>
+            {:ok,
+             %{
+               "enabled" => true,
+               "connections" => [],
+               "dialTry" => [
+                 %{"addr" => addr, "attempts" => 5, "lastOk" => 0, "lastTry" => 1_000}
+               ]
+             }},
+          "admin.peers.known" => {:ok, [%{"address" => addr}]}
+        })
+
+      report = Timeline.fetch_network(client, %{})
+
+      assert [%{"address" => ^addr}] = report["knownPeers"]
+      assert meta = report["peer_meta"]
+      m = HighWire.PeersMeta.get(meta, addr)
+      assert m["dial_attempts"] == 5
+      # no success ever → dial_ok_at may be missing or 0; do not set a false max
+      assert (m["dial_ok_at"] || 0) == 0
+    end
+
+    test "remembers a past success when failures accumulate later" do
+      addr = "net:flap.example:8008~shs:@flap.ed25519"
+      ok_at = 2_000
+
+      client =
+        NetworkClient.start(%{
+          "gossip.peers" =>
+            {:ok,
+             %{
+               "enabled" => true,
+               "connections" => [],
+               "dialTry" => [
+                 %{"addr" => addr, "attempts" => 7, "lastOk" => ok_at, "lastTry" => 5_000}
+               ]
+             }},
+          "admin.peers.known" => {:ok, [%{"address" => addr}]}
+        })
+
+      report = Timeline.fetch_network(client, %{})
+
+      m = HighWire.PeersMeta.get(report["peer_meta"], addr)
+      assert m["dial_attempts"] == 7
+      assert m["dial_ok_at"] == ok_at
+    end
+
+    test "keeps the highest success timestamp seen" do
+      addr = "net:recovered.example:8008~shs:@rec.ed25519"
+
+      # First observation: a flapper that once succeeded a while ago.
+      client1 =
+        NetworkClient.start(%{
+          "gossip.peers" =>
+            {:ok,
+             %{
+               "enabled" => true,
+               "connections" => [],
+               "dialTry" => [%{"addr" => addr, "attempts" => 3, "lastOk" => 1_000, "lastTry" => 1_500}]
+             }},
+          "admin.peers.known" => {:ok, [%{"address" => addr}]}
+        })
+
+      report1 = Timeline.fetch_network(client1, %{})
+      meta1 = report1["peer_meta"]
+
+      # Later observation: a later success — max must be kept.
+      client2 =
+        NetworkClient.start(%{
+          "gossip.peers" =>
+            {:ok,
+             %{
+               "enabled" => true,
+               "connections" => [],
+               "dialTry" => [%{"addr" => addr, "attempts" => 0, "lastOk" => 9_000, "lastTry" => 9_000}]
+             }},
+          "admin.peers.known" => {:ok, [%{"address" => addr}]}
+        })
+
+      report2 = Timeline.fetch_network(client2, meta1)
+
+      m = HighWire.PeersMeta.get(report2["peer_meta"], addr)
+      assert m["dial_attempts"] == 0
+      assert m["dial_ok_at"] == 9_000
+    end
+  end
 end

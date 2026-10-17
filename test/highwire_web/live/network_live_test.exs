@@ -186,6 +186,70 @@ defmodule HighWireWeb.NetworkLiveTest do
       refute html =~ "10.0.0.52:8008"
     end
 
+    test "marks known peers that never answered as no reply" do
+      peers = [%{"address" => "net:dead.example:8008~shs:key", "autoconnect" => true}]
+
+      html =
+        render_with_report(
+          %{
+            "enabled" => true,
+            "connections" => [],
+            "knownPeers" => peers,
+            "dialTry" => []
+          },
+          %{
+            peer_meta: %{
+              "net:dead.example:8008~shs:key" => %{"dial_attempts" => 5, "dial_ok_at" => 0}
+            }
+          }
+        )
+
+      assert html =~ "no reply"
+      assert html =~ "dialed 5 times"
+    end
+
+    test "does not badge a peer with fewer than the threshold of failures" do
+      peers = [%{"address" => "net:transient.example:8008~shs:key", "autoconnect" => true}]
+
+      html =
+        render_with_report(
+          %{
+            "enabled" => true,
+            "connections" => [],
+            "knownPeers" => peers,
+            "dialTry" => []
+          },
+          %{
+            peer_meta: %{
+              "net:transient.example:8008~shs:key" => %{"dial_attempts" => 1, "dial_ok_at" => 0}
+            }
+          }
+        )
+
+      refute html =~ "no reply"
+    end
+
+    test "does not badge a peer that has answered at least once" do
+      peers = [%{"address" => "net:flap.example:8008~shs:key", "autoconnect" => true}]
+
+      html =
+        render_with_report(
+          %{
+            "enabled" => true,
+            "connections" => [],
+            "knownPeers" => peers,
+            "dialTry" => []
+          },
+          %{
+            peer_meta: %{
+              "net:flap.example:8008~shs:key" => %{"dial_attempts" => 10, "dial_ok_at" => 1_000}
+            }
+          }
+        )
+
+      refute html =~ "no reply"
+    end
+
     test "empty sections say so" do
       html =
         render_with_report(%{
