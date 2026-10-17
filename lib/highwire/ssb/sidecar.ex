@@ -31,7 +31,7 @@ defmodule HighWire.SSB.Sidecar do
 
   require Logger
 
-  alias HighWire.SSB.{Admin, Client, Import, Keys, Network}
+  alias HighWire.SSB.{Admin, Client, ConnSuppress, Import, Keys, Network}
 
   def config, do: Application.get_env(:highwire, :ssb, [])
 
@@ -140,6 +140,48 @@ defmodule HighWire.SSB.Sidecar do
             _ = start_child()
             {:error, reason}
         end
+    end
+  end
+
+  @doc """
+  Restart the engine this sidecar owns, without touching the network
+  profile: stop this sidecar and the engine it owns, make sure nothing
+  still holds the muxrpc port, and start again. Used after a change
+  that must be re-read at boot — a `conn.json` suppression, which the
+  dialer only picks up on a fresh start (it reads the book into memory
+  and there is no reload RPC).
+  """
+  @spec restart_engine() :: :ok | {:error, term()}
+  def restart_engine do
+    if enabled?() do
+      with :ok <- stop_child(),
+           :ok <- ensure_port_free(),
+           {:ok, _pid} <- start_child() do
+        :ok
+      else
+        {:error, reason} ->
+          _ = start_child()
+          {:error, reason}
+      end
+    else
+      {:error, :disabled}
+    end
+  end
+
+  @doc """
+  Suppress `addrs` in `conn.json` and restart the engine so the change
+  takes effect. With the engine disabled the file is written directly,
+  which is all that is needed: nothing is holding it in memory.
+  """
+  @spec apply_conn_suppression(list(String.t())) ::
+          {:ok, integer(), Path.t()} | {:error, term()}
+  def apply_conn_suppression(addrs) when is_list(addrs) do
+    with {:ok, changed, backup} <- ConnSuppress.apply(addrs) do
+      case restart_engine() do
+        :ok -> {:ok, changed, backup}
+        {:error, :disabled} -> {:ok, changed, backup}
+        {:error, reason} -> {:error, {:restart_failed, reason, changed, backup}}
+      end
     end
   end
 

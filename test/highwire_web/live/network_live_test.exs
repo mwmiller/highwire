@@ -501,6 +501,87 @@ defmodule HighWireWeb.NetworkLiveTest do
     end
   end
 
+  describe "suppression control" do
+    test "offers a preview and applies it with a confirm step" do
+      html =
+        render_with_report(%{
+          "enabled" => true,
+          "connections" => [],
+          "knownPeers" => [%{"address" => "net:127.0.0.1:8020~shs:key", "autoconnect" => true}],
+          "dialTry" => []
+        })
+
+      assert html =~ "Preview suppression"
+      assert html =~ ~s(phx-click="suppress-preview")
+      refute html =~ ~s(phx-click="suppress-apply")
+    end
+
+    test "previewing lists the counts it would suppress" do
+      html =
+        render_with_report(
+          %{
+            "enabled" => true,
+            "connections" => [],
+            "knownPeers" => [
+              %{"address" => "net:127.0.0.1:8020~shs:key", "autoconnect" => true},
+              %{"address" => "net:room.example:8008~shs:key", "autoconnect" => true}
+            ],
+            "dialTry" => []
+          },
+          %{
+            suppress_preview: %{
+              addrs: ["net:127.0.0.1:8020~shs:key"],
+              counts: %{loopback: 1, total: 1, book: 2}
+            }
+          }
+        )
+
+      assert html =~ "Suppress 1 &amp; restart engine"
+      assert html =~ "1 loopback"
+      assert html =~ "1 to suppress"
+      assert html =~ ~s(phx-click="suppress-apply")
+      assert html =~ ~s(phx-click="suppress-cancel")
+    end
+
+    test "an empty preview says there is nothing to suppress" do
+      html =
+        render_with_report(
+          %{
+            "enabled" => true,
+            "connections" => [],
+            "knownPeers" => [%{"address" => "net:room.example:8008~shs:key", "autoconnect" => true}],
+            "dialTry" => []
+          },
+          %{suppress_preview: %{addrs: [], counts: %{total: 0}}}
+        )
+
+      assert html =~ "Nothing to suppress"
+    end
+
+    test "previewing classifies the current book without writing anything" do
+      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+
+      socket =
+        Phoenix.Component.assign(socket,
+          report: %{
+            "knownPeers" => [
+              %{"address" => "net:127.0.0.1:8020~shs:key", "autoconnect" => true},
+              %{"address" => "net:room.example:8008~shs:key", "autoconnect" => true}
+            ]
+          },
+          peer_meta: %{}
+        )
+
+      {:noreply, socket} = NetworkLive.handle_event("suppress-preview", %{}, socket)
+
+      assert %{addrs: ["net:127.0.0.1:8020~shs:key"], counts: counts} = socket.assigns.suppress_preview
+      assert counts[:loopback] == 1
+
+      {:noreply, socket} = NetworkLive.handle_event("suppress-cancel", %{}, socket)
+      assert socket.assigns.suppress_preview == nil
+    end
+  end
+
   # The assigns a connected session would hold, with only the report
   # swapped out — render_with_report/2 lets a test override anything.
   defp render_with_report(report, overrides \\ %{}) do
@@ -524,7 +605,10 @@ defmodule HighWireWeb.NetworkLiveTest do
           dialing: false,
           known_peers_cap: 50,
           selected: nil,
-          gossip: %{connected: 0, pulse: 0}
+          gossip: %{connected: 0, pulse: 0},
+          suppress_preview: nil,
+          suppress_notice: nil,
+          suppressing: false
         },
         overrides
       )

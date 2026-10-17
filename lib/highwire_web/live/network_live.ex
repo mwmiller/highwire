@@ -34,7 +34,7 @@ defmodule HighWireWeb.NetworkLive do
   use HighWireWeb, :live_view
 
   alias HighWire.Avatar, as: Ident
-  alias HighWire.SSB.{Admin, Network, Sidecar}
+  alias HighWire.SSB.{Admin, ConnSuppress, Network, Sidecar}
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Nav
@@ -102,7 +102,10 @@ defmodule HighWireWeb.NetworkLive do
        polls: 0,
        dial_notice: nil,
        dialing: false,
-       known_peers_cap: @known_peers_cap
+       known_peers_cap: @known_peers_cap,
+       suppress_preview: nil,
+       suppress_notice: nil,
+       suppressing: false
      )}
   end
 
@@ -212,6 +215,24 @@ defmodule HighWireWeb.NetworkLive do
      assign(socket, dialing: false, dial_notice: "Dialer call failed: #{dial_error(reason)}")}
   end
 
+  def handle_info({:suppress_result, result}, socket) do
+    notice =
+      case result do
+        {:ok, changed, backup} ->
+          "Suppressed #{changed} address#{if changed == 1, do: "", else: "es"}; " <>
+            "the engine was restarted to pick it up. Backup: #{Path.basename(backup)}"
+
+        {:error, {:restart_failed, reason, changed, backup}} ->
+          "Wrote #{changed} suppression#{if changed == 1, do: "", else: "s"} (backup #{Path.basename(backup)}), " <>
+            "but the engine would not restart: #{inspect(reason)}"
+
+        {:error, reason} ->
+          "Suppression failed: #{inspect(reason)}"
+      end
+
+    {:noreply, socket |> assign(suppressing: false, suppress_notice: notice) |> refresh_report()}
+  end
+
   def handle_info(_other, socket), do: {:noreply, socket}
 
   @impl true
@@ -318,6 +339,52 @@ defmodule HighWireWeb.NetworkLive do
         end)
 
         {:noreply, assign(socket, dialing: true, dial_notice: "Starting a dial round…")}
+    end
+  end
+
+  # -- suppression ---------------------------------------------------------
+
+  # Preview is pure: classify against the report and the dial cache the
+  # page already holds, and show the user what would change before
+  # anything is written. The count is what makes the button live.
+  def handle_event("suppress-preview", _params, socket) do
+    {addrs, counts} =
+      ConnSuppress.classify(socket.assigns.report["knownPeers"] || [], socket.assigns.peer_meta)
+
+    {:noreply, assign(socket, suppress_preview: %{addrs: addrs, counts: counts})}
+  end
+
+  def handle_event("suppress-cancel", _params, socket) do
+    {:noreply, assign(socket, suppress_preview: nil)}
+  end
+
+  # Applying stops and restarts the engine, so it runs off the socket
+  # process; the tick poll refreshes the report when the engine is back.
+  def handle_event("suppress-apply", _params, socket) do
+    case socket.assigns.suppress_preview do
+      %{addrs: [_ | _] = addrs} ->
+        parent = self()
+
+        Task.start(fn ->
+          result =
+            try do
+              Sidecar.apply_conn_suppression(addrs)
+            catch
+              kind, reason -> {:error, {kind, reason}}
+            end
+
+          send(parent, {:suppress_result, result})
+        end)
+
+        {:noreply,
+         assign(socket,
+           suppressing: true,
+           suppress_preview: nil,
+           suppress_notice: "Writing conn.json and restarting the engine…"
+         )}
+
+      _ ->
+        {:noreply, assign(socket, suppress_preview: nil, suppress_notice: "Nothing to suppress.")}
     end
   end
 
@@ -853,6 +920,68 @@ defmodule HighWireWeb.NetworkLive do
                   Showing first {@known_peers_cap} of {length(@report["knownPeers"])}.
                 </p>
               </div>
+
+              <div class="mt-3 rounded border border-edge-soft bg-panel px-3 py-2">
+                <p class="text-xs text-dim">
+                  Stop dialing addresses that can never answer — loopback and
+                  private announce addresses, <code class="text-faint">.onion</code>,
+                  IPv6 literals, wrong ports, and any address the dialer has
+                  failed repeatedly with no handshake on record. An address that
+                  has ever answered is never listed. Each is marked
+                  <code class="text-faint">autoconnect: false</code> in
+                  <code class="text-faint">conn.json</code>, which survives
+                  re-announcement; applying it restarts the engine to take effect.
+                </p>
+
+                <div class="mt-2 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    class="pref-choice"
+                    phx-click="suppress-preview"
+                    disabled={@suppressing or @report["seeded"]}
+                  >
+                    Preview suppression
+                  </button>
+
+                  <button
+                    :if={@suppress_preview}
+                    type="button"
+                    class="pref-choice"
+                    phx-click="suppress-apply"
+                    disabled={@suppressing or @suppress_preview.addrs == []}
+                  >
+                    Suppress {@suppress_preview.counts[:total] || 0} &amp; restart engine
+                  </button>
+
+                  <button
+                    :if={@suppress_preview}
+                    type="button"
+                    class="pref-choice"
+                    phx-click="suppress-cancel"
+                    disabled={@suppressing}
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                <p
+                  :if={@suppress_preview && @suppress_preview.addrs != []}
+                  class="mt-2 text-xs text-dim"
+                >
+                  {suppress_summary(@suppress_preview.counts)}
+                </p>
+
+                <p
+                  :if={@suppress_preview && @suppress_preview.addrs == []}
+                  class="mt-2 text-xs text-dim"
+                >
+                  Nothing to suppress — every book entry could still answer.
+                </p>
+
+                <p :if={@suppress_notice} role="status" class="mt-2 text-xs text-dim">
+                  {@suppress_notice}
+                </p>
+              </div>
             </section>
 
             <section>
@@ -977,6 +1106,29 @@ defmodule HighWireWeb.NetworkLive do
   defp no_reply_note(addr, peer_meta) do
     m = HighWire.PeersMeta.get(peer_meta, addr)
     "dialed #{m["dial_attempts"]} times, never completed a handshake"
+  end
+
+  # "12 loopback · 30 private · 4 onion · 260 no reply" — the labels the
+  # classification counted, in a stable order, with zeroes dropped.
+  defp suppress_summary(counts) do
+    order = [
+      {:loopback, "loopback"},
+      {:rfc1918, "private"},
+      {:onion, "onion"},
+      {:ipv6, "IPv6"},
+      {:scheme, "wrong scheme"},
+      {:port, "bad port"},
+      {:unparseable, "unparseable"},
+      {:no_reply, "no reply"}
+    ]
+
+    parts =
+      for {key, label} <- order, (n = counts[key] || 0) > 0, do: "#{n} #{label}"
+
+    case parts do
+      [] -> "Nothing to suppress."
+      _ -> Enum.join(parts, " · ") <> " → #{counts[:total] || 0} to suppress"
+    end
   end
 
   defp profile_href("@" <> _ = id), do: "/profile?id=" <> URI.encode_www_form(id)
