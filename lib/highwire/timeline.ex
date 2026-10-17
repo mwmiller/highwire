@@ -813,18 +813,8 @@ defmodule HighWire.Timeline do
         if MapSet.member?(present, addr) do
           acc
         else
-          p = %{"address" => addr}
-
-          p = if s = v["source"], do: Map.put(p, "source", s), else: p
-          p = if seen = v["last_seen_at"], do: Map.put(p, "last_seen_at", seen), else: p
-          p = if act = v["last_activity_at"], do: Map.put(p, "last_activity_at", act), else: p
-          p = if conn = v["last_connected_at"], do: Map.put(p, "last_connected_at", conn), else: p
-
-          if p["source"] || p["last_seen_at"] || p["last_activity_at"] || p["last_connected_at"] do
-            [p | acc]
-          else
-            acc
-          end
+          p = build_cache_peer(addr, v)
+          if has_cache_fields?(p), do: [p | acc], else: acc
         end
       end)
       |> Enum.reverse()
@@ -2741,6 +2731,19 @@ defmodule HighWire.Timeline do
     do: Map.put(m, "dial_ok_at", max(ok, m["dial_ok_at"] || 0))
 
   defp put_dial_ok_at(m, _ok), do: m
+
+  defp build_cache_peer(addr, v) do
+    p = %{"address" => addr}
+    p = if s = v["source"], do: Map.put(p, "source", s), else: p
+    p = if seen = v["last_seen_at"], do: Map.put(p, "last_seen_at", seen), else: p
+    p = if act = v["last_activity_at"], do: Map.put(p, "last_activity_at", act), else: p
+    p = if conn = v["last_connected_at"], do: Map.put(p, "last_connected_at", conn), else: p
+    p
+  end
+
+  defp has_cache_fields?(p) do
+    p["source"] || p["last_seen_at"] || p["last_activity_at"] || p["last_connected_at"]
+  end
 
   defp maybe_persist_peer_meta(state) do
     case state do

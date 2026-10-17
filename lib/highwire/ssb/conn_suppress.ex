@@ -57,11 +57,18 @@ defmodule HighWire.SSB.ConnSuppress do
               {flush(acc, current, ac), key, true}
 
             nil ->
-              cond do
-                line == "    }" -> {flush(acc, current, ac), nil, true}
-                String.contains?(line, "\"autoconnect\": false") -> {acc, current, false}
-                String.contains?(line, "\"autoconnect\": true") -> {acc, current, true}
-                true -> {acc, current, ac}
+              if line == "    }" do
+                {flush(acc, current, ac), nil, true}
+              else
+                if String.contains?(line, "\"autoconnect\": false") do
+                  {acc, current, false}
+                else
+                  if String.contains?(line, "\"autoconnect\": true") do
+                    {acc, current, true}
+                  else
+                    {acc, current, ac}
+                  end
+                end
               end
           end
         end)
@@ -92,9 +99,11 @@ defmodule HighWire.SSB.ConnSuppress do
         _ -> nil
       end)
       |> Enum.reject(&is_nil/1)
-      |> Enum.reject(&((HighWire.PeersMeta.get(peer_meta, &1)["dial_ok_at"] || 0) > 0))
       |> Enum.filter(fn addr ->
-        unreachable?(addr) or no_reply?(HighWire.PeersMeta.get(peer_meta, addr))
+        dial_ok = HighWire.PeersMeta.get(peer_meta, addr)["dial_ok_at"] || 0
+
+        dial_ok <= 0 and
+          (unreachable?(addr) or no_reply?(HighWire.PeersMeta.get(peer_meta, addr)))
       end)
 
     {suppress, counts(Enum.map(known_peers, &address_of/1), suppress)}
@@ -165,7 +174,7 @@ defmodule HighWire.SSB.ConnSuppress do
     case host_port(addr) do
       {host, port} ->
         loopback?(host) or private?(host) or onion?(host) or ipv6?(host) or
-          not (is_integer(port) and port in 1..65535)
+          not (is_integer(port) and port in 1..65_535)
 
       # A non-`net:` scheme (or anything else without a host:port) is
       # not something this dialer can use.
@@ -188,25 +197,30 @@ defmodule HighWire.SSB.ConnSuppress do
   end
 
   defp category(addr) do
+    if bad_scheme?(addr) do
+      :scheme
+    else
+      case host_port(addr) do
+        {host, port} ->
+          if loopback?(host) do
+            :loopback
+          else
+            classify_host_port(host, port)
+          end
+
+        :error ->
+          :unparseable
+      end
+    end
+  end
+
+  defp classify_host_port(host, port) do
     cond do
-      bad_scheme?(addr) ->
-        :scheme
-
-      true ->
-        case host_port(addr) do
-          {host, port} ->
-            cond do
-              loopback?(host) -> :loopback
-              private?(host) -> :rfc1918
-              onion?(host) -> :onion
-              ipv6?(host) -> :ipv6
-              not (is_integer(port) and port in 1..65535) -> :port
-              true -> :no_reply
-            end
-
-          :error ->
-            :unparseable
-        end
+      private?(host) -> :rfc1918
+      onion?(host) -> :onion
+      ipv6?(host) -> :ipv6
+      not (is_integer(port) and port in 1..65_535) -> :port
+      true -> :no_reply
     end
   end
 
