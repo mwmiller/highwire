@@ -549,7 +549,9 @@ defmodule HighWireWeb.NetworkLiveTest do
           %{
             "enabled" => true,
             "connections" => [],
-            "knownPeers" => [%{"address" => "net:room.example:8008~shs:key", "autoconnect" => true}],
+            "knownPeers" => [
+              %{"address" => "net:room.example:8008~shs:key", "autoconnect" => true}
+            ],
             "dialTry" => []
           },
           %{suppress_preview: %{addrs: [], counts: %{total: 0}}}
@@ -558,28 +560,76 @@ defmodule HighWireWeb.NetworkLiveTest do
       assert html =~ "Nothing to suppress"
     end
 
-    test "previewing classifies the current book without writing anything" do
-      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+    test "previewing classifies the address book on disk, writing nothing" do
+      home = with_temp_home()
 
-      socket =
-        Phoenix.Component.assign(socket,
-          report: %{
-            "knownPeers" => [
-              %{"address" => "net:127.0.0.1:8020~shs:key", "autoconnect" => true},
-              %{"address" => "net:room.example:8008~shs:key", "autoconnect" => true}
-            ]
+      File.write!(Path.join([home, ".ssberl", "conn.json"]), """
+      {
+          "net:127.0.0.1:8020~shs:key": {
+              "autoconnect": true
           },
-          peer_meta: %{}
-        )
+          "net:room.example:8008~shs:key2": {
+              "autoconnect": true
+          }
+      }
+      """)
+
+      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+      socket = Phoenix.Component.assign(socket, :peer_meta, %{})
 
       {:noreply, socket} = NetworkLive.handle_event("suppress-preview", %{}, socket)
 
-      assert %{addrs: ["net:127.0.0.1:8020~shs:key"], counts: counts} = socket.assigns.suppress_preview
+      assert %{addrs: ["net:127.0.0.1:8020~shs:key"], counts: counts} =
+               socket.assigns.suppress_preview
+
       assert counts[:loopback] == 1
+
+      # Preview only: the book is untouched.
+      assert File.read!(Path.join([home, ".ssberl", "conn.json"])) =~ ~s("autoconnect": true)
 
       {:noreply, socket} = NetworkLive.handle_event("suppress-cancel", %{}, socket)
       assert socket.assigns.suppress_preview == nil
     end
+
+    test "a book entry already suppressed is not listed again" do
+      home = with_temp_home()
+
+      File.write!(Path.join([home, ".ssberl", "conn.json"]), """
+      {
+          "net:127.0.0.1:8020~shs:key": {
+              "autoconnect": false
+          }
+      }
+      """)
+
+      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+      socket = Phoenix.Component.assign(socket, :peer_meta, %{})
+
+      {:noreply, socket} = NetworkLive.handle_event("suppress-preview", %{}, socket)
+
+      assert %{addrs: [], counts: counts} = socket.assigns.suppress_preview
+      assert counts[:total] == 0
+    end
+  end
+
+  # Point :application_dir at a throwaway home for the one suite that
+  # reads the address book off disk.
+  defp with_temp_home do
+    home = Path.join(System.tmp_dir!(), "netlive_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(Path.join(home, ".ssberl"))
+    previous = Application.get_env(:highwire, :application_dir)
+    Application.put_env(:highwire, :application_dir, home)
+
+    on_exit(fn ->
+      case previous do
+        nil -> Application.delete_env(:highwire, :application_dir)
+        dir -> Application.put_env(:highwire, :application_dir, dir)
+      end
+
+      File.rm_rf!(home)
+    end)
+
+    home
   end
 
   # The assigns a connected session would hold, with only the report

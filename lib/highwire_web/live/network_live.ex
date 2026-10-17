@@ -344,12 +344,14 @@ defmodule HighWireWeb.NetworkLive do
 
   # -- suppression ---------------------------------------------------------
 
-  # Preview is pure: classify against the report and the dial cache the
-  # page already holds, and show the user what would change before
-  # anything is written. The count is what makes the button live.
+  # Preview is pure: classify the address book on disk against the dial
+  # cache the page already holds, and show what would change before
+  # anything is written. The book, not the report, is the source: the
+  # report's knownPeers drops the autoconnect flag, so it cannot tell an
+  # already-suppressed entry from a live one, and it is the book that
+  # apply/1 edits.
   def handle_event("suppress-preview", _params, socket) do
-    {addrs, counts} =
-      ConnSuppress.classify(socket.assigns.report["knownPeers"] || [], socket.assigns.peer_meta)
+    {addrs, counts} = ConnSuppress.classify(ConnSuppress.book_peers(), socket.assigns.peer_meta)
 
     {:noreply, assign(socket, suppress_preview: %{addrs: addrs, counts: counts})}
   end
@@ -928,8 +930,8 @@ defmodule HighWireWeb.NetworkLive do
                   IPv6 literals, wrong ports, and any address the dialer has
                   failed repeatedly with no handshake on record. An address that
                   has ever answered is never listed. Each is marked
-                  <code class="text-faint">autoconnect: false</code> in
-                  <code class="text-faint">conn.json</code>, which survives
+                  <code class="text-faint">autoconnect: false</code>
+                  in <code class="text-faint">conn.json</code>, which survives
                   re-announcement; applying it restarts the engine to take effect.
                 </p>
 

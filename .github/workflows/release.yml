@@ -220,33 +220,30 @@ jobs:
       # network id, and native NIFs built for this runner's OS — into
       # priv/. mix release snapshots priv, so it rides inside the
       # Burrito wrapper; the release.yml runtime config points the
-      # sidecar at it. erlbutt is public, so a plain shallow clone —
-      # upstream is built UNMODIFIED. Two environment knobs only:
+      # sidecar at it.
+      #
+      # erlbutt is a branch-tracking git dep in mix.exs (main), so mix
+      # deps.get has already fetched it into deps/erlbutt at the exact
+      # revision locked in mix.lock — the engine is built UNMODIFIED
+      # from that checkout, and stays in lockstep with the app's other
+      # deps. That step runs above this one. Two environment knobs only:
       #
       #   ERL_COMPILER_OPTIONS — OTP 29 deprecates the bare `catch`
       #     idiom the codebase deliberately uses (and the old
       #     binding-in-filter comprehension style); both are fatal
       #     under erlbutt's warnings_as_errors. Suppress the warning
-      #     classes rather than patching a repo we clone as-is.
+      #     classes rather than patching a repo we build as-is.
       #   CFLAGS/LDFLAGS (macOS) — exported job-wide by the system
       #     libraries step above: Homebrew's libsodium is outside
       #     clang's default search path. apt's Linux paths are already
       #     default; Windows uses the vcpkg INCLUDE/LIB env.
+      - run: mix local.hex --force && mix local.rebar --force
+      - run: mix deps.get
+
       - name: Build and embed the erlbutt engine
         env:
           ERL_COMPILER_OPTIONS: '[nowarn_deprecated_catch, nowarn_export_var_subexpr]'
         run: |
-          # mise's shims resolve tool versions by walking up from the
-          # CWD. The clone lives in $RUNNER_TEMP, outside this repo's
-          # .tool-versions, so rebar3's `#!/usr/bin/env escript` would
-          # die with "No version is set for shim". Put the real erlang
-          # bin ahead of the shims for this step (resolved here, where
-          # the repo config still applies). mise is only installed on
-          # Unix — setup-beam provides escript on Windows.
-          if command -v mise >/dev/null 2>&1; then
-            export PATH="$(dirname "$(mise which erl)"):$PATH"
-          fi
-          git clone --depth 1 https://github.com/cmoid/erlbutt.git "$RUNNER_TEMP/erlbutt"
           if [ "$RUNNER_OS" = "Windows" ]; then
             # git/hex must fail fast instead of sitting on a credential
             # prompt (a headless hang shows zero output), and rebar3 is
@@ -271,19 +268,16 @@ jobs:
             timeout 30 erl -noshell -eval \
               'io:format("dns: ~p~n", [inet_res:lookup("repo.hex.pm", in, a)]), halt().' \
               || echo "== phase: erlang dns probe FAILED =="
-            echo "== phase: clone ok, starting rebar3 =="
-            (cd "$RUNNER_TEMP/erlbutt" && DEBUG=1 timeout 15m ./rebar3 as prod release)
+            echo "== phase: deps fetched, starting rebar3 =="
+            (cd deps/erlbutt && DEBUG=1 timeout 15m ./rebar3 as prod release)
             echo "== phase: rebar3 release done =="
           else
-            make -C "$RUNNER_TEMP/erlbutt" prod
+            make -C deps/erlbutt prod
           fi
           echo "== phase: embedding rel into priv/erlbutt =="
           mkdir -p priv/erlbutt
-          cp -R "$RUNNER_TEMP/erlbutt/_build/prod/rel/ssb/." priv/erlbutt/
+          cp -R deps/erlbutt/_build/prod/rel/ssb/. priv/erlbutt/
           rm -rf priv/erlbutt/erl_crash.dump priv/erlbutt/log priv/erlbutt/log.offset
-
-      - run: mix local.hex --force && mix local.rebar --force
-      - run: mix deps.get
 
       # Digested priv/static must exist in the release: the shell loads
       # http://localhost:24042, which serves these assets.

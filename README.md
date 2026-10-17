@@ -49,7 +49,11 @@ tag-triggered release workflow (`.github/workflows/release.yml`).
 
 **Engine**
 
-- Release builds embed erlbutt built unmodified from upstream
+- erlbutt is a branch-tracking git dep in `mix.exs` (`main`), locked
+  to an exact revision in `mix.lock`. `mix deps.get` fetches it;
+  `mix deps.update erlbutt` moves it to the current tip; `mix
+  engine.build` compiles it into dev's release. `mix setup` does both.
+- Release builds embed erlbutt built unmodified from that checkout
   (`github.com/cmoid/erlbutt`) as a complete OTP release under
   `priv/erlbutt`, booted as a sidecar when the app starts.
 - First-run import of an existing JS-client `~/.ssb` store (secret,
@@ -94,10 +98,15 @@ The engine connects to the mainnet SSB network
 ## Development
 
 ```sh
-mix setup          # deps
+mix setup          # deps, then builds the erlbutt engine
 mix phx.server     # http://127.0.0.1:24042
 mix precommit      # format, credo, compile --warnings-as-errors, test
 ```
+
+`mix deps.update erlbutt && mix engine.build` (or the `mix
+engine.update` alias) pulls and rebuilds the engine when upstream
+moves. Point `ERLBUTT_REL` at another release to run against a
+working engine checkout instead.
 
 ## License
 

@@ -144,44 +144,56 @@ defmodule HighWire.SSB.Sidecar do
   end
 
   @doc """
-  Restart the engine this sidecar owns, without touching the network
-  profile: stop this sidecar and the engine it owns, make sure nothing
-  still holds the muxrpc port, and start again. Used after a change
-  that must be re-read at boot — a `conn.json` suppression, which the
-  dialer only picks up on a fresh start (it reads the book into memory
-  and there is no reload RPC).
-  """
-  @spec restart_engine() :: :ok | {:error, term()}
-  def restart_engine do
-    if enabled?() do
-      with :ok <- stop_child(),
-           :ok <- ensure_port_free(),
-           {:ok, _pid} <- start_child() do
-        :ok
-      else
-        {:error, reason} ->
-          _ = start_child()
-          {:error, reason}
-      end
-    else
-      {:error, :disabled}
-    end
-  end
-
-  @doc """
   Suppress `addrs` in `conn.json` and restart the engine so the change
   takes effect. With the engine disabled the file is written directly,
   which is all that is needed: nothing is holding it in memory.
+
+  With the engine enabled the order matters: it is stopped *first*, then
+  the file is written, then it is started again. A live engine holds the
+  address book in memory and flushes a dirty `conn_db` over the file, so
+  editing while it runs would be a race the edit usually loses. Stopping
+  first also means there is no window in which the dialer could read a
+  half-written book.
   """
   @spec apply_conn_suppression(list(String.t())) ::
           {:ok, integer(), Path.t()} | {:error, term()}
   def apply_conn_suppression(addrs) when is_list(addrs) do
-    with {:ok, changed, backup} <- ConnSuppress.apply(addrs) do
-      case restart_engine() do
-        :ok -> {:ok, changed, backup}
-        {:error, :disabled} -> {:ok, changed, backup}
-        {:error, reason} -> {:error, {:restart_failed, reason, changed, backup}}
+    if enabled?() do
+      case stop_and_free() do
+        :ok -> apply_while_stopped(addrs)
+        {:error, reason} -> {:error, {:stop_failed, reason}}
       end
+    else
+      ConnSuppress.apply(addrs)
+    end
+  end
+
+  defp stop_and_free do
+    with :ok <- stop_child(),
+         :ok <- ensure_port_free() do
+      :ok
+    else
+      {:error, reason} = error ->
+        # Never leave the engine down: bring it back even when the stop
+        # half failed, so a busy port is a reported error, not an outage.
+        _ = start_child()
+        Logger.error("sidecar: conn suppression could not stop the engine: #{inspect(reason)}")
+        error
+    end
+  end
+
+  defp apply_while_stopped(addrs) do
+    result = ConnSuppress.apply(addrs)
+
+    case start_child() do
+      {:ok, _pid} ->
+        result
+
+      {:error, reason} ->
+        case result do
+          {:ok, changed, backup} -> {:error, {:restart_failed, reason, changed, backup}}
+          {:error, _} = error -> error
+        end
     end
   end
 

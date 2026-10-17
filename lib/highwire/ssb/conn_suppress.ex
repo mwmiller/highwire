@@ -92,7 +92,7 @@ defmodule HighWire.SSB.ConnSuppress do
         _ -> nil
       end)
       |> Enum.reject(&is_nil/1)
-      |> Enum.reject(&(HighWire.PeersMeta.get(peer_meta, &1)["dial_ok_at"] || 0) > 0)
+      |> Enum.reject(&((HighWire.PeersMeta.get(peer_meta, &1)["dial_ok_at"] || 0) > 0))
       |> Enum.filter(fn addr ->
         unreachable?(addr) or no_reply?(HighWire.PeersMeta.get(peer_meta, addr))
       end)
@@ -216,7 +216,9 @@ defmodule HighWire.SSB.ConnSuppress do
     case String.split(rest, "~", parts: 2) do
       [hostport, _key] ->
         case String.split(hostport, ":") do
-          [_only] -> :error
+          [_only] ->
+            :error
+
           parts ->
             {port, _} = List.pop_at(parts, -1)
             {Enum.join(Enum.drop(parts, -1), ":"), Integer.parse(port) |> elem_or_nil()}

@@ -1,5 +1,7 @@
 defmodule HighWire.SSB.ConnSuppressTest do
-  use ExUnit.Case, async: true
+  # Not async: the apply/1 cases point :application_dir at a temp home,
+  # which is process-global state other suites also read.
+  use ExUnit.Case, async: false
 
   alias HighWire.SSB.ConnSuppress
 
@@ -115,11 +117,32 @@ defmodule HighWire.SSB.ConnSuppressTest do
       assert text =~ ~r/"net:room\.example:8008~shs:key2": \{[^}]*"autoconnect": true/s
 
       # A backup holds the original.
-      assert File.read!(backup) =~ ~r/"net:127\.0\.0\.1:8020~shs:key": \{[^}]*"autoconnect": true/s
+      assert File.read!(backup) =~
+               ~r/"net:127\.0\.0\.1:8020~shs:key": \{[^}]*"autoconnect": true/s
     end
 
     test "applying an empty set changes nothing" do
       assert {:ok, 0, _backup} = ConnSuppress.apply([])
+    end
+
+    test "Sidecar.apply_conn_suppression writes directly when the engine is disabled",
+         %{home: home} do
+      previous = Application.get_env(:highwire, :ssb)
+      Application.put_env(:highwire, :ssb, Keyword.put(previous || [], :enabled, false))
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:highwire, :ssb, previous),
+          else: Application.delete_env(:highwire, :ssb)
+      end)
+
+      # No sidecar runs in tests, so the engine is disabled: the change is
+      # just the file write, with no stop/start.
+      assert {:ok, 1, _backup} =
+               HighWire.SSB.Sidecar.apply_conn_suppression(["net:127.0.0.1:8020~shs:key"])
+
+      text = File.read!(Path.join([home, ".ssberl", "conn.json"]))
+      assert text =~ ~r/"net:127\.0\.0\.1:8020~shs:key": \{[^}]*"autoconnect": false/s
     end
 
     test "book_peers reads the address book off disk", %{home: _home} do

@@ -71,8 +71,18 @@ defmodule HighWire.MixProject do
       {:excon, "~> 4.1"},
       {:mdex, "~> 0.14.2"},
       {:memoize, "~> 1.4"},
-      {:enacl,
-       git: "https://github.com/cmoid/enacl", ref: "3be2ed2e4ee1fdfbd73c04207c0b572fcde49720"},
+      # enacl tracks Moid's moid-v1.1.1 maintenance branch (the same
+      # branch erlbutt's rebar.config pins): backports flow in with
+      # `mix deps.update enacl`. enacl's origin/main is a different
+      # lineage (the upstream 1.2.x line), not a fast-forward from here.
+      {:enacl, git: "https://github.com/cmoid/enacl", branch: "moid-v1.1.1"},
+      # The SSB engine the sidecar spawns. Branch-tracking so updates
+      # arrive with `mix deps.update erlbutt`; mix.lock pins the exact
+      # revision for reproducible builds. compile: false, app: false —
+      # it's a rebar3/OTP tree consumed as a built release (mix
+      # engine.build), not a library mix should compile or start.
+      {:erlbutt,
+       git: "https://github.com/cmoid/erlbutt", branch: "main", compile: false, app: false},
       {:bandit, "~> 1.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
@@ -80,7 +90,8 @@ defmodule HighWire.MixProject do
 
   defp aliases do
     [
-      setup: ["deps.get"],
+      setup: ["deps.get", "engine.build"],
+      "engine.update": ["deps.update erlbutt", "engine.build"],
       precommit: [
         "format --check-formatted",
         "credo --strict",

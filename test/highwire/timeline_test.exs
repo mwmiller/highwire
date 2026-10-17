@@ -1199,7 +1199,9 @@ defmodule HighWire.TimelineTest do
              %{
                "enabled" => true,
                "connections" => [],
-               "dialTry" => [%{"addr" => addr, "attempts" => 3, "lastOk" => 1_000, "lastTry" => 1_500}]
+               "dialTry" => [
+                 %{"addr" => addr, "attempts" => 3, "lastOk" => 1_000, "lastTry" => 1_500}
+               ]
              }},
           "admin.peers.known" => {:ok, [%{"address" => addr}]}
         })
@@ -1215,7 +1217,9 @@ defmodule HighWire.TimelineTest do
              %{
                "enabled" => true,
                "connections" => [],
-               "dialTry" => [%{"addr" => addr, "attempts" => 0, "lastOk" => 9_000, "lastTry" => 9_000}]
+               "dialTry" => [
+                 %{"addr" => addr, "attempts" => 0, "lastOk" => 9_000, "lastTry" => 9_000}
+               ]
              }},
           "admin.peers.known" => {:ok, [%{"address" => addr}]}
         })

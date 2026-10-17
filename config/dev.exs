@@ -71,10 +71,19 @@ config :phoenix_live_view,
 # network too); Development is a switch away in Settings. On a fresh
 # machine Sidecar seeds .ssberl/overrides.cfg from this id so the engine
 # and the local clients always boot on the same network.
+#
+# erlbutt comes from the mix dep (deps/erlbutt, branch-tracking main —
+# see mix.exs) and is built by `mix engine.build`, which `mix setup`
+# runs. ERLBUTT_REL overrides the path, e.g. to point at a checkout
+# you're hacking on the engine itself.
 config :highwire, :ssb,
   enabled: true,
   port: 8899,
-  erlbutt_rel: System.get_env("ERLBUTT_REL", "/Users/matt/git/erlbutt/_build/default/rel/ssb"),
+  erlbutt_rel:
+    System.get_env(
+      "ERLBUTT_REL",
+      Path.expand("../deps/erlbutt/_build/default/rel/ssb", __DIR__)
+    ),
   net_id: "1KHLiKZvAvjbY1ziZEHMXawbCEIM6qwjCDm3VYRan/s=",
   max_feeds: 400,
   messages_per_feed: 20
