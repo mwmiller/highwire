@@ -809,18 +809,13 @@ defmodule HighWire.Timeline do
       |> Enum.filter(fn {k, v} ->
         is_binary(k) and is_map(v) and String.starts_with?(k, "net:")
       end)
-      |> Enum.reduce([], fn {addr, v}, acc ->
-        if MapSet.member?(present, addr) do
-          acc
-        else
-          p = build_cache_peer(addr, v)
-          if has_cache_fields?(p), do: [p | acc], else: acc
-        end
-      end)
+      |> Enum.reduce([], fn {addr, v}, acc -> merge_cached_entry(acc, present, addr, v) end)
       |> Enum.reverse()
 
+    merged = known_list ++ cached
+
     report
-    |> Map.put("knownPeers", known_list ++ cached)
+    |> Map.put("knownPeers", sort_known_peers(merged, report["connections"] || []))
     |> Map.put("peer_meta", peer_meta)
   end
 
@@ -829,6 +824,19 @@ defmodule HighWire.Timeline do
   end
 
   defp merge_cache_into_report(report, _peer_meta), do: report
+
+  # A cache entry joins the list only when the engine's own book does
+  # not already carry that address, and only when it has something to
+  # say (a source or a recency stamp).
+  defp merge_cached_entry(acc, present, addr, v) do
+    p = build_cache_peer(addr, v)
+
+    if MapSet.member?(present, addr) or not has_cache_fields?(p) do
+      acc
+    else
+      [p | acc]
+    end
+  end
 
   # stats.whoToFollow — active feeds we do not follow, ranked by
   # activity with follower counts. Each row is a plain string-keyed map
@@ -2744,6 +2752,51 @@ defmodule HighWire.Timeline do
   defp has_cache_fields?(p) do
     p["source"] || p["last_seen_at"] || p["last_activity_at"] || p["last_connected_at"]
   end
+
+  # Connected first, then most recent state change (or cached recency),
+  # then address alphabetically. "Connected" is membership in the
+  # report's live connections list — the address book itself only
+  # carries timestamps (`stateChange` is epoch ms, not a state name).
+  defp sort_known_peers(peers, connections) when is_list(peers) do
+    live = MapSet.new(connections)
+
+    Enum.sort_by(peers, fn peer ->
+      {if(MapSet.member?(live, peer_id(peer)), do: 0, else: 1), -peer_recency(peer),
+       String.downcase(to_string(peer["address"] || ""))}
+    end)
+  end
+
+  defp sort_known_peers(peers, _connections), do: peers
+
+  defp peer_id(%{"key" => id}) when is_binary(id), do: id
+  defp peer_id(%{"address" => "net:" <> _ = addr}), do: shs_id(addr)
+  defp peer_id(_peer), do: nil
+
+  defp shs_id(addr) do
+    case String.split(addr, "~shs:", parts: 2) do
+      [_, key] when byte_size(key) > 0 -> "@" <> key <> ".ed25519"
+      _ -> nil
+    end
+  end
+
+  defp peer_recency(peer) do
+    case ts(peer) do
+      n when is_integer(n) and n > 0 -> n
+      _ -> 0
+    end
+  end
+
+  defp ts(peer) do
+    ts_field(peer["stateChange"]) || ts_field(peer["stateChangeAt"]) ||
+      ts_field(peer["state_change_at"]) || ts_field(peer["stateChangeTs"]) ||
+      ts_field(peer["last_connected_at"]) || ts_field(peer["last_seen_at"]) ||
+      ts_field(peer["last_activity_at"]) || ts_field(peer["birth"])
+  end
+
+  defp ts_field(nil), do: nil
+  defp ts_field(b) when is_integer(b) and b > 0, do: b
+  defp ts_field(f) when is_float(f) and f > 0, do: trunc(f)
+  defp ts_field(_), do: nil
 
   defp maybe_persist_peer_meta(state) do
     case state do

@@ -1050,6 +1050,35 @@ defmodule HighWire.TimelineTest do
       refute Map.has_key?(report, "partial")
     end
 
+    test "the address book sorts connected first, then recency, then address" do
+      known = [
+        %{"address" => "net:new.example:8008~shs:zeta", "stateChange" => 300},
+        %{"address" => "net:live.example:8008~shs:alpha", "stateChange" => 100},
+        %{"address" => "net:quiet.example:8008~shs:mid"},
+        %{"address" => "net:old.example:8008~shs:beta", "stateChange" => 200}
+      ]
+
+      client =
+        NetworkClient.start(%{
+          "gossip.peers" => {:ok, %{"connections" => ["@alpha.ed25519"]}},
+          "admin.peers.known" => {:ok, known}
+        })
+
+      assert report = Timeline.fetch_network(client)
+
+      # A live session outranks any timestamp: the book itself only
+      # carries `stateChange` (epoch ms), so liveness is the report's
+      # own connections list, matched against the id behind the
+      # address. Under that, most recent state change first — and the
+      # alphabet breaks the tie so the order is stable.
+      assert Enum.map(report["knownPeers"], & &1["address"]) == [
+               "net:live.example:8008~shs:alpha",
+               "net:new.example:8008~shs:zeta",
+               "net:old.example:8008~shs:beta",
+               "net:quiet.example:8008~shs:mid"
+             ]
+    end
+
     test "no gossip.peers: the report assembles from the admin namespace" do
       client =
         NetworkClient.start(%{
