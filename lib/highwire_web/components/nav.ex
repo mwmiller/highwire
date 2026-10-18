@@ -73,7 +73,7 @@ defmodule HighWireWeb.Components.Nav do
           >
             <Avatar.avatar
               id={@identity["id"]}
-              size={20}
+              size={28}
               image={identity_image(@identity)}
               rev={Profile.rev()}
             />
