@@ -355,6 +355,43 @@ defmodule HighWireWeb.NetworkLiveTest do
       assert MapSet.size(sky.(peers)) == 5
     end
 
+    test "two keys hashing to nearly the same spot still draw as two dots" do
+      # Two ids whose hash buckets sit within a few slices of each
+      # other — the near-tie the spot-claiming pass exists to
+      # separate. Found at run time, so the test rides whatever
+      # phash2 does rather than pinning a particular pair.
+      near =
+        for i <- 1..300 do
+          {:erlang.phash2("@near#{i}.ed25519", 10_000), "@near#{i}.ed25519"}
+        end
+
+      [{_b1, one}, {_b2, two}] =
+        near
+        |> Enum.sort()
+        |> Enum.chunk_every(2, 1, :discard)
+        |> Enum.find(fn [{b1, _}, {b2, _}] -> b2 - b1 <= 100 end)
+
+      html =
+        render_with_report(%{
+          "enabled" => true,
+          "connections" => [one, two],
+          "dialTry" => [],
+          "knownPeers" => []
+        })
+
+      assert html =~ "connected · 2"
+
+      [_, block] = Regex.run(~r/(<svg[^>]*viewBox="0 0 640 350"[^>]*>.*?<\/svg>)/s, html)
+
+      # Unclaimed, these two land a pixel or two apart — five peers
+      # reading as four dots. Now each keeps its own spot.
+      assert [{x1, y1}, {x2, y2}] =
+               Regex.scan(~r/cx="([\d.]+)" cy="([\d.]+)" r="5"/, block)
+               |> Enum.map(fn [_, x, y] -> {String.to_float(x), String.to_float(y)} end)
+
+      assert :math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)) >= 10.0
+    end
+
     test "the constellation tethers autoconnect peers and leaves retries on the ring" do
       html =
         render_with_report(%{

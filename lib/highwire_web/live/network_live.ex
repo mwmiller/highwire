@@ -68,6 +68,14 @@ defmodule HighWireWeb.NetworkLive do
   # peer the cache just heard of, outward for one it has gone quiet on.
   @sky_spread 0.1
 
+  # Two keys hashing within a few buckets of the same ring would draw
+  # on top of each other — a merged pair reads as a missing peer. A
+  # node landing this close to an already-placed one rotates around
+  # the ring in @sky_kick_step slices until it clears.
+  @sky_min_sep 10
+  @sky_kick_step 2 * :math.pi() / 20
+  @sky_kick_steps 4
+
   # Peer metadata older than this reads as fully cold.
   @sky_recency_span :timer.hours(24)
 
@@ -1347,22 +1355,61 @@ defmodule HighWireWeb.NetworkLive do
   # feed id, so a peer keeps its angle as it climbs the ladder inward.
   # Each node also slides along its radius by recency: a fresh one sits
   # inside the guide ring, a cold or unknown one drifts past it.
+  #
+  # Hash buckets are coarse enough that two keys on a small ring can
+  # land on top of each other — five connected peers showing as four
+  # dots. So nodes claim their spot in list order: one that would draw
+  # within @sky_min_sep of an already-placed neighbour rotates around
+  # the ring until it clears. A node with no near-tie keeps its exact
+  # hash position, so the common sky still holds still.
   defp sky_nodes(list, ring, key_fun, recency_fun)
        when is_list(list) and is_function(key_fun, 1) and is_function(recency_fun, 1) do
     {rx, ry} = Keyword.fetch!(@sky_rings, ring)
 
-    Enum.map(list, fn item ->
+    list
+    |> Enum.map(fn item ->
       key = key_fun.(item) || ""
       angle = 2 * :math.pi() * :erlang.phash2(key, 10_000) / 10_000
       recency = recency_fun.(item)
       spread = 1.0 + @sky_spread * (0.5 - recency) * 2
-
-      {item, recency, @sky_cx + rx * spread * :math.cos(angle),
-       @sky_cy + ry * spread * :math.sin(angle)}
+      {item, recency, angle, spread}
     end)
+    |> sky_claim(rx, ry, [])
+    |> Enum.map(fn {item, recency, _angle, x, y} -> {item, recency, x, y} end)
   end
 
   defp sky_nodes(_list, _ring, _key_fun, _recency_fun), do: []
+
+  # Each placed node keeps its spot, so the next one tests itself
+  # against every neighbour already down. Steps try the hash angle
+  # first, then ±1, ±2… slices of @sky_kick_step; when even the
+  # outermost slice is occupied the node keeps its hash and the
+  # overlap stands — better a crowded corner than a lost node.
+  defp sky_claim([], _rx, _ry, placed), do: Enum.reverse(placed)
+
+  defp sky_claim([{item, recency, angle, spread} | rest], rx, ry, placed) do
+    step =
+      0..@sky_kick_steps
+      |> Enum.flat_map(&[&1, -&1])
+      |> Enum.find(0, fn step ->
+        {x, y} = sky_spot(rx, ry, angle + step * @sky_kick_step, spread)
+        sky_clear?(x, y, placed)
+      end)
+
+    angle = angle + step * @sky_kick_step
+    {x, y} = sky_spot(rx, ry, angle, spread)
+    sky_claim(rest, rx, ry, [{item, recency, angle, x, y} | placed])
+  end
+
+  defp sky_spot(rx, ry, angle, spread),
+    do: {@sky_cx + rx * spread * :math.cos(angle), @sky_cy + ry * spread * :math.sin(angle)}
+
+  # Far enough apart that two dots read as two dots.
+  defp sky_clear?(x, y, placed) do
+    Enum.all?(placed, fn {_item, _recency, _angle, px, py} ->
+      :math.sqrt((px - x) * (px - x) + (py - y) * (py - y)) >= @sky_min_sep
+    end)
+  end
 
   # 1.0 when something was noted a moment ago, sliding to 0.0 a day
   # later — and straight to 0.0 when there is no clock to read.
