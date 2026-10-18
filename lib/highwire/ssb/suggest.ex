@@ -14,7 +14,9 @@ defmodule HighWire.SSB.Suggest do
   the sidebar renders: the id keys the avatar and profile link,
   followers is how many distinct feeds in the store follow it. Rows
   without a usable id are dropped so the sidebar never renders a dead
-  link.
+  link. The store's `about` set narrows candidates further: a feed
+  nothing in the store speaks for would render as a bare short id and
+  an identicon, so it is not offered at all.
   """
 
   # A sidebar is a nudge, not a directory — a few rows below Contacts
@@ -34,15 +36,17 @@ defmodule HighWire.SSB.Suggest do
 
   Candidates are feeds we do not follow, endorsed by at least one feed
   we do follow (friend-of-friend); self and already-followed feeds never
-  appear. Endorsements only count from feeds we follow. Sorted by
-  endorsement desc, then total followers desc, then id, and the top of
-  that ordering is shuffled and drawn from — pass `shuffle: false` for
-  the raw ranking.
+  appear. Endorsements only count from feeds we follow, and — when
+  `about_ids` is a set — the store must hold an `about` message for the
+  candidate (nil means the store's abouts have not been read yet and
+  leaves the list whole). Sorted by endorsement desc, then total
+  followers desc, then id, and the top of that ordering is shuffled and
+  drawn from — pass `shuffle: false` for the raw ranking.
   """
-  @spec rank([map()], [String.t()], String.t() | nil, keyword()) :: [map()]
-  def rank(contact_msgs, follows, self_id, opts \\ []) do
+  @spec rank([map()], [String.t()], String.t() | nil, MapSet.t() | nil, keyword()) :: [map()]
+  def rank(contact_msgs, follows, self_id, about_ids, opts \\ []) do
     contact_msgs
-    |> candidates(follows, self_id)
+    |> candidates(follows, self_id, about_ids)
     |> sample(opts)
   end
 
@@ -54,13 +58,14 @@ defmodule HighWire.SSB.Suggest do
   what lets the sidebar serve one set now and hold the second in
   reserve for the next refresh at no extra cost.
   """
-  @spec sets([map()], [String.t()], String.t() | nil, keyword()) :: {[map()], [map()]}
-  def sets(contact_msgs, follows, self_id, opts \\ []) do
-    pool = candidates(contact_msgs, follows, self_id)
+  @spec sets([map()], [String.t()], String.t() | nil, MapSet.t() | nil, keyword()) ::
+          {[map()], [map()]}
+  def sets(contact_msgs, follows, self_id, about_ids, opts \\ []) do
+    pool = candidates(contact_msgs, follows, self_id, about_ids)
     {sample(pool, opts), sample(pool, opts)}
   end
 
-  defp candidates(contact_msgs, follows, self_id) do
+  defp candidates(contact_msgs, follows, self_id, about_ids) do
     endorsers_of_followed =
       follows
       |> Enum.filter(&is_binary/1)
@@ -80,9 +85,19 @@ defmodule HighWire.SSB.Suggest do
       }
     end)
     |> Enum.filter(fn s -> s["endorsement"] > 0 end)
+    |> narrow(about_ids)
     |> Enum.sort_by(fn s -> {-s["endorsement"], -s["followers"], s["id"]} end)
     |> Enum.take(@pool)
   end
+
+  # Only feeds the store holds an about message for. nil — the about
+  # pass has not read the store yet — keeps everything: the first
+  # contact pass can land first, and the completed about pass re-ranks
+  # the list tighter.
+  defp narrow(candidates, nil), do: candidates
+
+  defp narrow(candidates, about_ids),
+    do: Enum.filter(candidates, &MapSet.member?(about_ids, &1["id"]))
 
   defp sample(pool, opts) do
     pool

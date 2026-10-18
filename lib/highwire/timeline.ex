@@ -471,6 +471,10 @@ defmodule HighWire.Timeline do
       contact_ref: nil,
       contact_buf: [],
       contact_msgs: [],
+      about_ref: nil,
+      # nil until the first about pass completes: the feeds the store
+      # holds an `about` message for — the rail suggests nothing else.
+      about_ids: nil,
       drain_client: nil,
       last_drain_at: nil,
       follows: [],
@@ -1418,7 +1422,7 @@ defmodule HighWire.Timeline do
     # list). Hand it off-process only once the contact graph is loaded —
     # before that there is nothing to rank against.
     if state.contact_msgs != [] do
-      Suggester.cast_inputs(state.contact_msgs, state.follows, state.self_id)
+      Suggester.cast_inputs(state.contact_msgs, state.follows, state.self_id, state.about_ids)
     end
 
     # The rail's contacts are drawn by HighWire.Contacts, which re-draws
@@ -1498,8 +1502,37 @@ defmodule HighWire.Timeline do
 
   def handle_info({Client, ref, {:error, reason}}, %{contact_ref: ref} = state) do
     Logger.debug("timeline: contact drain failed: #{inspect(reason)}")
-    state = stop_drain_client(%{state | contact_ref: nil, contact_buf: []})
+    # The connection is torn down with the contact pass — the about
+    # pass rode the same one, so its ref dangles too.
+    state = stop_drain_client(%{state | contact_ref: nil, contact_buf: [], about_ref: nil})
     {:noreply, state}
+  end
+
+  # messagesByType("about"): which feeds the store can speak for — the
+  # Suggester's rail filter. Targets fold in on arrival; a store-wide
+  # about pass is a lot of messages and only the `about` ids are worth
+  # keeping.
+  def handle_info({Client, ref, {:item, msg}}, %{about_ref: ref} = state) do
+    case about_id(msg) do
+      nil ->
+        {:noreply, state}
+
+      id ->
+        {:noreply, %{state | about_ids: MapSet.put(state.about_ids || MapSet.new(), id)}}
+    end
+  end
+
+  def handle_info({Client, ref, :done}, %{about_ref: ref} = state) do
+    # :done is the completeness mark — a pass with zero items means the
+    # store holds no abouts at all, which the nil "not read yet" state
+    # cannot express. Whatever arrived on a failed pass stays: every id
+    # seen is a fact, only the list's completeness is lost.
+    about_drained(%{state | about_ref: nil, about_ids: state.about_ids || MapSet.new()})
+  end
+
+  def handle_info({Client, ref, {:error, reason}}, %{about_ref: ref} = state) do
+    Logger.debug("timeline: about drain failed: #{inspect(reason)}")
+    {:noreply, %{state | about_ref: nil}}
   end
 
   def handle_info(:rebroadcast, state) do
@@ -1515,7 +1548,7 @@ defmodule HighWire.Timeline do
   # gossip.peers refresh for the /network dashboard — a cheap local
   # sync RPC — and a read-back of the "Whom to follow" rows, which
   # HighWire.Suggester ranks off-process from the contact drain
-  # (Suggest.rank/3; the engine has no whoToFollow RPC). The dashboard
+  # (Suggest.rank/4; the engine has no whoToFollow RPC). The dashboard
   # stays hidden on engines predating its RPC (the call answers `true`,
   # which the branch does not accept).
   def handle_info({:network, gen}, %{gen: current} = state) when gen == current do
@@ -1625,9 +1658,10 @@ defmodule HighWire.Timeline do
   end
 
   # the dedicated drain connection died mid-pass: drop the dangling
-  # ref so the next reload can re-dial instead of blocking the drain.
+  # refs (both passes ride it) so the next reload can re-dial instead
+  # of blocking either drain.
   def handle_info({:EXIT, pid, _reason}, %{drain_client: pid} = state) do
-    {:noreply, %{state | drain_client: nil, contact_ref: nil, contact_buf: []}}
+    {:noreply, %{state | drain_client: nil, contact_ref: nil, contact_buf: [], about_ref: nil}}
   end
 
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
@@ -1829,8 +1863,18 @@ defmodule HighWire.Timeline do
   # connection, and a completed pass is not repeated until
   # @drain_refresh_ms later.
   defp maybe_open_drain(state) do
-    if state.contact_ref == nil and drain_due?(state) do
-      open_drain(state)
+    state =
+      if state.contact_ref == nil and drain_due?(state) do
+        open_drain(state)
+      else
+        state
+      end
+
+    # The about pass rides the same cycle but keeps its own slot: a
+    # stalled or failed pass must never hold up the contact drain, and
+    # the contact drain must never hold one up either.
+    if state.about_ref == nil and drain_due?(state) do
+      open_about_drain(state)
     else
       state
     end
@@ -1844,6 +1888,23 @@ defmodule HighWire.Timeline do
     with true <- is_pid(client),
          {:ok, ref} <- Client.stream(client, ["messagesByType"], [%{"type" => "contact"}], self()) do
       %{state | contact_ref: ref, contact_buf: []}
+    else
+      _ -> state
+    end
+  catch
+    _, _ -> state
+  end
+
+  # messagesByType("about"): the rail's feed filter. Same dedicated
+  # connection and cadence as the contact pass — the per-feed windows
+  # only carry each author's last N messages, so they cover the store's
+  # abouts by accident at best.
+  defp open_about_drain(state) do
+    {client, state} = drain_endpoint(state)
+
+    with true <- is_pid(client),
+         {:ok, ref} <- Client.stream(client, ["messagesByType"], [%{"type" => "about"}], self()) do
+      %{state | about_ref: ref}
     else
       _ -> state
     end
@@ -1986,13 +2047,36 @@ defmodule HighWire.Timeline do
     # A refilled store-wide contact graph is a new ranking input. Hand it
     # to the Suggester off-process; Timeline never ranks inline.
     if state.contact_msgs != [] do
-      Suggester.cast_inputs(state.contact_msgs, state.follows, state.self_id)
+      Suggester.cast_inputs(state.contact_msgs, state.follows, state.self_id, state.about_ids)
     end
 
     if fresh != [] and state.status == :ok and map_size(state.pending) == 0 do
       {:noreply, finalize(state)}
     else
       {:noreply, state}
+    end
+  end
+
+  # The about pass completed — a tighter rail filter is a new ranking
+  # input. Entries only grow, like Profile's read model and the contact
+  # list: one pass answers until the next cycle's, and a feed whose
+  # about arrives later joins the set on the pass that sees it.
+  defp about_drained(state) do
+    if state.contact_msgs != [] do
+      Suggester.cast_inputs(state.contact_msgs, state.follows, state.self_id, state.about_ids)
+    end
+
+    {:noreply, state}
+  end
+
+  # The feed an about message speaks for: the `about` field when it
+  # names a feed. The target is what counts — the store can name a feed
+  # when something says about *it*; a feed whose abouts only speak for
+  # others still renders as a bare id.
+  defp about_id(msg) do
+    case content(msg) do
+      %{"type" => "about", "about" => <<"@", _::binary>> = about} -> about
+      _ -> nil
     end
   end
 

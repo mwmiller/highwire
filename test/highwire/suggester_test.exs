@@ -63,7 +63,7 @@ defmodule HighWire.SuggesterTest do
 
     # @xxx (whom we follow) endorses @a; @b has no endorsement.
     contacts = [follow(@xxx, @a), follow(@xxx, @b, false)]
-    Suggester.cast_inputs(contacts, [@me, @xxx], @me, :test_suggester)
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, :test_suggester)
 
     assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) != [] end)
 
@@ -79,7 +79,7 @@ defmodule HighWire.SuggesterTest do
     cache = tmp_cache_path()
     start(cache)
 
-    Suggester.cast_inputs([follow(@xxx, @a)], [@me, @xxx], @me, :test_suggester)
+    Suggester.cast_inputs([follow(@xxx, @a)], [@me, @xxx], @me, nil, :test_suggester)
 
     assert wait_until(fn ->
              Suggester.get_suggestions(:test_suggester) == [
@@ -90,16 +90,34 @@ defmodule HighWire.SuggesterTest do
     # Following @b removes @b's endorsement weight only if we no longer
     # follow @xxx; here we instead start following @a itself, so @a is no
     # longer a candidate.
-    Suggester.cast_inputs([follow(@xxx, @a)], [@me, @xxx, @a], @me, :test_suggester)
+    Suggester.cast_inputs([follow(@xxx, @a)], [@me, @xxx, @a], @me, nil, :test_suggester)
     assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) == [] end)
 
     # A brand-new graph surfaces a fresh candidate.
-    Suggester.cast_inputs([follow(@a, @b)], [@me, @a], @me, :test_suggester)
+    Suggester.cast_inputs([follow(@a, @b)], [@me, @a], @me, nil, :test_suggester)
 
     assert wait_until(fn ->
              Suggester.get_suggestions(:test_suggester) == [
                %{"id" => @b, "followers" => 1}
              ]
+           end)
+  end
+
+  test "the store's about set narrows the rail, and a new set re-ranks" do
+    cache = tmp_cache_path()
+    start(cache)
+
+    contacts = [follow(@xxx, @a), follow(@xxx, @b)]
+
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, :test_suggester)
+    assert wait_until(fn -> length(Suggester.get_suggestions(:test_suggester)) == 2 end)
+
+    # The about pass lands: only @b survives the filter — and the new
+    # snapshot re-ranks even though the graph itself did not move.
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, MapSet.new([@b]), :test_suggester)
+
+    assert wait_until(fn ->
+             Suggester.get_suggestions(:test_suggester) == [%{"id" => @b, "followers" => 1}]
            end)
   end
 
@@ -111,7 +129,7 @@ defmodule HighWire.SuggesterTest do
     # nine, shuffled, so consecutive sets differ.
     candidates = for i <- 1..9, do: "@f#{i}=.ed25519"
     contacts = Enum.map(candidates, &follow(@xxx, &1))
-    Suggester.cast_inputs(contacts, [@me, @xxx], @me, :test_suggester)
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, :test_suggester)
 
     assert wait_until(fn -> length(Suggester.get_suggestions(:test_suggester)) == 5 end)
     first = Suggester.get_suggestions(:test_suggester)

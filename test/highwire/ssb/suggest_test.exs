@@ -31,7 +31,7 @@ defmodule HighWire.SSB.SuggestTest do
       follow(@stranger, @c)
     ]
 
-    assert Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me,
+    assert Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me, nil,
              shuffle: false
            ) == [
              %{"id" => @a, "followers" => 2},
@@ -46,7 +46,7 @@ defmodule HighWire.SSB.SuggestTest do
       follow(@a, @me)
     ]
 
-    assert Suggest.rank(contact_msgs, [@me, @a, @b], @me) == []
+    assert Suggest.rank(contact_msgs, [@me, @a, @b], @me, nil) == []
   end
 
   test "a follow/unfollow/follow churn is one endorser" do
@@ -57,13 +57,13 @@ defmodule HighWire.SSB.SuggestTest do
     ]
 
     assert [%{"id" => @a, "followers" => 1}] =
-             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me)
+             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me, nil)
   end
 
   test "an unfollow (following: false) is not an endorsement" do
     contact_msgs = [follow("@xxx=.ed25519", @a, false)]
 
-    assert Suggest.rank(contact_msgs, [@me], @me) == []
+    assert Suggest.rank(contact_msgs, [@me], @me, nil) == []
   end
 
   test "endorsement outranks raw follower count" do
@@ -82,7 +82,7 @@ defmodule HighWire.SSB.SuggestTest do
     follows = [@me, "@xxx=.ed25519", "@yyy=.ed25519", "@zzz=.ed25519"]
 
     assert [%{"id" => @a}, %{"id" => @b}] =
-             Suggest.rank(contact_msgs, follows, @me, shuffle: false)
+             Suggest.rank(contact_msgs, follows, @me, nil, shuffle: false)
              |> Enum.map(&Map.take(&1, ["id"]))
   end
 
@@ -96,7 +96,7 @@ defmodule HighWire.SSB.SuggestTest do
 
     # Equal endorsement; @c leads on followers, the rest hold id order.
     assert [%{"id" => @c}, %{"id" => @a}, %{"id" => @b}] =
-             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me,
+             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me, nil,
                shuffle: false
              )
              |> Enum.map(&Map.take(&1, ["id"]))
@@ -110,7 +110,7 @@ defmodule HighWire.SSB.SuggestTest do
 
     # The undecryptable row is ignored; the real follow still endorses @a.
     assert [%{"id" => @a, "followers" => 1}] =
-             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me)
+             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me, nil)
   end
 
   test "contact rows without a usable author or contact are dropped" do
@@ -123,7 +123,7 @@ defmodule HighWire.SSB.SuggestTest do
     # Malformed input degrades, never crashes the rank: @a's one valid
     # endorsement stands.
     assert [%{"id" => @a, "followers" => 1}] =
-             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me)
+             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me, nil)
   end
 
   test "the list is capped so the rail stays a nudge" do
@@ -132,17 +132,17 @@ defmodule HighWire.SSB.SuggestTest do
         follow("@xxx=.ed25519", "@f#{i}=.ed25519")
       end
 
-    ranked = Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me)
+    ranked = Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me, nil)
     assert length(ranked) == 5
   end
 
-  test "sets/4 draws two sets off a single graph pass" do
+  test "sets/5 draws two sets off a single graph pass" do
     contact_msgs =
       for i <- 1..9 do
         follow("@xxx=.ed25519", "@f#{i}=.ed25519")
       end
 
-    {rows1, rows2} = Suggest.sets(contact_msgs, [@me, "@xxx=.ed25519"], @me)
+    {rows1, rows2} = Suggest.sets(contact_msgs, [@me, "@xxx=.ed25519"], @me, nil)
 
     # Both sets are renderable rail rows drawn from the candidates.
     for rows <- [rows1, rows2] do
@@ -152,14 +152,42 @@ defmodule HighWire.SSB.SuggestTest do
     end
 
     # The draw is the only difference: unshuffled, both sets are the
-    # same deterministic ranking rank/4 returns.
-    {ranked1, ranked2} = Suggest.sets(contact_msgs, [@me, "@xxx=.ed25519"], @me, shuffle: false)
+    # same deterministic ranking rank/5 returns.
+    {ranked1, ranked2} =
+      Suggest.sets(contact_msgs, [@me, "@xxx=.ed25519"], @me, nil, shuffle: false)
 
     assert ranked1 == ranked2
-    assert ranked1 == Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me, shuffle: false)
+    assert ranked1 == Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me, nil, shuffle: false)
   end
 
   test "a store with nothing to suggest ranks nothing" do
-    assert Suggest.rank([], [@me], @me) == []
+    assert Suggest.rank([], [@me], @me, nil) == []
+  end
+
+  test "candidates the store holds no about for are not suggested" do
+    contact_msgs = [
+      follow("@xxx=.ed25519", @a),
+      follow("@xxx=.ed25519", @b)
+    ]
+
+    follows = [@me, "@xxx=.ed25519"]
+
+    # The store knows an about for @b only — @a never gets named, so it
+    # never gets a row.
+    assert [%{"id" => @b, "followers" => 1}] =
+             Suggest.rank(contact_msgs, follows, @me, MapSet.new([@b]))
+
+    # nil — the about pass has not read the store yet — keeps the list
+    # whole; the first contact ranking never waits on it.
+    assert [%{"id" => @a}, %{"id" => @b}] =
+             Suggest.rank(contact_msgs, follows, @me, nil, shuffle: false)
+             |> Enum.map(&Map.take(&1, ["id"]))
+
+    # Sets draw from the same narrowed pool.
+    {rows1, rows2} = Suggest.sets(contact_msgs, follows, @me, MapSet.new([@a]))
+
+    for rows <- [rows1, rows2] do
+      assert Enum.map(rows, & &1["id"]) == [@a]
+    end
   end
 end

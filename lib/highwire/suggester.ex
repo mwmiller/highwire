@@ -4,8 +4,12 @@ defmodule HighWire.Suggester do
   lifecycle — kept entirely off the Timeline process.
 
   Timeline hands over input snapshots (`contact_msgs`, `follows`,
-  `self_id`) when the store-wide contact graph refills or the follow
-  list changes. Ranking runs in a supervised background task (a
+  `self_id`, `about_ids`) when the store-wide contact graph refills, the
+  follow list changes, or the about pass completes. `about_ids` is the
+  set of feeds the store holds an `about` message for (nil until the
+  first pass completes) — the ranking drops candidates outside it, since
+  a feed the store cannot speak for would render as a bare short id.
+  Ranking runs in a supervised background task (a
   full pass over the contact graph is far too heavy to run on the feed's
   process), and that task writes the persisted cache before reporting
   back — so disk I/O never sits on any hot path either.
@@ -55,13 +59,14 @@ defmodule HighWire.Suggester do
   end
 
   @doc """
-  Hand over an input snapshot (`contact_msgs`, `follows`, `self_id`).
-  A ranking runs only when the snapshot differs from the one
-  already ranked (or in flight).
+  Hand over an input snapshot (`contact_msgs`, `follows`, `self_id`,
+  `about_ids`). A ranking runs only when the snapshot differs from the
+  one already ranked (or in flight).
   """
-  @spec cast_inputs([map()], [String.t()], String.t() | nil, GenServer.server()) :: :ok
-  def cast_inputs(contact_msgs, follows, self_id, server \\ __MODULE__) do
-    inputs = {List.wrap(contact_msgs), List.wrap(follows), self_id}
+  @spec cast_inputs([map()], [String.t()], String.t() | nil, MapSet.t() | nil, GenServer.server()) ::
+          :ok
+  def cast_inputs(contact_msgs, follows, self_id, about_ids, server \\ __MODULE__) do
+    inputs = {List.wrap(contact_msgs), List.wrap(follows), self_id, about_ids}
 
     case GenServer.whereis(server) do
       nil -> :ok
@@ -169,17 +174,20 @@ defmodule HighWire.Suggester do
   defp refill(%{task_ref: nil, ranked: inputs} = state), do: rank(state, inputs, serve: false)
   defp refill(state), do: state
 
-  defp rank_now(%{task_ref: nil} = state, {_contact_msgs, _follows, _self_id} = inputs) do
+  defp rank_now(
+         %{task_ref: nil} = state,
+         {_contact_msgs, _follows, _self_id, _about_ids} = inputs
+       ) do
     rank(state, inputs, serve: true)
   end
 
   defp rank_now(state, _inputs), do: state
 
-  defp rank(%{task_ref: nil} = state, {contact_msgs, follows, self_id} = inputs, opts)
+  defp rank(%{task_ref: nil} = state, {contact_msgs, follows, self_id, about_ids} = inputs, opts)
        when is_list(contact_msgs) and is_list(follows) do
     task =
       Task.Supervisor.async_nolink(HighWire.TaskSupervisor, fn ->
-        Suggest.sets(contact_msgs, follows, self_id, shuffle: true)
+        Suggest.sets(contact_msgs, follows, self_id, about_ids, shuffle: true)
       end)
 
     %{state | task_ref: task.ref, task_serve: Keyword.fetch!(opts, :serve), ranked: inputs}

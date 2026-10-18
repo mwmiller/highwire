@@ -341,6 +341,8 @@ defmodule HighWire.TimelineTest do
           contact_ref: nil,
           contact_buf: [],
           contact_msgs: [],
+          about_ref: nil,
+          about_ids: nil,
           drain_client: nil,
           last_drain_at: nil,
           follows: [],
@@ -419,6 +421,8 @@ defmodule HighWire.TimelineTest do
           contact_ref: :contact_ref,
           contact_buf: [],
           contact_msgs: [],
+          about_ref: nil,
+          about_ids: nil,
           drain_client: nil,
           last_drain_at: nil,
           contacts_ref: nil,
@@ -519,6 +523,8 @@ defmodule HighWire.TimelineTest do
 
       {:noreply, st} = Timeline.handle_info({:reload, 0}, st)
       assert is_reference(st.contact_ref)
+      # The about pass opens on the same reload, in its own slot.
+      assert is_reference(st.about_ref)
       assert map_size(st.pending) >= 1
       assert st.acc == []
     end
@@ -535,7 +541,11 @@ defmodule HighWire.TimelineTest do
 
       assert is_reference(st.contact_ref)
       assert st.drain_client == dedicated
-      assert FakeClient.streams(dedicated) == [{["messagesByType"], [%{"type" => "contact"}]}]
+
+      assert FakeClient.streams(dedicated) == [
+               {["messagesByType"], [%{"type" => "contact"}]},
+               {["messagesByType"], [%{"type" => "about"}]}
+             ]
 
       # the shared connection carries only the per-feed windows
       assert FakeClient.streams(main) != []
@@ -555,6 +565,7 @@ defmodule HighWire.TimelineTest do
 
       {:noreply, st} = Timeline.handle_info({:reload, 0}, st)
       assert st.contact_ref == nil
+      assert st.about_ref == nil
     end
 
     test "the drain re-opens once the refresh window has passed" do
@@ -585,13 +596,61 @@ defmodule HighWire.TimelineTest do
       assert st.drain_client == nil
     end
 
-    test "drain connection death clears the dangling ref" do
-      st = drain_state(contact_ref: :contact_ref, contact_buf: ["partial"], drain_client: self())
+    test "drain connection death clears the dangling refs" do
+      st =
+        drain_state(
+          contact_ref: :contact_ref,
+          contact_buf: ["partial"],
+          about_ref: :about_ref,
+          drain_client: self()
+        )
 
       {:noreply, st} = Timeline.handle_info({:EXIT, self(), :closed}, st)
       assert st.drain_client == nil
       assert st.contact_ref == nil
       assert st.contact_buf == []
+      assert st.about_ref == nil
+    end
+
+    test "the about pass folds feed targets and completes into the filter" do
+      st = drain_state(about_ref: :about_ref, status: :ok)
+
+      about =
+        msg("@b=.ed25519", "%a=.sha256", 9_000, %{"type" => "about", "about" => "@b=.ed25519"})
+
+      # Abouts that target a message, or of another type, name no feed.
+      other =
+        msg("@c=.ed25519", "%d=.sha256", 9_000, %{"type" => "about", "about" => "%m=.sha256"})
+
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, about}}, st)
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, other}}, st)
+
+      assert st.about_ids == MapSet.new(["@b=.ed25519"])
+
+      # The contact pass is untouched while the about pass runs.
+      assert st.contact_ref == :contact_ref
+
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, :done}, st)
+
+      assert st.about_ref == nil
+      assert st.about_ids == MapSet.new(["@b=.ed25519"])
+    end
+
+    test "a completed about pass marks an empty store" do
+      # An empty pass must read as "no abouts in the store" — nil means
+      # "not read yet" and would keep the filter off forever.
+      st = drain_state(about_ref: :about_ref, status: :ok)
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, :done}, st)
+      assert st.about_ids == MapSet.new()
+    end
+
+    test "a failed about pass keeps whatever arrived" do
+      st = drain_state(about_ref: :about_ref, about_ids: MapSet.new(["@b=.ed25519"]))
+
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:error, :closed}}, st)
+
+      assert st.about_ref == nil
+      assert st.about_ids == MapSet.new(["@b=.ed25519"])
     end
   end
 
@@ -889,6 +948,8 @@ defmodule HighWire.TimelineTest do
         contact_ref: nil,
         contact_msgs: [],
         contact_buf: [],
+        about_ref: nil,
+        about_ids: nil,
         drain_client: nil,
         last_drain_at: nil,
         messages: %{messages: []}
