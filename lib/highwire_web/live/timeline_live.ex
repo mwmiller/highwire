@@ -802,7 +802,7 @@ defmodule HighWireWeb.TimelineLive do
           <.link
             :for={s <- @suggestions}
             navigate={profile_href(s["id"])}
-            title={"#{s["followers"]} followers · #{s["activity"]} messages"}
+            title={"#{s["followers"]} followers"}
             class="flex items-center gap-2 px-4 py-1 text-xs text-muted hover:bg-raised hover:text-paper"
           >
             <Avatar.avatar
@@ -812,7 +812,6 @@ defmodule HighWireWeb.TimelineLive do
               rev={@blob_rev}
             />
             <span class="min-w-0 truncate">{Ident.display_name(s["id"], @profiles)}</span>
-            <span class="ml-auto shrink-0 text-[10px] text-faint">{s["activity"]}</span>
           </.link>
         </div>
       </Nav.rail>

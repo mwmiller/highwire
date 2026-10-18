@@ -13,13 +13,11 @@ defmodule HighWire.SSB.Suggest do
   engine. (The engine has no `stats.whoToFollow`: the call answers
   "method not found", so ranking lives here against the drain.)
 
-  Each row is a plain string-keyed map — `{id, activity, followers}` —
-  the shape the sidebar renders: the id keys the avatar and profile
-  link, followers is how many distinct feeds in the store follow it,
-  activity is how many of the window's messages the feed wrote (a light
-  "recently around" signal; zero for candidates outside the window).
-  Rows without a usable id are dropped so the sidebar never renders a
-  dead link.
+  Each row is a plain string-keyed map — `{id, followers}` — the shape
+  the sidebar renders: the id keys the avatar and profile link,
+  followers is how many distinct feeds in the store follow it. Rows
+  without a usable id are dropped so the sidebar never renders a dead
+  link.
   """
 
   # A sidebar is a nudge, not a directory — a few rows below Contacts
@@ -37,8 +35,8 @@ defmodule HighWire.SSB.Suggest do
   we follow follow it) desc, then total followers desc, then id, so the
   list only moves when the data does.
   """
-  @spec rank([map()], [map()], [String.t()], String.t() | nil) :: [map()]
-  def rank(window, contact_msgs, follows, self_id) do
+  @spec rank([map()], [String.t()], String.t() | nil) :: [map()]
+  def rank(contact_msgs, follows, self_id) do
     # The set of feeds whose endorsements carry weight: the ones we
     # follow. Self is deliberately left out of it.
     endorsers_of_followed =
@@ -47,7 +45,6 @@ defmodule HighWire.SSB.Suggest do
       |> MapSet.new()
 
     {endorsers, followers} = graph(contact_msgs)
-    activity = activity_counts(window)
 
     # An endorsement only counts when it comes from a feed we follow —
     # a crowd of strangers vouching for a feed carries no weight here —
@@ -62,19 +59,18 @@ defmodule HighWire.SSB.Suggest do
       %{
         "id" => id,
         "endorsement" => endorsement,
-        "followers" => Map.get(followers, id, 0),
-        "activity" => Map.get(activity, id, 0)
+        "followers" => Map.get(followers, id, 0)
       }
     end)
     |> Enum.filter(fn s -> s["endorsement"] > 0 end)
     |> Enum.sort_by(fn s -> {-s["endorsement"], -s["followers"], s["id"]} end)
-    |> Enum.map(&Map.take(&1, ["id", "activity", "followers"]))
+    |> Enum.map(&Map.take(&1, ["id", "followers"]))
     |> Enum.take(@limit)
   end
 
   # One follower per distinct feed that said `following: true` — a
-  # follow/unfollow/follow churn must not count triple, and `false`
-  # (or a missing field) is not a follow at all. `endorsers` maps each
+  # follow/unfollow/follow churn must not count triple, and `false` (or
+  # a missing field) is not a follow at all. `endorsers` maps each
   # contact to the set of feeds following it; `followers` is that set's
   # size — the store-wide follower count.
   defp graph(contact_msgs) do
@@ -95,24 +91,11 @@ defmodule HighWire.SSB.Suggest do
     {g, Map.new(g, fn {id, set} -> {id, MapSet.size(set)} end)}
   end
 
-  # Window activity per author, deduped by key — a light "recently
-  # around" signal for candidates that also appear in the window.
-  defp activity_counts(window) do
-    window
-    |> Enum.uniq_by(& &1["key"])
-    |> Enum.reduce(%{}, fn msg, acc ->
-      case author(msg) do
-        nil -> acc
-        id -> Map.update(acc, id, 1, &(&1 + 1))
-      end
-    end)
-  end
-
   defp author(%{"value" => %{"author" => id}}) when is_binary(id), do: id
   defp author(_msg), do: nil
 
-  # Encrypted private messages keep their content as a string — they
-  # still count for activity (author/1 above), never for follows.
+  # Encrypted private messages keep their content as a string, so a row
+  # of that shape can never read as a follow.
   defp content(%{"value" => %{"content" => c}}) when is_map(c), do: c
   defp content(_msg), do: %{}
 end

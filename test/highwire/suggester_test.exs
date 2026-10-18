@@ -43,15 +43,15 @@ defmodule HighWire.SuggesterTest do
     File.write!(
       cache,
       Jason.encode!([
-        %{"id" => "@saved=.ed25519", "activity" => 2, "followers" => 5},
-        %{"activity" => 1, "followers" => 3}
+        %{"id" => "@saved=.ed25519", "followers" => 5},
+        %{"followers" => 3}
       ])
     )
 
     start(cache)
 
     assert Suggester.get_suggestions(:test_suggester) == [
-             %{"id" => "@saved=.ed25519", "activity" => 2, "followers" => 5}
+             %{"id" => "@saved=.ed25519", "followers" => 5}
            ]
   end
 
@@ -63,12 +63,12 @@ defmodule HighWire.SuggesterTest do
 
     # @xxx (whom we follow) endorses @a; @b has no endorsement.
     contacts = [follow(@xxx, @a), follow(@xxx, @b, false)]
-    Suggester.cast_inputs([], contacts, [@me, @xxx], @me, :test_suggester)
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, :test_suggester)
 
     assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) != [] end)
 
     assert Suggester.get_suggestions(:test_suggester) == [
-             %{"id" => @a, "activity" => 0, "followers" => 1}
+             %{"id" => @a, "followers" => 1}
            ]
 
     assert wait_until(fn -> File.exists?(cache) end)
@@ -79,26 +79,26 @@ defmodule HighWire.SuggesterTest do
     cache = tmp_cache_path()
     start(cache)
 
-    Suggester.cast_inputs([], [follow(@xxx, @a)], [@me, @xxx], @me, :test_suggester)
+    Suggester.cast_inputs([follow(@xxx, @a)], [@me, @xxx], @me, :test_suggester)
 
     assert wait_until(fn ->
              Suggester.get_suggestions(:test_suggester) == [
-               %{"id" => @a, "activity" => 0, "followers" => 1}
+               %{"id" => @a, "followers" => 1}
              ]
            end)
 
     # Following @b removes @b's endorsement weight only if we no longer
     # follow @xxx; here we instead start following @a itself, so @a is no
     # longer a candidate.
-    Suggester.cast_inputs([], [follow(@xxx, @a)], [@me, @xxx, @a], @me, :test_suggester)
+    Suggester.cast_inputs([follow(@xxx, @a)], [@me, @xxx, @a], @me, :test_suggester)
     assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) == [] end)
 
     # A brand-new graph surfaces a fresh candidate.
-    Suggester.cast_inputs([], [follow(@a, @b)], [@me, @a], @me, :test_suggester)
+    Suggester.cast_inputs([follow(@a, @b)], [@me, @a], @me, :test_suggester)
 
     assert wait_until(fn ->
              Suggester.get_suggestions(:test_suggester) == [
-               %{"id" => @b, "activity" => 0, "followers" => 1}
+               %{"id" => @b, "followers" => 1}
              ]
            end)
   end

@@ -49,12 +49,13 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "Whom to follow"
     assert html =~ "No suggestions yet"
 
-    row = %{"id" => "@stranger=.ed25519", "activity" => 3, "followers" => 2}
+    row = %{"id" => "@stranger=.ed25519", "followers" => 2}
     html = notify(view, %{feed_payload([]) | suggestions: [row]})
 
     assert html =~ "Whom to follow"
     refute html =~ "No suggestions yet"
-    assert html =~ "2 followers · 3 messages"
+    # followers ride on hover; the row itself carries no numbers
+    assert html =~ "2 followers"
     # With no profile loaded the name falls back to the shortened id,
     # and the row still links to the full one.
     assert html =~ ~s(href="/profile?id=%40stranger%3D.ed25519")

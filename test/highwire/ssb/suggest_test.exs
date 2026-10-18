@@ -9,7 +9,7 @@ defmodule HighWire.SSB.SuggestTest do
   @c "@ccc=.ed25519"
   @stranger "@stranger=.ed25519"
 
-  defp msg(key, author, opts \\ []) do
+  defp msg(key, author, opts) do
     content = Keyword.get(opts, :content, %{"type" => "post", "text" => "hi"})
 
     %{"key" => key, "value" => %{"author" => author, "content" => content}}
@@ -31,9 +31,9 @@ defmodule HighWire.SSB.SuggestTest do
       follow(@stranger, @c)
     ]
 
-    assert Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me) == [
-             %{"id" => @a, "activity" => 0, "followers" => 2},
-             %{"id" => @b, "activity" => 0, "followers" => 1}
+    assert Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me) == [
+             %{"id" => @a, "followers" => 2},
+             %{"id" => @b, "followers" => 1}
            ]
   end
 
@@ -44,7 +44,7 @@ defmodule HighWire.SSB.SuggestTest do
       follow(@a, @me)
     ]
 
-    assert Suggest.rank([], contact_msgs, [@me, @a, @b], @me) == []
+    assert Suggest.rank(contact_msgs, [@me, @a, @b], @me) == []
   end
 
   test "a follow/unfollow/follow churn is one endorser" do
@@ -54,24 +54,14 @@ defmodule HighWire.SSB.SuggestTest do
       follow("@xxx=.ed25519", @a)
     ]
 
-    assert [%{"id" => @a, "activity" => 0, "followers" => 1}] =
-             Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519"], @me)
+    assert [%{"id" => @a, "followers" => 1}] =
+             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me)
   end
 
   test "an unfollow (following: false) is not an endorsement" do
     contact_msgs = [follow("@xxx=.ed25519", @a, false)]
 
-    assert Suggest.rank([], contact_msgs, [@me], @me) == []
-  end
-
-  test "window activity rides along for candidates that also appear there" do
-    window = [msg("k1", @a), msg("k2", @a), msg("k3", @stranger)]
-    contact_msgs = [follow("@xxx=.ed25519", @a)]
-
-    # @a carries its window activity; the window author we do not follow
-    # and that no followed feed endorses never surfaces.
-    assert [%{"id" => @a, "activity" => 2, "followers" => 1}] =
-             Suggest.rank(window, contact_msgs, [@me, "@xxx=.ed25519"], @me)
+    assert Suggest.rank(contact_msgs, [@me], @me) == []
   end
 
   test "endorsement outranks raw follower count" do
@@ -90,7 +80,7 @@ defmodule HighWire.SSB.SuggestTest do
     follows = [@me, "@xxx=.ed25519", "@yyy=.ed25519", "@zzz=.ed25519"]
 
     assert [%{"id" => @a}, %{"id" => @b}] =
-             Suggest.rank([], contact_msgs, follows, @me)
+             Suggest.rank(contact_msgs, follows, @me)
              |> Enum.map(&Map.take(&1, ["id"]))
   end
 
@@ -104,7 +94,7 @@ defmodule HighWire.SSB.SuggestTest do
 
     # Equal endorsement; @c leads on followers, the rest hold id order.
     assert [%{"id" => @c}, %{"id" => @a}, %{"id" => @b}] =
-             Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me)
+             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me)
              |> Enum.map(&Map.take(&1, ["id"]))
   end
 
@@ -115,8 +105,8 @@ defmodule HighWire.SSB.SuggestTest do
     ]
 
     # The undecryptable row is ignored; the real follow still endorses @a.
-    assert [%{"id" => @a, "activity" => 0, "followers" => 1}] =
-             Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519"], @me)
+    assert [%{"id" => @a, "followers" => 1}] =
+             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me)
   end
 
   test "contact rows without a usable author or contact are dropped" do
@@ -128,8 +118,8 @@ defmodule HighWire.SSB.SuggestTest do
 
     # Malformed input degrades, never crashes the rank: @a's one valid
     # endorsement stands.
-    assert [%{"id" => @a, "activity" => 0, "followers" => 1}] =
-             Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519"], @me)
+    assert [%{"id" => @a, "followers" => 1}] =
+             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me)
   end
 
   test "the list is capped so the rail stays a nudge" do
@@ -138,11 +128,11 @@ defmodule HighWire.SSB.SuggestTest do
         follow("@xxx=.ed25519", "@f#{i}=.ed25519")
       end
 
-    ranked = Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519"], @me)
+    ranked = Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me)
     assert length(ranked) == 5
   end
 
   test "a store with nothing to suggest ranks nothing" do
-    assert Suggest.rank([], [], [@me], @me) == []
+    assert Suggest.rank([], [@me], @me) == []
   end
 end

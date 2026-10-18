@@ -1386,7 +1386,7 @@ defmodule HighWire.Timeline do
     # list). Hand it off-process only once the contact graph is loaded —
     # before that there is nothing to rank against.
     if state.contact_msgs != [] do
-      Suggester.cast_inputs(state.acc, state.contact_msgs, state.follows, state.self_id)
+      Suggester.cast_inputs(state.contact_msgs, state.follows, state.self_id)
     end
 
     # The rail's contacts are drawn by HighWire.Contacts, which re-draws
@@ -1481,11 +1481,11 @@ defmodule HighWire.Timeline do
   end
 
   # gossip.peers refresh for the /network dashboard — a cheap local
-  # sync RPC — and the "Whom to follow" ranking, computed here from
-  # the window and the contact drain (Suggest.rank/4; the engine has
-  # no whoToFollow RPC). The dashboard stays hidden on engines
-  # predating its RPC (the call answers `true`, which the branch does
-  # not accept).
+  # sync RPC — and a read-back of the "Whom to follow" rows, which
+  # HighWire.Suggester ranks off-process from the contact drain
+  # (Suggest.rank/3; the engine has no whoToFollow RPC). The dashboard
+  # stays hidden on engines predating its RPC (the call answers `true`,
+  # which the branch does not accept).
   def handle_info({:network, gen}, %{gen: current} = state) when gen == current do
     state = %{state | network_timer: nil}
     old_net = Map.get(state, :network)
@@ -1934,7 +1934,7 @@ defmodule HighWire.Timeline do
     # A refilled store-wide contact graph is a new ranking input. Hand it
     # to the Suggester off-process; Timeline never ranks inline.
     if state.contact_msgs != [] do
-      Suggester.cast_inputs(state.acc, state.contact_msgs, state.follows, state.self_id)
+      Suggester.cast_inputs(state.contact_msgs, state.follows, state.self_id)
     end
 
     if fresh != [] and state.status == :ok and map_size(state.pending) == 0 do

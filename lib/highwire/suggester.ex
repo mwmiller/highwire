@@ -3,9 +3,9 @@ defmodule HighWire.Suggester do
   Owns the \"Whom to follow\" ranking, its disk cache, and the cache's
   lifecycle — kept entirely off the Timeline process.
 
-  Timeline hands over input snapshots (`window`, `contact_msgs`,
-  `follows`, `self_id`) when the store-wide contact graph refills or the
-  follow list changes. Ranking runs in a supervised background task (a
+  Timeline hands over input snapshots (`contact_msgs`, `follows`,
+  `self_id`) when the store-wide contact graph refills or the follow
+  list changes. Ranking runs in a supervised background task (a
   full pass over the contact graph is far too heavy to run on the feed's
   process), and that task writes the persisted cache before reporting
   back — so disk I/O never sits on any hot path either.
@@ -39,13 +39,13 @@ defmodule HighWire.Suggester do
   end
 
   @doc """
-  Hand over an input snapshot (`window`, `contact_msgs`, `follows`,
-  `self_id`). A ranking runs only when the snapshot differs from the one
+  Hand over an input snapshot (`contact_msgs`, `follows`, `self_id`).
+  A ranking runs only when the snapshot differs from the one
   already ranked (or in flight).
   """
-  @spec cast_inputs([map()], [map()], [String.t()], String.t() | nil, GenServer.server()) :: :ok
-  def cast_inputs(window, contact_msgs, follows, self_id, server \\ __MODULE__) do
-    inputs = {List.wrap(window), List.wrap(contact_msgs), List.wrap(follows), self_id}
+  @spec cast_inputs([map()], [String.t()], String.t() | nil, GenServer.server()) :: :ok
+  def cast_inputs(contact_msgs, follows, self_id, server \\ __MODULE__) do
+    inputs = {List.wrap(contact_msgs), List.wrap(follows), self_id}
 
     case GenServer.whereis(server) do
       nil -> :ok
@@ -99,12 +99,12 @@ defmodule HighWire.Suggester do
   # Identical to what is already ranked — nothing to do.
   defp maybe_rank(%{pending: inputs, ranked: inputs} = state), do: %{state | pending: nil}
 
-  defp maybe_rank(%{pending: {window, contact_msgs, follows, self_id} = inputs} = state) do
+  defp maybe_rank(%{pending: {contact_msgs, follows, self_id} = inputs} = state) do
     cache = state.cache_path
 
     task =
       Task.Supervisor.async_nolink(HighWire.TaskSupervisor, fn ->
-        rows = Suggest.rank(window, contact_msgs, follows, self_id)
+        rows = Suggest.rank(contact_msgs, follows, self_id)
         save_cache(cache, rows)
         rows
       end)
@@ -115,7 +115,15 @@ defmodule HighWire.Suggester do
   defp load_cache(path) do
     with {:ok, bin} <- File.read(path),
          {:ok, rows} when is_list(rows) <- Jason.decode(bin) do
-      Enum.filter(rows, &match?(%{"id" => id} when is_binary(id), &1))
+      rows
+      |> Enum.map(fn
+        %{"id" => id} = row when is_binary(id) ->
+          %{"id" => id, "followers" => Map.get(row, "followers", 0)}
+
+        _ ->
+          nil
+      end)
+      |> Enum.reject(&is_nil/1)
     else
       _ -> []
     end
