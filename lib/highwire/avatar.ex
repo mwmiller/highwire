@@ -2,7 +2,8 @@ defmodule HighWire.Avatar do
   @moduledoc """
   Patchwork/Poncho-style avatars: the `color-hash` v1.0.3 color of a feed id
   (BKDRHash → HSL buckets → hex), the id shortening Patchwork uses for
-  display when a feed has no name, and the URL helpers that pick between a
+  display when a feed has no name, the single alias-aware display-name
+  resolution every view shares, and the URL helpers that pick between a
   feed's blob image and the Excon framed identicon used when there is none.
 
   This is a faithful port of `color-hash`'s default pipeline so HighWire's
@@ -41,6 +42,28 @@ defmodule HighWire.Avatar do
   @spec short_id(binary()) :: binary()
   def short_id("@" <> rest), do: String.slice(rest, 0, 9)
   def short_id(id) when is_binary(id), do: String.slice(id, 0, 9)
+
+  @doc """
+  The name a feed goes by on screen: its alias (the profile's `name`)
+  when `profiles` knows the id, else `short_id/1` — one resolution
+  everywhere, so a feed is called the same thing on every page.
+
+  `profiles` may be the bare id→profile map or a row ctx carrying one
+  under `:profiles`. An id that is not a binary renders as `"unknown"`
+  instead of raising — rows built from half an engine answer still
+  have something to show.
+  """
+  @spec display_name(term(), map()) :: binary()
+  def display_name(id, %{profiles: profiles}), do: display_name(id, profiles)
+
+  def display_name(id, profiles) when is_map(profiles) and is_binary(id) do
+    case profiles do
+      %{^id => %{name: name}} when is_binary(name) -> name
+      _ -> short_id(id)
+    end
+  end
+
+  def display_name(_id, _profiles), do: "unknown"
 
   @doc """
   The URL of the Excon `:framed` identicon for a feed id (hex-encoded id

@@ -634,7 +634,7 @@ defmodule HighWireWeb.NetworkLive do
                       phx-click="sky-select"
                       phx-value-addr={peer["address"]}
                     />
-                    <title>{sky_peer_title(peer["address"])}</title>
+                    <title>{sky_peer_title(peer["address"], @profiles)}</title>
                   </g>
 
                   <g
@@ -666,7 +666,7 @@ defmodule HighWireWeb.NetworkLive do
                     />
                     <title>
                       {"retrying " <>
-                        sky_peer_title(try_row["addr"]) <>
+                        sky_peer_title(try_row["addr"], @profiles) <>
                         " — #{try_row["attempts"] || 0} fails"}
                     </title>
                   </g>
@@ -693,7 +693,7 @@ defmodule HighWireWeb.NetworkLive do
                     />
                     <title>
                       {"reached " <>
-                        sky_peer_title(try_row["addr"]) <>
+                        sky_peer_title(try_row["addr"], @profiles) <>
                         " — last handshake"}
                     </title>
                   </g>
@@ -762,7 +762,7 @@ defmodule HighWireWeb.NetworkLive do
                         >
                           {sky_short_name(id, @profiles)}
                         </text>
-                        <title>{display_name(id, @profiles)}</title>
+                        <title>{Ident.display_name(id, @profiles)}</title>
                       </.link>
                     </g>
                   </g>
@@ -855,7 +855,7 @@ defmodule HighWireWeb.NetworkLive do
                     navigate={profile_href(id)}
                     class="min-w-0 truncate text-sm text-ink hover:underline"
                   >
-                    {display_name(id, @profiles)}
+                    {Ident.display_name(id, @profiles)}
                   </.link>
                   <span class="ml-auto shrink-0 font-mono text-[11px] text-faint">
                     {Ident.short_id(id)}
@@ -882,18 +882,33 @@ defmodule HighWireWeb.NetworkLive do
                 class="mt-2 space-y-1"
               >
                 <div
-                  :for={peer <- Enum.take(@report["knownPeers"], @known_peers_cap)}
+                  :for={{peer, id} <- known_rows(@report, @known_peers_cap)}
                   data-sky-key={peer["address"]}
                   phx-click="sky-select"
                   phx-value-addr={peer["address"]}
                   title={peer["address"]}
                   class={[
-                    "flex cursor-pointer items-baseline gap-3 border-b border-edge-soft px-2 py-1.5 text-xs",
+                    "flex cursor-pointer items-center gap-3 border-b border-edge-soft px-2 py-1.5 text-xs",
                     @selected == peer["address"] && "bg-raised"
                   ]}
                 >
-                  <span class="min-w-0 flex-1 break-all font-mono text-sub">
-                    {addr_text(peer["address"])}
+                  <Avatar.avatar
+                    :if={id}
+                    id={id}
+                    size={18}
+                    image={image_of(id, @profiles)}
+                    rev={blob_rev(@report)}
+                    class="shrink-0"
+                  />
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate text-sub">
+                      {if id,
+                        do: Ident.display_name(id, @profiles),
+                        else: addr_text(peer["address"])}
+                    </span>
+                    <span :if={id} class="block truncate font-mono text-[11px] text-faint">
+                      {addr_text(peer["address"])}
+                    </span>
                   </span>
                   <span
                     :if={no_reply?(peer["address"], @peer_meta)}
@@ -1080,6 +1095,21 @@ defmodule HighWireWeb.NetworkLive do
   defp status_text(:down), do: "engine down"
   defp status_text(_), do: "engine disabled"
 
+  # The rows the address book shows: each entry paired with the feed id
+  # behind it — the engine's own `key` when it carries one, else the
+  # shs key in the address, which is the same key in its bare form. The
+  # id is what the identicon and the alias-aware name hang on; a row
+  # with none falls back to showing its address as the name.
+  defp known_rows(report, cap) do
+    report["knownPeers"]
+    |> Enum.take(cap)
+    |> Enum.map(fn peer -> {peer, peer_id(peer)} end)
+  end
+
+  defp peer_id(%{"key" => id}) when is_binary(id), do: id
+  defp peer_id(%{"address" => addr}) when is_binary(addr), do: sky_key(addr)
+  defp peer_id(_peer), do: nil
+
   # "net:host:port~shs:key" → "host:port" (the key is noise in a list;
   # the full string stays in the title attribute).
   defp addr_text("net:" <> rest) do
@@ -1135,13 +1165,6 @@ defmodule HighWireWeb.NetworkLive do
 
   defp profile_href("@" <> _ = id), do: "/profile?id=" <> URI.encode_www_form(id)
   defp profile_href(_id), do: "/"
-
-  defp display_name(id, profiles) when is_map(profiles) do
-    case profiles do
-      %{^id => %{name: name}} when is_binary(name) -> name
-      _ -> Ident.short_id(id)
-    end
-  end
 
   defp image_of(id, profiles) when is_map(profiles) do
     case profiles do
@@ -1306,13 +1329,15 @@ defmodule HighWireWeb.NetworkLive do
   # The hover label for a peer we are not talking to: the name it goes
   # by and where it lives, not the full multi-hundred-character address
   # plus a sentence of protocol narrative. The address stays in the
-  # list row below, which has room for it.
-  defp sky_peer_title(addr) do
+  # list row below, which has room for it. The name is the same
+  # alias-aware one the lists and the node labels show — the identity
+  # behind the address, not the raw key.
+  defp sky_peer_title(addr, profiles) do
     case {sky_key(addr), sky_host(addr)} do
       {nil, nil} -> addr || ""
-      {key, nil} -> key
+      {key, nil} -> Ident.display_name(key, profiles)
       {nil, host} -> host
-      {key, host} -> "#{key} · #{host}"
+      {key, host} -> "#{Ident.display_name(key, profiles)} · #{host}"
     end
   end
 
@@ -1386,7 +1411,7 @@ defmodule HighWireWeb.NetworkLive do
   end
 
   defp sky_short_name(id, profiles) do
-    name = display_name(id, profiles)
+    name = Ident.display_name(id, profiles)
     if String.length(name) > 16, do: String.slice(name, 0, 15) <> "…", else: name
   end
 

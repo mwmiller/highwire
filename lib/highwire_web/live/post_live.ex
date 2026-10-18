@@ -165,7 +165,7 @@ defmodule HighWireWeb.PostLive do
 
   defp mention_candidates(socket, q) do
     profiles = Map.get(socket.assigns, :profiles, %{})
-    Mentions.candidates(q, Map.keys(profiles), &display_name(&1, profiles))
+    Mentions.candidates(q, Map.keys(profiles), &Ident.display_name(&1, profiles))
   end
 
   defp reply_error(:offline), do: "Not connected to the local SSB engine yet."
@@ -192,17 +192,6 @@ defmodule HighWireWeb.PostLive do
       _ -> 0
     end
   end
-
-  defp display_name(id, %{profiles: profiles}), do: display_name(id, profiles)
-
-  defp display_name(id, profiles) when is_map(profiles) do
-    case profiles do
-      %{^id => %{name: name}} when is_binary(name) -> name
-      _ -> Ident.short_id(id)
-    end
-  end
-
-  defp display_name(_id, _profiles), do: "unknown"
 
   defp image_of(id, %{profiles: profiles}), do: image_of(id, profiles)
 
@@ -263,7 +252,7 @@ defmodule HighWireWeb.PostLive do
               image={image_of(who, @profiles)}
               rev={@blob_rev}
             />
-            <span class="min-w-0 truncate">{display_name(who, @profiles)}</span>
+            <span class="min-w-0 truncate">{Ident.display_name(who, @profiles)}</span>
             <span
               :if={who == @self_id}
               class="ml-auto shrink-0 text-[10px] uppercase text-faint"
@@ -309,10 +298,10 @@ defmodule HighWireWeb.PostLive do
                         navigate={href}
                         class="hover:underline"
                       >
-                        {display_name(author_of(@root), @profiles)}
+                        {Ident.display_name(author_of(@root), @profiles)}
                       </.link>
                       <span :if={profile_href(author_of(@root)) == nil}>
-                        {display_name(author_of(@root), @profiles)}
+                        {Ident.display_name(author_of(@root), @profiles)}
                       </span>
                     </span>
                     <span :if={author_of(@root) == @self_id} class="text-[10px] uppercase text-faint">
@@ -353,7 +342,7 @@ defmodule HighWireWeb.PostLive do
                       <Heart.pill key={@root["key"]} liked={@root_liked} />
                       <span
                         :for={liker <- @root_likers}
-                        title={display_name(liker, @profiles)}
+                        title={Ident.display_name(liker, @profiles)}
                         class="inline-flex"
                       >
                         <Avatar.avatar
@@ -395,10 +384,10 @@ defmodule HighWireWeb.PostLive do
                       navigate={href}
                       class="hover:underline"
                     >
-                      {display_name(author_of(reply), @profiles)}
+                      {Ident.display_name(author_of(reply), @profiles)}
                     </.link>
                     <span :if={profile_href(author_of(reply)) == nil}>
-                      {display_name(author_of(reply), @profiles)}
+                      {Ident.display_name(author_of(reply), @profiles)}
                     </span>
                   </span>
                   <span :if={author_of(reply) == @self_id} class="text-[10px] uppercase text-faint">
@@ -421,7 +410,7 @@ defmodule HighWireWeb.PostLive do
                   <Heart.pill key={reply["key"]} liked={reply["key"] in @my_likes} />
                   <span
                     :for={liker <- Enum.take(Map.get(@likes_by, reply["key"], []), 4)}
-                    title={display_name(liker, @profiles)}
+                    title={Ident.display_name(liker, @profiles)}
                     class="inline-flex"
                   >
                     <Avatar.avatar
@@ -485,7 +474,7 @@ defmodule HighWireWeb.PostLive do
               </p>
               <div class="mt-2 flex items-center justify-end gap-3">
                 <span :if={@self_id} class="mr-auto min-w-0 truncate text-xs text-faint">
-                  Replying as {display_name(@self_id, @profiles)}
+                  Replying as {Ident.display_name(@self_id, @profiles)}
                 </span>
                 <button type="submit" class="btn btn-primary" phx-disable-with="Replying…">
                   Reply

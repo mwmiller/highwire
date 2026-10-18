@@ -25,6 +25,24 @@ defmodule HighWire.AvatarTest do
              "DgsA6kZle"
   end
 
+  test "display_name/2 resolves the alias first, then the short id" do
+    id = "@DgsA6kZleyiuliE8SeUDtF3Slw3f92tUaT2xjH5cNg8=.ed25519"
+    profiles = %{id => %{name: "Matt", image: nil}}
+
+    # The profiles may arrive bare or as a row ctx carrying one.
+    assert Avatar.display_name(id, profiles) == "Matt"
+    assert Avatar.display_name(id, %{profiles: profiles}) == "Matt"
+
+    assert Avatar.display_name(id, %{}) == "DgsA6kZle"
+    # A name that is not a binary is no name at all.
+    assert Avatar.display_name(id, %{id => %{name: 42}}) == "DgsA6kZle"
+  end
+
+  test "display_name/2 renders a half-parsed id as unknown instead of raising" do
+    assert Avatar.display_name(nil, %{}) == "unknown"
+    assert Avatar.display_name(42, %{profiles: %{}}) == "unknown"
+  end
+
   test "identicon_url/1 hex-encodes the feed id" do
     assert Avatar.identicon_url("@ab=.ed25519") ==
              "/identicon/" <> Base.encode16("@ab=.ed25519", case: :lower)

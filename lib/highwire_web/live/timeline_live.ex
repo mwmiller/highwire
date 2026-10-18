@@ -415,7 +415,7 @@ defmodule HighWireWeb.TimelineLive do
     profiles = Map.get(socket.assigns, :profiles, %{})
     follows = Map.get(socket.assigns, :sidebar_contacts, [])
 
-    Mentions.candidates(q, follows ++ Map.keys(profiles), &display_name(&1, profiles))
+    Mentions.candidates(q, follows ++ Map.keys(profiles), &Ident.display_name(&1, profiles))
   end
 
   defp schedule_peers(socket) do
@@ -855,7 +855,7 @@ defmodule HighWireWeb.TimelineLive do
               image={image_of(c, @profiles)}
               rev={@blob_rev}
             />
-            <span class="min-w-0 truncate">{display_name(c, @profiles)}</span>
+            <span class="min-w-0 truncate">{Ident.display_name(c, @profiles)}</span>
           </.link>
           <button
             :if={length(@all_contacts) > @max_sidebar_contacts}
@@ -888,7 +888,7 @@ defmodule HighWireWeb.TimelineLive do
               image={image_of(s["id"], @profiles)}
               rev={@blob_rev}
             />
-            <span class="min-w-0 truncate">{display_name(s["id"], @profiles)}</span>
+            <span class="min-w-0 truncate">{Ident.display_name(s["id"], @profiles)}</span>
             <span class="ml-auto shrink-0 text-[10px] text-faint">{s["activity"]}</span>
           </.link>
         </div>
@@ -1007,7 +1007,7 @@ defmodule HighWireWeb.TimelineLive do
                   </p>
                   <div class="mt-2 flex items-center justify-end gap-3">
                     <span :if={@self_id} class="mr-auto min-w-0 truncate text-xs text-faint">
-                      Posting as {display_name(@self_id, @profiles)}
+                      Posting as {Ident.display_name(@self_id, @profiles)}
                     </span>
                     <button type="submit" class="btn btn-primary" phx-disable-with="Publishing…">
                       Publish
@@ -1152,9 +1152,9 @@ defmodule HighWireWeb.TimelineLive do
         <div class="flex items-baseline gap-2">
           <span class="text-sm font-semibold text-paper">
             <.link :if={@author_href} navigate={@author_href} class="hover:underline">
-              {display_name(@author, @ctx)}
+              {Ident.display_name(@author, @ctx)}
             </.link>
-            <span :if={@author_href == nil}>{display_name(@author, @ctx)}</span>
+            <span :if={@author_href == nil}>{Ident.display_name(@author, @ctx)}</span>
           </span>
           <span :if={@row.self?} class="text-[10px] uppercase text-faint">you</span>
           <span class="text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
@@ -1205,7 +1205,7 @@ defmodule HighWireWeb.TimelineLive do
           <span :if={@row.replies > 0}>{@row.replies} replies</span>
           <div :if={@like_target} class="flex items-center gap-1.5">
             <Heart.pill key={@like_target} liked={@liked} />
-            <span :for={liker <- @likers} title={display_name(liker, @ctx)} class="inline-flex">
+            <span :for={liker <- @likers} title={Ident.display_name(liker, @ctx)} class="inline-flex">
               <Avatar.avatar
                 id={liker}
                 size={16}
@@ -1227,7 +1227,7 @@ defmodule HighWireWeb.TimelineLive do
               class="self-center"
             />
             <span class="shrink-0 text-xs font-medium text-muted">
-              {display_name(author_of(reply), @ctx)}
+              {Ident.display_name(author_of(reply), @ctx)}
             </span>
             <span class="min-w-0 truncate text-xs text-sub">{snippet(reply, @ctx)}</span>
             <span class="ml-auto shrink-0 text-[11px] text-faint">
@@ -1262,7 +1262,7 @@ defmodule HighWireWeb.TimelineLive do
         />
       </div>
       <p class="min-w-0 flex-1">
-        <span class="text-ink">{display_name(author_of(@row.msg), @ctx)}</span>
+        <span class="text-ink">{Ident.display_name(author_of(@row.msg), @ctx)}</span>
         liked <span class="text-ink">{vote_target_label(@row.msg, @ctx)}</span>
       </p>
       <span class="ml-auto text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
@@ -1311,10 +1311,10 @@ defmodule HighWireWeb.TimelineLive do
           navigate={href}
           class="text-ink hover:underline"
         >
-          {display_name(@author, @ctx)}
+          {Ident.display_name(@author, @ctx)}
         </.link>
         <span :if={profile_href(@author) == nil} class="text-ink">
-          {display_name(@author, @ctx)}
+          {Ident.display_name(@author, @ctx)}
         </span>
         followed
         <span class="ml-1 inline-flex flex-wrap items-center gap-x-3 gap-y-1 align-middle">
@@ -1329,7 +1329,7 @@ defmodule HighWireWeb.TimelineLive do
                 image={image_of(fid, @ctx.profiles)}
                 rev={@ctx.rev}
               />
-              <span class="text-ink hover:underline">{display_name(fid, @ctx)}</span>
+              <span class="text-ink hover:underline">{Ident.display_name(fid, @ctx)}</span>
             </.link>
           </span>
           <button
@@ -1377,9 +1377,9 @@ defmodule HighWireWeb.TimelineLive do
       <p class="min-w-0 flex-1">
         <span class="not-italic text-ink">
           <.link :if={@href} navigate={@href} class="hover:underline">
-            {display_name(author_of(@row.msg), @ctx)}
+            {Ident.display_name(author_of(@row.msg), @ctx)}
           </.link>
-          <span :if={@href == nil}>{display_name(author_of(@row.msg), @ctx)}</span>
+          <span :if={@href == nil}>{Ident.display_name(author_of(@row.msg), @ctx)}</span>
         </span>
         {other_label(@row.msg, @ctx)}
       </p>
@@ -1402,7 +1402,7 @@ defmodule HighWireWeb.TimelineLive do
     contacts =
       payload.follows
       |> Enum.reject(&(&1 == payload.self_id))
-      |> Enum.sort_by(&String.downcase(display_name(&1, profiles)))
+      |> Enum.sort_by(&String.downcase(Ident.display_name(&1, profiles)))
 
     # The collapsed rail is a sliding window over the alphabetized roll,
     # stepped along by the rotate timer rather than reshuffled. Payloads
@@ -1622,18 +1622,6 @@ defmodule HighWireWeb.TimelineLive do
     |> String.slice(0, 120)
   end
 
-  # Profile-aware names: the resolved name from the payload's profiles
-  # (bare map, or the row ctx carrying one), else Patchwork's shortFeedId.
-  defp display_name(id, _profiles) when not is_binary(id), do: "unknown"
-  defp display_name(id, %{profiles: profiles}), do: display_name(id, profiles)
-
-  defp display_name(id, profiles) when is_map(profiles) do
-    case profiles do
-      %{^id => %{name: name}} when is_binary(name) -> name
-      _ -> Ident.short_id(id)
-    end
-  end
-
   # Author names open that feed's neutral identity view.
   defp profile_href("@" <> _ = id), do: "/profile?id=" <> URI.encode_www_form(id)
   defp profile_href(_id), do: nil
@@ -1659,7 +1647,7 @@ defmodule HighWireWeb.TimelineLive do
       |> Enum.map(&author_of/1)
       |> Enum.uniq()
       |> Enum.take(2)
-      |> Enum.map_join(", ", &display_name(&1, ctx))
+      |> Enum.map_join(", ", &Ident.display_name(&1, ctx))
 
     %{prefix: "#{names} replied · ", ts: activity}
   end
@@ -1680,7 +1668,7 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   defp editors_label(editors, ctx) do
-    shown = editors |> Enum.take(2) |> Enum.map_join(", ", &display_name(&1, ctx))
+    shown = editors |> Enum.take(2) |> Enum.map_join(", ", &Ident.display_name(&1, ctx))
     if length(editors) > 2, do: "#{shown} +#{length(editors) - 2}", else: shown
   end
 
@@ -1697,7 +1685,7 @@ defmodule HighWireWeb.TimelineLive do
       link when is_binary(link) ->
         case Map.get(ctx.index, link) do
           nil -> "an older message"
-          author -> "#{display_name(author, ctx)}'s message"
+          author -> "#{Ident.display_name(author, ctx)}'s message"
         end
 
       _ ->
@@ -1728,9 +1716,9 @@ defmodule HighWireWeb.TimelineLive do
     target = Map.get(ctx.index, about) || about
 
     cond do
-      is_binary(c["name"]) -> "set #{display_name(target, ctx)}'s display name"
-      is_binary(c["description"]) -> "wrote #{display_name(target, ctx)}'s bio"
-      true -> "updated #{display_name(target, ctx)}'s profile"
+      is_binary(c["name"]) -> "set #{Ident.display_name(target, ctx)}'s display name"
+      is_binary(c["description"]) -> "wrote #{Ident.display_name(target, ctx)}'s bio"
+      true -> "updated #{Ident.display_name(target, ctx)}'s profile"
     end
   end
 
@@ -1770,7 +1758,7 @@ defmodule HighWireWeb.TimelineLive do
         "edited their post"
 
       target = Map.get(ctx.index, root) ->
-        "edited #{display_name(target, ctx)}'s post"
+        "edited #{Ident.display_name(target, ctx)}'s post"
 
       true ->
         "edited an older post"

@@ -158,6 +158,38 @@ defmodule HighWireWeb.NetworkLiveTest do
       assert html =~ "3 fails"
     end
 
+    test "each known peer shows an identicon, its name, and where it lives" do
+      report = %{
+        "enabled" => true,
+        "connections" => [],
+        "dialTry" => [],
+        "knownPeers" => [
+          %{"address" => "net:192.168.1.10:8008~shs:bobkey", "autoconnect" => true}
+        ]
+      }
+
+      bob = "@bobkey.ed25519"
+
+      html =
+        render_with_report(report, %{profiles: %{bob => %{name: "Bobs Pub", image: nil}}})
+
+      # The alias — not the raw key — names the row, over the host:port;
+      # the full address stays in the hover title.
+      assert html =~ "Bobs Pub"
+      assert html =~ "192.168.1.10:8008"
+      assert html =~ ~s(title="net:192.168.1.10:8008~shs:bobkey")
+      refute html =~ "bobkey.ed"
+
+      # The identicon is keyed by the feed id the address carries, so it
+      # is that peer's tile, not a placeholder.
+      assert html =~ HighWire.Avatar.identicon_url(bob)
+
+      # Without an alias the row falls back to the short id, not the
+      # full base64 key.
+      unaliased = render_with_report(report)
+      assert unaliased =~ "bobkey.ed"
+    end
+
     test "auto-dial off offers the on toggle" do
       html = render_with_report(%{"enabled" => false, "connections" => [], "dialTry" => []})
 
