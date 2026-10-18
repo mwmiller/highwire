@@ -1427,7 +1427,7 @@ defmodule HighWireWeb.NetworkLive do
       report["knownPeers"] in [nil, []]
   end
 
-  # A report the engine could not produce — down, starting, or an erlutt
+  # A report the engine could not produce — down, starting, or an erlbutt
   # older than the admin RPCs — is not the same as an engine reporting an
   # empty network. Falling back to the cache keeps the constellation
   # populated from the last session that did answer, so the page opens on
