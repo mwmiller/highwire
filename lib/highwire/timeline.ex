@@ -56,7 +56,7 @@ defmodule HighWire.Timeline do
   require Logger
 
   alias HighWire.Blob
-  alias HighWire.SSB.{Client, Keys, Sidecar, Suggest}
+  alias HighWire.SSB.{Client, Keys, Profile, Sidecar, Suggest}
 
   @topic "timeline"
   @gossip "gossip"
@@ -435,6 +435,12 @@ defmodule HighWire.Timeline do
   @impl true
   def init(_opts) do
     Process.flag(:trap_exit, true)
+
+    # The rail and the identity page read profiles synchronously, with
+    # no process to ask, so every payload shadows into Profile's ETS
+    # table first. Creating it here means the writer owns it for the
+    # whole life of this process.
+    _ = Profile.create()
 
     state = %{
       status: :connecting,
@@ -1331,6 +1337,11 @@ defmodule HighWire.Timeline do
             self()
           )
 
+        # The posting identity's own profile: window authors resolve
+        # through finalize, but a just-switched-to identity with
+        # nothing in the window never would — ask for it by id.
+        _ = ensure_profiles([id])
+
         {:noreply,
          %{state | status: :loading, self_id: id, contacts_ref: ref, contacts_primed?: false}}
 
@@ -1448,7 +1459,7 @@ defmodule HighWire.Timeline do
     state = note_net_activity(state, System.monotonic_time(:millisecond))
     rev = state.blob_rev + 1
     payload = %{state.messages | blob_rev: rev}
-    Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
+    broadcast_updated(payload)
     {:noreply, %{state | messages: payload, blob_rev: rev, blob_timer: nil}}
   end
 
@@ -1494,7 +1505,7 @@ defmodule HighWire.Timeline do
     state =
       if state.suggestions != old and state.status == :ok do
         payload = Map.put(state.messages, :suggestions, state.suggestions)
-        Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
+        broadcast_updated(payload)
         %{state | messages: payload}
       else
         state
@@ -1574,7 +1585,7 @@ defmodule HighWire.Timeline do
       {:noreply, state}
     else
       payload = %{state.messages | profiles: Map.merge(state.messages.profiles, fetched)}
-      Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
+      broadcast_updated(payload)
       {:noreply, %{state | messages: payload}}
     end
   end
@@ -1604,6 +1615,17 @@ defmodule HighWire.Timeline do
     )
 
     state
+  end
+
+  # The one way the feed payload goes out: shadow what pages read
+  # synchronously — the rail is a function component with no process to
+  # ask, and the identity page wants its own feeds' names whether or
+  # not they still hold a window seat — *before* telling anyone to
+  # look, so a subscriber's render reads a table already current.
+  defp broadcast_updated(payload) do
+    Profile.put_all(payload.profiles)
+    Profile.put_rev(payload.blob_rev)
+    Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
   end
 
   # How recently the engine reported network activity. The window is what
@@ -1863,7 +1885,7 @@ defmodule HighWire.Timeline do
   defp finalize(state) do
     {payload, missing, base, post_refs} = build_payload(state)
 
-    Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
+    broadcast_updated(payload)
 
     state = %{state | status: :ok, messages: payload, pending: %{}, done_count: 0}
     kick_profile_fetch(state, missing, base, post_refs)
@@ -1897,7 +1919,7 @@ defmodule HighWire.Timeline do
   defp broadcast_preliminary(state) do
     {payload, _missing, _base, _refs} = build_payload(state)
 
-    Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {__MODULE__, :updated, payload})
+    broadcast_updated(payload)
 
     %{state | status: :ok, messages: payload}
   end
