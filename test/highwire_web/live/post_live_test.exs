@@ -80,6 +80,54 @@ defmodule HighWireWeb.PostLiveTest do
     refute html =~ ~s(id="mention-list")
   end
 
+  test "profile fill-ins survive a payload that no longer carries them", %{conn: conn} do
+    alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    key = Base.url_encode64("%profile-keep=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    root = %{
+      "key" => "%profile-keep=.sha256",
+      "value" => %{
+        "author" => alice,
+        "timestamp" => 1_700_000_000_000,
+        "content" => %{"type" => "post", "text" => "keep me"}
+      }
+    }
+
+    :sys.replace_state(view.pid, fn state ->
+      socket = state.socket
+      assigns = socket.assigns
+
+      changed =
+        assigns.__changed__
+        |> Map.put(:root, assigns.root)
+        |> Map.put(:profiles, assigns.profiles)
+        |> Map.put(:not_found, assigns.not_found)
+
+      assigns =
+        assigns
+        |> Map.put(:root, root)
+        |> Map.put(:profiles, %{alice => %{name: "Alice Smith", image: nil}})
+        |> Map.put(:not_found, false)
+        |> Map.put(:__changed__, changed)
+
+      %{state | socket: %{socket | assigns: assigns}}
+    end)
+
+    send(view.pid, :nudge)
+    assert render(view) =~ "Alice Smith"
+
+    # A finalize evicts profile ids outside its window from the payload —
+    # here the payload's profiles map comes back empty (and the snapshot
+    # it re-reads carries nothing either, engine off under test). The
+    # avatar it already showed must not flicker back to an identicon.
+    send(view.pid, {HighWire.Timeline, :updated, %{profiles: %{}}})
+    _ = render(view)
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert assigns.profiles == %{alice => %{name: "Alice Smith", image: nil}}
+  end
+
   test "Heart.toggle flips the like state locally" do
     assigns = %{my_likes: [], like_counts: %{}, likes_by: %{}, self_id: "@me=.ed25519"}
     key = "%k=.sha256"

@@ -65,7 +65,10 @@ defmodule HighWireWeb.PostLive do
     socket =
       assign(socket,
         blob_rev: Map.get(payload, :blob_rev, 0),
-        profiles: Map.get(payload, :profiles, socket.assigns.profiles),
+        # Accumulate, as the timeline does: a finalize evicts profile ids
+        # outside its window from the payload, and this view must not drop
+        # avatars it has already shown over a transient.
+        profiles: Map.merge(socket.assigns.profiles, Map.get(payload, :profiles, %{})),
         like_counts: Map.get(payload, :like_counts, socket.assigns.like_counts),
         likes_by: Map.get(payload, :likes_by, socket.assigns.likes_by),
         my_likes: Map.get(payload, :my_likes, socket.assigns.my_likes),
@@ -90,14 +93,52 @@ defmodule HighWireWeb.PostLive do
       root: post && post.root,
       replies: (post && post.replies) || [],
       not_found: post == nil,
-      profiles: Map.get(payload, :profiles, %{}),
+      # Same accumulate as handle_info — snapshot payloads evict the same
+      # way broadcasts do, and a reload here must not undo a fill-in.
+      profiles:
+        Map.merge(Map.get(socket.assigns, :profiles, %{}), Map.get(payload, :profiles, %{})),
       like_counts: Map.get(payload, :like_counts, %{}),
       likes_by: Map.get(payload, :likes_by, %{}),
       my_likes: Map.get(payload, :my_likes, []),
       self_id: Map.get(payload, :self_id),
       blob_rev: Map.get(payload, :blob_rev, 0)
     )
+    |> request_missing_profiles()
   end
+
+  # Whatever this thread renders that no payload ever shipped a profile
+  # for goes back to the Timeline as an ensure — the same contract the
+  # timeline's cursor pages use. The window payload only covers followed
+  # feeds' threads, so a thread with an unfollowed author (or a liker
+  # outside the window) would otherwise sit on identicons and short ids.
+  defp request_missing_profiles(socket) do
+    known = Map.get(socket.assigns, :profiles, %{})
+    likes_by = Map.get(socket.assigns, :likes_by, %{})
+
+    missing =
+      socket.assigns
+      |> rendered_ids(likes_by)
+      |> Enum.filter(&(is_binary(&1) and String.starts_with?(&1, "@")))
+      |> Enum.reject(&Map.has_key?(known, &1))
+      |> Enum.uniq()
+
+    if missing != [] do
+      Timeline.ensure_profiles(missing)
+    end
+
+    socket
+  end
+
+  # Every identity this page puts on screen: the root author, the reply
+  # authors (also the rail's avatars), and the liker tiles under each
+  # message.
+  defp rendered_ids(%{root: root, replies: replies}, likes_by) when is_map(root) do
+    [author_of(root) | Enum.map(replies, &author_of/1)] ++
+      Map.get(likes_by, root["key"], []) ++
+      Enum.flat_map(replies, &Map.get(likes_by, &1["key"], []))
+  end
+
+  defp rendered_ids(_assigns, _likes_by), do: []
 
   # -- events ------------------------------------------------------------
 
