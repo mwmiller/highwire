@@ -793,7 +793,7 @@ defmodule HighWireWeb.TimelineLive do
         </div>
 
         <div class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint">
-          Who to follow
+          Whom to follow
         </div>
         <div class="pb-4">
           <p :if={@suggestions == []} class="px-4 py-1 text-xs italic text-faint">

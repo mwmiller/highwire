@@ -1,6 +1,6 @@
 defmodule HighWire.SSB.Suggest do
   @moduledoc """
-  "Who to follow": feeds we do not follow, ranked by friend-of-friend
+  "Whom to follow": feeds we do not follow, ranked by friend-of-friend
   endorsement from the store-wide contact graph.
 
   Discovery runs off the contact drain, not the timeline window. The

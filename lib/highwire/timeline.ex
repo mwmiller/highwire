@@ -1481,7 +1481,7 @@ defmodule HighWire.Timeline do
   end
 
   # gossip.peers refresh for the /network dashboard — a cheap local
-  # sync RPC — and the "Who to follow" ranking, computed here from
+  # sync RPC — and the "Whom to follow" ranking, computed here from
   # the window and the contact drain (Suggest.rank/4; the engine has
   # no whoToFollow RPC). The dashboard stays hidden on engines
   # predating its RPC (the call answers `true`, which the branch does

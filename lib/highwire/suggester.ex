@@ -1,6 +1,6 @@
 defmodule HighWire.Suggester do
   @moduledoc """
-  Owns the \"Who to follow\" ranking, its disk cache, and the cache's
+  Owns the \"Whom to follow\" ranking, its disk cache, and the cache's
   lifecycle — kept entirely off the Timeline process.
 
   Timeline hands over input snapshots (`window`, `contact_msgs`,
