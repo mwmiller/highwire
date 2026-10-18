@@ -15,11 +15,22 @@ defmodule HighWireWeb.IdentityLive do
   at all. Export is offered right in the row — the private key leaves
   the registry for good on the second click, and whatever the
   identity published stays in the store either way.
+
+  Every row shows what followers see — the resolved alias and avatar,
+  through `HighWire.Avatar.display_name/2` over the Profile read
+  model — with the local label in parentheses after it. The label is
+  this install's private nickname for the key; the name is the feed's
+  own. The page subscribes to the timeline so an answer the Timeline
+  resolves after mount (it asks for every registry id on mount)
+  fills in without a reload, and hands the rail the same resolution
+  through the `identity` attr so the header updates with it.
   """
 
   use HighWireWeb, :live_view
 
-  alias HighWire.SSB.{Identities, Sidecar}
+  alias HighWire.Avatar, as: Ident
+  alias HighWire.SSB.{Identities, Profile, Sidecar}
+  alias HighWire.Timeline
   alias HighWireWeb.Components.{Avatar, Nav}
 
   @impl true
@@ -38,7 +49,8 @@ defmodule HighWireWeb.IdentityLive do
        notice: nil,
        form_label: ""
      )
-     |> reload()}
+     |> reload()
+     |> resolve()}
   end
 
   @impl true
@@ -61,23 +73,6 @@ defmodule HighWireWeb.IdentityLive do
           {:noreply, switched(socket, Sidecar.switch_identity(id), id)}
         end
     end
-  end
-
-  # The engine stop → write → start takes seconds; the LiveView stays
-  # responsive and the result comes back as a message.
-  defp queue_engine_switch(id) do
-    parent = self()
-
-    Task.start(fn ->
-      result =
-        try do
-          Sidecar.switch_identity(id)
-        catch
-          kind, reason -> {:error, {kind, reason}}
-        end
-
-      send(parent, {:identity_switch, result, id})
-    end)
   end
 
   def handle_event("disable", %{"id" => id}, socket) do
@@ -164,10 +159,37 @@ defmodule HighWireWeb.IdentityLive do
     end
   end
 
+  # The engine stop → write → start takes seconds; the LiveView stays
+  # responsive and the result comes back as a message.
+  defp queue_engine_switch(id) do
+    parent = self()
+
+    Task.start(fn ->
+      result =
+        try do
+          Sidecar.switch_identity(id)
+        catch
+          kind, reason -> {:error, {kind, reason}}
+        end
+
+      send(parent, {:identity_switch, result, id})
+    end)
+  end
+
   @impl true
   def handle_info({:identity_switch, result, id}, socket) do
     {:noreply, switched(socket, result, id)}
   end
+
+  # Fresh profile answers ride the timeline topic. The Timeline shadows
+  # them into the read model ahead of this broadcast, so re-reading
+  # here shows names and avatars that landed after mount. Transfers
+  # carry no profiles and are not this page's business.
+  def handle_info({Timeline, :updated, _payload}, socket) do
+    {:noreply, refresh_profiles(socket)}
+  end
+
+  def handle_info({Timeline, :transfer, _status}, socket), do: {:noreply, socket}
 
   defp switched(socket, :ok, id) do
     socket
@@ -184,6 +206,54 @@ defmodule HighWireWeb.IdentityLive do
 
   defp reload(socket) do
     assign(socket, identities: Identities.list(), active: Identities.active())
+  end
+
+  # What followers see, resolved per registry id: the rows say who the
+  # store thinks each key is, this is who everyone else sees. The
+  # Timeline answers in the background — every id is asked for on
+  # mount — and pushes later answers through the subscription, so the
+  # page fills in without a reload. While nothing has resolved (engine
+  # down, a feed that has published no profile) the take is simply
+  # empty and the rows show the short id, which is what such a feed
+  # shows its followers anyway.
+  defp resolve(socket) do
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(HighWire.PubSub, Timeline.topic())
+      _ = Timeline.ensure_profiles(registry_ids(socket))
+    end
+
+    refresh_profiles(socket)
+  end
+
+  defp refresh_profiles(socket) do
+    fresh = Profile.take(registry_ids(socket))
+
+    if fresh == Map.get(socket.assigns, :profiles) do
+      socket
+    else
+      assign(socket, profiles: fresh)
+    end
+  end
+
+  defp registry_ids(socket), do: Enum.map(socket.assigns.identities, & &1["id"])
+
+  # The row the rail renders: the registry's local view enriched with
+  # the resolution, so the component — which re-renders only when its
+  # inputs change — updates the moment a profile answer lands.
+  defp presented(nil, _profiles), do: nil
+
+  defp presented(row, profiles) do
+    Map.merge(row, %{
+      "name" => Ident.display_name(row["id"], profiles),
+      "image" => image_of(row["id"], profiles)
+    })
+  end
+
+  defp image_of(id, profiles) when is_map(profiles) do
+    case profiles do
+      %{^id => %{image: image}} -> image
+      _ -> nil
+    end
   end
 
   defp active_id(socket), do: socket.assigns.active && socket.assigns.active["id"]
@@ -216,7 +286,7 @@ defmodule HighWireWeb.IdentityLive do
   def render(assigns) do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail gossip={@gossip} identity={@active}>
+      <Nav.rail gossip={@gossip} identity={presented(@active, @profiles)}>
         <Nav.rail_label>On this page</Nav.rail_label>
         <Nav.rail_link href="#current">Current identity</Nav.rail_link>
         <Nav.rail_link href="#all">All identities</Nav.rail_link>
@@ -248,10 +318,18 @@ defmodule HighWireWeb.IdentityLive do
             :if={@active}
             class="mt-4 flex items-start gap-4 rounded-lg border border-edge bg-panel p-4"
           >
-            <Avatar.avatar id={@active["id"]} size={48} />
+            <Avatar.avatar
+              id={@active["id"]}
+              size={48}
+              image={image_of(@active["id"], @profiles)}
+              rev={Profile.rev()}
+            />
             <div class="min-w-0">
               <div class="flex items-center gap-2">
-                <span class="font-semibold text-paper">{@active["label"]}</span>
+                <span class="font-semibold text-paper">
+                  {Ident.display_name(@active["id"], @profiles)}
+                  <span class="ml-1 font-normal text-faint">({@active["label"]})</span>
+                </span>
                 <span class="rounded bg-raised px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-paper">
                   Active
                 </span>
@@ -277,10 +355,18 @@ defmodule HighWireWeb.IdentityLive do
           <div class="mt-4 space-y-3">
             <div :for={row <- @identities} class="rounded-lg border border-edge bg-panel p-4">
               <div class="flex items-center gap-3">
-                <Avatar.avatar id={row["id"]} size={32} />
+                <Avatar.avatar
+                  id={row["id"]}
+                  size={32}
+                  image={image_of(row["id"], @profiles)}
+                  rev={Profile.rev()}
+                />
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2">
-                    <span class="truncate font-medium text-paper">{row["label"]}</span>
+                    <span class="truncate font-medium text-paper">
+                      {Ident.display_name(row["id"], @profiles)}
+                      <span class="ml-1 font-normal text-faint">({row["label"]})</span>
+                    </span>
                     <span
                       :if={row["active"]}
                       class="rounded bg-raised px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-paper"

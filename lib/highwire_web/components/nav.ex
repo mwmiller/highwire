@@ -1,17 +1,23 @@
 defmodule HighWireWeb.Components.Nav do
   @moduledoc """
-  The shared left rail: the current identity's avatar (linking to the
-  identity page, `/identity`) beside the crab mark (linking to the
-  timeline), the settings gear at the other end, and — pinned to the
-  bottom — the current network badge, which links to the network page
-  (`/network`) — the general place to manage dialing and the network
-  profile. Pages add their own content to the rail through the default
-  slot; pages that pass none get the same wide frame, so the column
-  never jumps between pages.
+  The shared left rail: the crab mark at the top left (linking to the
+  timeline) and, at the top right beside the settings gear — the other
+  identity-adjacent control — the current identity's avatar (linking to
+  the identity page, `/identity`); and, pinned to the bottom, the
+  current network badge, which links to the network page (`/network`)
+  — the general place to manage dialing and the network profile. Pages
+  add their own content to the rail through the default slot; pages
+  that pass none get the same wide frame, so the column never jumps
+  between pages.
 
-  The avatar comes from the identity registry: pages that cannot
-  change identity while mounted let the rail read it at render, and
-  the identity page passes its own row (`identity`) so a switch
+  The avatar and its title show what followers see: the resolved alias
+  and image from the `HighWire.SSB.Profile` read model, with the local
+  label in parentheses after the name — the label is this install's
+  private nickname for the key, not something a follower could see.
+  The rail reads the registry and the read model at render, so pages
+  that cannot change identity while mounted need no extra inputs; the
+  identity page passes its own row (`identity`) carrying the
+  presentation it just resolved, so a profile landing or a switch
   updates the avatar in place. With no identity yet (first run,
   import pending) the link simply does not render.
   """
@@ -23,7 +29,7 @@ defmodule HighWireWeb.Components.Nav do
     endpoint: HighWireWeb.Endpoint,
     statics: ~w(assets fonts images favicon.ico robots.txt)
 
-  alias HighWire.SSB.{Identities, Network}
+  alias HighWire.SSB.{Identities, Network, Profile}
   alias HighWireWeb.Components.Avatar
 
   @doc """
@@ -39,7 +45,7 @@ defmodule HighWireWeb.Components.Nav do
   attr :identity, :map,
     default: nil,
     doc:
-      "The active identity's public row. Pages that can change identity while mounted (the identity page) pass it so the avatar updates in place; everyone else omits it and the rail reads the registry at render."
+      "The active identity's public row. The identity page passes it — carrying the resolved name and image — so the avatar and title update in place; everyone else omits it and the rail reads the registry and the Profile read model at render."
 
   slot :inner_block, doc: "Rail content below the header"
 
@@ -49,6 +55,14 @@ defmodule HighWireWeb.Components.Nav do
     ~H"""
     <aside class="flex w-56 min-w-0 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-edge bg-panel">
       <div class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4">
+        <.link
+          navigate="/"
+          title="Timeline"
+          aria-label="Timeline"
+          class="flex items-center text-paper"
+        >
+          <img src={~p"/images/highwire-crab-mark.svg"} alt="" class="h-7 w-7" />
+        </.link>
         <div class="flex items-center gap-2">
           <.link
             :if={@identity}
@@ -57,25 +71,22 @@ defmodule HighWireWeb.Components.Nav do
             aria-label="Identity"
             class="block transition hover:opacity-80"
           >
-            <Avatar.avatar id={@identity["id"]} size={20} />
+            <Avatar.avatar
+              id={@identity["id"]}
+              size={20}
+              image={identity_image(@identity)}
+              rev={Profile.rev()}
+            />
           </.link>
           <.link
-            navigate="/"
-            title="Timeline"
-            aria-label="Timeline"
-            class="flex items-center text-paper"
+            navigate="/settings"
+            title="Settings"
+            aria-label="Settings"
+            class="text-dim transition hover:text-paper"
           >
-            <img src={~p"/images/highwire-crab-mark.svg"} alt="" class="h-7 w-7" />
+            <.gear />
           </.link>
         </div>
-        <.link
-          navigate="/settings"
-          title="Settings"
-          aria-label="Settings"
-          class="text-dim transition hover:text-paper"
-        >
-          <.gear />
-        </.link>
       </div>
       {render_slot(@inner_block)}
       <.link
@@ -143,10 +154,23 @@ defmodule HighWireWeb.Components.Nav do
     """
   end
 
-  defp identity_title(%{"label" => label}) when is_binary(label) and label != "",
-    do: "You are #{label} — click to manage identities"
+  # The name leads — it is what a follower of this feed sees — and the
+  # local label rides in parentheses after it, where only this install
+  # ever reads it. Rows the identity page passes carry the resolution
+  # it just received; everyone else resolves from the read model here.
+  defp identity_title(%{"name" => name, "label" => label})
+       when is_binary(name) and is_binary(label) and label != "",
+       do: "You are #{name} (#{label}) — click to manage identities"
+
+  defp identity_title(%{"id" => id, "label" => label})
+       when is_binary(label) and label != "",
+       do: "You are #{Profile.display_name(id)} (#{label}) — click to manage identities"
 
   defp identity_title(_identity), do: "Identity — click to manage"
+
+  defp identity_image(%{"id" => _id, "image" => image}) when is_binary(image), do: image
+  defp identity_image(%{"id" => id}), do: Profile.image(id)
+  defp identity_image(_identity), do: nil
 
   defp gear(assigns) do
     ~H"""
