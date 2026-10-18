@@ -45,12 +45,15 @@ defmodule HighWireWeb.TimelineLiveTest do
 
   test "the rail shows Who to follow when a payload carries suggestions", %{conn: conn} do
     {:ok, view, html} = live(conn, "/")
-    refute html =~ "Who to follow"
+    # the section keeps its heading when there is nothing to offer yet
+    assert html =~ "Who to follow"
+    assert html =~ "No suggestions yet"
 
     row = %{"id" => "@stranger=.ed25519", "activity" => 3, "followers" => 2}
     html = notify(view, %{feed_payload([]) | suggestions: [row]})
 
     assert html =~ "Who to follow"
+    refute html =~ "No suggestions yet"
     assert html =~ "2 followers · 3 messages"
     # With no profile loaded the name falls back to the shortened id,
     # and the row still links to the full one.

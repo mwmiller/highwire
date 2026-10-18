@@ -792,13 +792,13 @@ defmodule HighWireWeb.TimelineLive do
           </button>
         </div>
 
-        <div
-          :if={@suggestions != []}
-          class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint"
-        >
+        <div class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint">
           Who to follow
         </div>
-        <div :if={@suggestions != []} class="pb-4">
+        <div class="pb-4">
+          <p :if={@suggestions == []} class="px-4 py-1 text-xs italic text-faint">
+            No suggestions yet — follow a profile and its regulars appear here.
+          </p>
           <.link
             :for={s <- @suggestions}
             navigate={profile_href(s["id"])}
