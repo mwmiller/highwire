@@ -1,12 +1,19 @@
 defmodule HighWireWeb.Components.Nav do
   @moduledoc """
-  The shared left rail: the crab mark (linking to the timeline) with
-  the settings gear beside it, and — pinned to the bottom — the current
-  network badge, which links to the network page (`/network`) — the
-  general place to manage dialing and the network profile. Pages add
-  their own content to the rail through the default slot; pages that
-  pass none get the same wide frame, so the column never jumps between
-  pages.
+  The shared left rail: the current identity's avatar (linking to the
+  identity page, `/identity`) beside the crab mark (linking to the
+  timeline), the settings gear at the other end, and — pinned to the
+  bottom — the current network badge, which links to the network page
+  (`/network`) — the general place to manage dialing and the network
+  profile. Pages add their own content to the rail through the default
+  slot; pages that pass none get the same wide frame, so the column
+  never jumps between pages.
+
+  The avatar comes from the identity registry: pages that cannot
+  change identity while mounted let the rail read it at render, and
+  the identity page passes its own row (`identity`) so a switch
+  updates the avatar in place. With no identity yet (first run,
+  import pending) the link simply does not render.
   """
 
   use Phoenix.Component
@@ -16,7 +23,8 @@ defmodule HighWireWeb.Components.Nav do
     endpoint: HighWireWeb.Endpoint,
     statics: ~w(assets fonts images favicon.ico robots.txt)
 
-  alias HighWire.SSB.Network
+  alias HighWire.SSB.{Identities, Network}
+  alias HighWireWeb.Components.Avatar
 
   @doc """
   Renders the rail frame. Anything given as content is placed below the
@@ -27,20 +35,39 @@ defmodule HighWireWeb.Components.Nav do
   replays its flare whenever it changes.
   """
   attr :gossip, :map, default: %{connected: 0, pulse: 0}, doc: "live gossip state"
+
+  attr :identity, :map,
+    default: nil,
+    doc:
+      "The active identity's public row. Pages that can change identity while mounted (the identity page) pass it so the avatar updates in place; everyone else omits it and the rail reads the registry at render."
+
   slot :inner_block, doc: "Rail content below the header"
 
   def rail(assigns) do
+    assigns = assign(assigns, :identity, assigns.identity || Identities.active())
+
     ~H"""
     <aside class="flex w-56 min-w-0 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-edge bg-panel">
       <div class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4">
-        <.link
-          navigate="/"
-          title="Timeline"
-          aria-label="Timeline"
-          class="flex items-center text-paper"
-        >
-          <img src={~p"/images/highwire-crab-mark.svg"} alt="" class="h-7 w-7" />
-        </.link>
+        <div class="flex items-center gap-2">
+          <.link
+            :if={@identity}
+            navigate="/identity"
+            title={identity_title(@identity)}
+            aria-label="Identity"
+            class="block transition hover:opacity-80"
+          >
+            <Avatar.avatar id={@identity["id"]} size={20} />
+          </.link>
+          <.link
+            navigate="/"
+            title="Timeline"
+            aria-label="Timeline"
+            class="flex items-center text-paper"
+          >
+            <img src={~p"/images/highwire-crab-mark.svg"} alt="" class="h-7 w-7" />
+          </.link>
+        </div>
         <.link
           navigate="/settings"
           title="Settings"
@@ -115,6 +142,11 @@ defmodule HighWireWeb.Components.Nav do
     </.link>
     """
   end
+
+  defp identity_title(%{"label" => label}) when is_binary(label) and label != "",
+    do: "You are #{label} — click to manage identities"
+
+  defp identity_title(_identity), do: "Identity — click to manage"
 
   defp gear(assigns) do
     ~H"""
