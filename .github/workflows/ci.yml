@@ -19,6 +19,11 @@ jobs:
       - run: mix local.hex --force && mix local.rebar --force
       - run: mix deps.get
 
+      # The engine must build from the locked dep. Tests run with :ssb
+      # off, so nothing else would catch a broken engine bump until a
+      # release build.
+      - run: mix engine.build
+
       # format --check-formatted, credo --strict, compile
       # --warnings-as-errors, test
       - run: mix precommit
