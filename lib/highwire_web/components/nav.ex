@@ -61,7 +61,7 @@ defmodule HighWireWeb.Components.Nav do
           aria-label="Timeline"
           class="flex items-center text-paper"
         >
-          <img src={~p"/images/highwire-crab-mark.svg"} alt="" class="h-7 w-7" />
+          <img src={~p"/images/highwire-mark.png"} alt="" class="h-7 w-7 rounded" />
         </.link>
         <div class="flex items-center gap-2">
           <.link

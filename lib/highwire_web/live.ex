@@ -23,7 +23,7 @@ defmodule HighWireWeb.Live do
 
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-3xl p-6">
-          <img src={~p"/images/highwire-crab.svg"} alt="" class="mt-2 h-32 w-32 rounded-2xl" />
+          <img src={~p"/images/highwire-mark.png"} alt="" class="mt-2 h-32 w-32 rounded-2xl" />
           <h1 class="mt-4 text-4xl font-bold tracking-tight">HighWire</h1>
           <p class="mt-2 text-lg text-sub">
             A local-first social network on Secure Scuttlebutt — catenary's

@@ -74,7 +74,7 @@ defmodule HighWireWeb.ImportLive do
         <div class="w-full max-w-xl">
           <div :if={@mode == :import_pending} class="space-y-5">
             <div>
-              <img src={~p"/images/highwire-crab.svg"} alt="" class="h-16 w-16 rounded-2xl" />
+              <img src={~p"/images/highwire-mark.png"} alt="" class="h-16 w-16 rounded-2xl" />
               <h1 class="mt-4 text-2xl font-bold text-paper">Bring your old feed along</h1>
               <p class="mt-2 text-sm text-sub">
                 HighWire found an existing Secure Scuttlebutt store from another client.
