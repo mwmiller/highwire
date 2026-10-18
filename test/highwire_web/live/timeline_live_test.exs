@@ -47,7 +47,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     {:ok, view, html} = live(conn, "/")
     # the section keeps its heading when there is nothing to offer yet
     assert html =~ "Whom to follow"
-    assert html =~ "No suggestions yet"
+    assert html =~ "Friend-of-friend suggestions will appear here"
 
     row = %{"id" => "@stranger=.ed25519", "followers" => 2}
     html = notify(view, %{feed_payload([]) | suggestions: [row]})

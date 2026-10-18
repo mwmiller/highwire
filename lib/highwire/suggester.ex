@@ -14,6 +14,10 @@ defmodule HighWire.Suggester do
   changes the follow list, which is exactly the event that regenerates
   the list. The cached rows are loaded at startup, so the rail shows
   last-known suggestions while the first ranking runs.
+
+  To provide variety without delaying the UI, each regeneration produces
+  two candidate sets: the first is served immediately, the second is
+  kept in reserve and served on the next explicit refresh.
   """
 
   use GenServer
@@ -30,11 +34,18 @@ defmodule HighWire.Suggester do
   @doc "The current suggestion rows — a cheap read for rendering."
   @spec get_suggestions(GenServer.server()) :: [map()]
   def get_suggestions(server \\ __MODULE__) do
-    # A missing Suggester must never take the feed down with it — an
-    # empty rail is the worst case.
     case GenServer.whereis(server) do
       nil -> []
       pid -> GenServer.call(pid, :get_suggestions)
+    end
+  end
+
+  @doc "Request a fresh shuffle of suggestions using the current inputs."
+  @spec refresh(GenServer.server()) :: :ok
+  def refresh(server \\ __MODULE__) do
+    case GenServer.whereis(server) do
+      nil -> :ok
+      pid -> GenServer.cast(pid, :refresh)
     end
   end
 
@@ -64,52 +75,71 @@ defmodule HighWire.Suggester do
     {:ok,
      %{
        rows: load_cache(cache),
+       next_rows: [],
        cache_path: cache,
        ranked: nil,
        pending: nil,
-       task_ref: nil
+       task_ref: nil,
+       wants_refresh: false
      }}
   end
 
   @impl true
-  def handle_call(:get_suggestions, _from, state), do: {:reply, state.rows, state}
+  def handle_call(:get_suggestions, _from, state) do
+    {:reply, state.rows, %{state | rows: state.next_rows, next_rows: []}}
+  end
 
   @impl true
   def handle_cast({:inputs, inputs}, state) do
-    {:noreply, maybe_rank(%{state | pending: inputs})}
+    {:noreply, maybe_rank(%{state | pending: inputs, wants_refresh: false})}
   end
 
-  # The ranking task finished; it has already written the disk cache.
   @impl true
-  def handle_info({ref, rows}, %{task_ref: ref} = state) when is_list(rows) do
-    Process.demonitor(ref, [:flush])
-    {:noreply, maybe_rank(%{state | rows: rows, task_ref: nil})}
+  def handle_cast(:refresh, state) do
+    if state.task_ref do
+      {:noreply, %{state | wants_refresh: true}}
+    else
+      {:noreply, maybe_rank(%{state | pending: state.ranked, wants_refresh: true})}
+    end
   end
 
-  # The ranking task died (crash or kill): keep the rows we have and let
-  # the next input change retry.
+  @impl true
+  def handle_info({ref, {rows1, rows2}}, %{task_ref: ref} = state)
+      when is_list(rows1) and is_list(rows2) do
+    Process.demonitor(ref, [:flush])
+    cache = state.cache_path
+    save_cache(cache, rows1)
+
+    rows_now = if state.rows == [], do: rows1, else: state.rows
+    next_now = if state.rows == [], do: rows2, else: rows1
+
+    new_state =
+      %{state | task_ref: nil, rows: rows_now, next_rows: next_now, wants_refresh: false}
+      |> maybe_rank()
+
+    {:noreply, new_state}
+  end
+
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{task_ref: ref} = state) do
     Logger.debug("suggester: ranking failed: #{inspect(reason)}")
-    {:noreply, %{state | task_ref: nil}}
+    {:noreply, %{state | task_ref: nil, wants_refresh: false} |> maybe_rank()}
   end
 
   defp maybe_rank(%{task_ref: ref} = state) when is_reference(ref), do: state
   defp maybe_rank(%{pending: nil} = state), do: state
 
-  # Identical to what is already ranked — nothing to do.
-  defp maybe_rank(%{pending: inputs, ranked: inputs} = state), do: %{state | pending: nil}
+  defp maybe_rank(%{pending: inputs, ranked: inputs, wants_refresh: false} = state),
+    do: %{state | pending: nil}
 
   defp maybe_rank(%{pending: {contact_msgs, follows, self_id} = inputs} = state) do
-    cache = state.cache_path
-
     task =
       Task.Supervisor.async_nolink(HighWire.TaskSupervisor, fn ->
-        rows = Suggest.rank(contact_msgs, follows, self_id)
-        save_cache(cache, rows)
-        rows
+        rows1 = Suggest.rank(contact_msgs, follows, self_id, shuffle: true)
+        rows2 = Suggest.rank(contact_msgs, follows, self_id, shuffle: true)
+        {rows1, rows2}
       end)
 
-    %{state | pending: nil, ranked: inputs, task_ref: task.ref}
+    %{state | pending: nil, ranked: inputs, task_ref: task.ref, wants_refresh: false}
   end
 
   defp load_cache(path) do

@@ -4,13 +4,10 @@ defmodule HighWire.SSB.Suggest do
   endorsement from the store-wide contact graph.
 
   Discovery runs off the contact drain, not the timeline window. The
-  window only holds messages from feeds already followed (plus self),
-  so ranking window authors and then excluding follows leaves an empty
-  pool by construction — it can never surface anyone new. The contact
-  graph can: a candidate is any feed someone we follow follows, scored
-  by how many of the people we follow endorse it. That social proof is
-  what makes a suggestion worth acting on, and it works against any
-  engine. (The engine has no `stats.whoToFollow`: the call answers
+  contact graph can: a candidate is any feed someone we follow follows,
+  scored by how many of the people we follow endorse it. That social
+  proof is what makes a suggestion worth acting on, and it works against
+  any engine. (The engine has no `stats.whoToFollow`: the call answers
   "method not found", so ranking lives here against the drain.)
 
   Each row is a plain string-keyed map — `{id, followers}` — the shape
@@ -29,16 +26,13 @@ defmodule HighWire.SSB.Suggest do
 
   Candidates are feeds we do not follow, endorsed by at least one feed
   we do follow (friend-of-friend); self and already-followed feeds never
-  appear. Endorsements only count from feeds we follow — an endorsement
-  from ourselves, or from an inbound follower we do not follow, is not a
-  reason to follow someone. Sorted by endorsement (how many of the feeds
-  we follow follow it) desc, then total followers desc, then id, so the
-  list only moves when the data does.
+  appear. Endorsements only count from feeds we follow. Sorted by
+  endorsement desc, then total followers desc, then id for
+  determinism; the final list is shuffled by default so the rail
+  surfaces a different slice across regenerations.
   """
-  @spec rank([map()], [String.t()], String.t() | nil) :: [map()]
-  def rank(contact_msgs, follows, self_id) do
-    # The set of feeds whose endorsements carry weight: the ones we
-    # follow. Self is deliberately left out of it.
+  @spec rank([map()], [String.t()], String.t() | nil, keyword()) :: [map()]
+  def rank(contact_msgs, follows, self_id, opts \\ []) do
     endorsers_of_followed =
       follows
       |> Enum.filter(&is_binary/1)
@@ -46,11 +40,6 @@ defmodule HighWire.SSB.Suggest do
 
     {endorsers, followers} = graph(contact_msgs)
 
-    # An endorsement only counts when it comes from a feed we follow —
-    # a crowd of strangers vouching for a feed carries no weight here —
-    # so a candidate qualifies on the strength of those endorsements
-    # alone, never on the size of its total follower set. Candidates we
-    # already follow (and self) are dropped outright.
     endorsers
     |> Map.reject(fn {id, _} -> id == self_id or MapSet.member?(endorsers_of_followed, id) end)
     |> Enum.map(fn {id, set} ->
@@ -64,15 +53,19 @@ defmodule HighWire.SSB.Suggest do
     end)
     |> Enum.filter(fn s -> s["endorsement"] > 0 end)
     |> Enum.sort_by(fn s -> {-s["endorsement"], -s["followers"], s["id"]} end)
-    |> Enum.map(&Map.take(&1, ["id", "followers"]))
+    |> maybe_shuffle(opts)
     |> Enum.take(@limit)
+    |> Enum.map(&Map.take(&1, ["id", "followers"]))
   end
 
-  # One follower per distinct feed that said `following: true` — a
-  # follow/unfollow/follow churn must not count triple, and `false` (or
-  # a missing field) is not a follow at all. `endorsers` maps each
-  # contact to the set of feeds following it; `followers` is that set's
-  # size — the store-wide follower count.
+  defp maybe_shuffle(list, opts) do
+    if Keyword.get(opts, :shuffle, true) do
+      Enum.shuffle(list)
+    else
+      list
+    end
+  end
+
   defp graph(contact_msgs) do
     g =
       contact_msgs
@@ -94,8 +87,6 @@ defmodule HighWire.SSB.Suggest do
   defp author(%{"value" => %{"author" => id}}) when is_binary(id), do: id
   defp author(_msg), do: nil
 
-  # Encrypted private messages keep their content as a string, so a row
-  # of that shape can never read as a follow.
   defp content(%{"value" => %{"content" => c}}) when is_map(c), do: c
   defp content(_msg), do: %{}
 end

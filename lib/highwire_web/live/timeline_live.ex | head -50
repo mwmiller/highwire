@@ -1,0 +1,36 @@
+defmodule HighWireWeb.TimelineLive do
+  @moduledoc false
+  use HighWireWeb, :live_view
+
+  alias HighWire.{
+    Identities,
+    SSB
+  }
+
+  alias HighWire.SSB.{Ident, Profile}
+  alias HighWireWeb.Components.{Avatar, Markers, Nav}
+  alias HighWireWeb.Live.Components.{Card, Compose, Thread}
+  alias HighWireWeb.TimelineStream
+
+  import HighWireWeb.LiveHelpers
+  import HighWireWeb.Live.Profile, only: [profile_href: 1, image_of: 2]
+
+  @empty_payload %{
+    feed: [],
+    messages: %{},
+    posts: %{},
+    likes: %{},
+    follows: %{},
+    contacts: [],
+    suggestions: [],
+    authors: MapSet.new(),
+    blob_rev: 0,
+    index: %{}
+  }
+
+  @impl true
+  def mount(_params, _session, socket) do
+    ...
+  end
+  ...
+end

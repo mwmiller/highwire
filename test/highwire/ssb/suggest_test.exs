@@ -31,7 +31,9 @@ defmodule HighWire.SSB.SuggestTest do
       follow(@stranger, @c)
     ]
 
-    assert Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me) == [
+    assert Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me,
+             shuffle: false
+           ) == [
              %{"id" => @a, "followers" => 2},
              %{"id" => @b, "followers" => 1}
            ]
@@ -80,7 +82,7 @@ defmodule HighWire.SSB.SuggestTest do
     follows = [@me, "@xxx=.ed25519", "@yyy=.ed25519", "@zzz=.ed25519"]
 
     assert [%{"id" => @a}, %{"id" => @b}] =
-             Suggest.rank(contact_msgs, follows, @me)
+             Suggest.rank(contact_msgs, follows, @me, shuffle: false)
              |> Enum.map(&Map.take(&1, ["id"]))
   end
 
@@ -94,7 +96,9 @@ defmodule HighWire.SSB.SuggestTest do
 
     # Equal endorsement; @c leads on followers, the rest hold id order.
     assert [%{"id" => @c}, %{"id" => @a}, %{"id" => @b}] =
-             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me)
+             Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me,
+               shuffle: false
+             )
              |> Enum.map(&Map.take(&1, ["id"]))
   end
 

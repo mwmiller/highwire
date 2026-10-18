@@ -49,9 +49,9 @@ config :highwire, HighWireWeb.Endpoint,
 config :highwire, HighWireWeb.Endpoint,
   live_reload: [
     patterns: [
-      ~r"priv/static/.*(js|css|png|jpeg|jpg|gif|svg)$",
-      ~r"lib/highwire_web/(live|views)/.*(ex)$",
-      ~r"lib/highwire_web/templates/.*(eex)$"
+      ~r"priv/static/.*(js|css|png|jpeg|jpg|gif|svg)",
+      ~r"lib/highwire_web/(live|views)/.*(ex)",
+      ~r"lib/highwire_web/templates/.*(eex)"
     ]
   ]
 

@@ -797,7 +797,7 @@ defmodule HighWireWeb.TimelineLive do
         </div>
         <div class="pb-4">
           <p :if={@suggestions == []} class="px-4 py-1 text-xs italic text-faint">
-            No suggestions yet — follow a profile and its regulars appear here.
+            Friend-of-friend suggestions will appear here.
           </p>
           <.link
             :for={s <- @suggestions}
