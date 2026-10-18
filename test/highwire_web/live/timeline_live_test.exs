@@ -61,6 +61,19 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ ~s(href="/profile?id=%40stranger%3D.ed25519")
   end
 
+  test "the rail offers another set", %{conn: conn} do
+    {:ok, view, html} = live(conn, "/")
+
+    # Present whether or not a set is loaded yet — an empty rail can
+    # still ask for one.
+    assert html =~ "Show another set"
+
+    # The click hands off to the Suggester off-process; the view keeps
+    # rendering either way.
+    html = element(view, ~s(button[phx-click="refresh-suggestions"])) |> render_click()
+    assert html =~ "Whom to follow"
+  end
+
   test "the contacts rail caps the list and offers to expand it", %{conn: conn} do
     follows = for i <- 1..20, do: "@contact#{i}:.ed25519"
     # the draw HighWire.Contacts would hold for this list: seven of the twenty

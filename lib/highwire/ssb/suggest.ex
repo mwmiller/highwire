@@ -21,18 +21,46 @@ defmodule HighWire.SSB.Suggest do
   # (which caps at 8) fits the rail without pushing it off-screen.
   @limit 5
 
+  # The rail draws its five rows from the top of the ranking, shuffled,
+  # so every regeneration surfaces a different slice without ever
+  # offering a candidate the graph barely vouches for. The window is
+  # the variety knob: @limit rows drawn from @pool candidates is
+  # @pool-choose-@limit orderings, far more than a session's worth of
+  # refreshes.
+  @pool 50
+
   @doc """
-  Rank the store's contact graph into suggestion rows.
+  Rank the store's contact graph into one set of suggestion rows.
 
   Candidates are feeds we do not follow, endorsed by at least one feed
   we do follow (friend-of-friend); self and already-followed feeds never
   appear. Endorsements only count from feeds we follow. Sorted by
-  endorsement desc, then total followers desc, then id for
-  determinism; the final list is shuffled by default so the rail
-  surfaces a different slice across regenerations.
+  endorsement desc, then total followers desc, then id, and the top of
+  that ordering is shuffled and drawn from — pass `shuffle: false` for
+  the raw ranking.
   """
   @spec rank([map()], [String.t()], String.t() | nil, keyword()) :: [map()]
   def rank(contact_msgs, follows, self_id, opts \\ []) do
+    contact_msgs
+    |> candidates(follows, self_id)
+    |> sample(opts)
+  end
+
+  @doc """
+  Two independent sets from a single pass over the graph.
+
+  One graph pass is the expensive part (the store's whole contact
+  drain), so both sets share it and only the draw differs — this is
+  what lets the sidebar serve one set now and hold the second in
+  reserve for the next refresh at no extra cost.
+  """
+  @spec sets([map()], [String.t()], String.t() | nil, keyword()) :: {[map()], [map()]}
+  def sets(contact_msgs, follows, self_id, opts \\ []) do
+    pool = candidates(contact_msgs, follows, self_id)
+    {sample(pool, opts), sample(pool, opts)}
+  end
+
+  defp candidates(contact_msgs, follows, self_id) do
     endorsers_of_followed =
       follows
       |> Enum.filter(&is_binary/1)
@@ -53,6 +81,11 @@ defmodule HighWire.SSB.Suggest do
     end)
     |> Enum.filter(fn s -> s["endorsement"] > 0 end)
     |> Enum.sort_by(fn s -> {-s["endorsement"], -s["followers"], s["id"]} end)
+    |> Enum.take(@pool)
+  end
+
+  defp sample(pool, opts) do
+    pool
     |> maybe_shuffle(opts)
     |> Enum.take(@limit)
     |> Enum.map(&Map.take(&1, ["id", "followers"]))

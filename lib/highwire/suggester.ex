@@ -1,6 +1,6 @@
 defmodule HighWire.Suggester do
   @moduledoc """
-  Owns the \"Whom to follow\" ranking, its disk cache, and the cache's
+  Owns the "Whom to follow" ranking, its disk cache, and the cache's
   lifecycle — kept entirely off the Timeline process.
 
   Timeline hands over input snapshots (`contact_msgs`, `follows`,
@@ -15,9 +15,14 @@ defmodule HighWire.Suggester do
   the list. The cached rows are loaded at startup, so the rail shows
   last-known suggestions while the first ranking runs.
 
-  To provide variety without delaying the UI, each regeneration produces
-  two candidate sets: the first is served immediately, the second is
-  kept in reserve and served on the next explicit refresh.
+  Variety comes from a prefetched queue: each ranking produces two
+  sets. A changed input graph displays the first immediately and holds
+  the second in `ready`; `refresh/1` displays the next ready set
+  synchronously and, when the queue runs dry, kicks a background
+  ranking whose first set is displayed on completion — so a refresh
+  returns what exists now and pays for the next one off-process.
+  `get_suggestions/1` is a pure read: sets never rotate without a
+  refresh.
   """
 
   use GenServer
@@ -75,31 +80,44 @@ defmodule HighWire.Suggester do
     {:ok,
      %{
        rows: load_cache(cache),
-       next_rows: [],
+       ready: [],
        cache_path: cache,
        ranked: nil,
        pending: nil,
        task_ref: nil,
-       wants_refresh: false
+       task_serve: false,
+       wants_serve: false
      }}
   end
 
   @impl true
   def handle_call(:get_suggestions, _from, state) do
-    {:reply, state.rows, %{state | rows: state.next_rows, next_rows: []}}
+    {:reply, state.rows, state}
   end
 
   @impl true
   def handle_cast({:inputs, inputs}, state) do
-    {:noreply, maybe_rank(%{state | pending: inputs, wants_refresh: false})}
+    {:noreply, maybe_rank(%{state | pending: inputs})}
   end
 
   @impl true
   def handle_cast(:refresh, state) do
-    if state.task_ref do
-      {:noreply, %{state | wants_refresh: true}}
-    else
-      {:noreply, maybe_rank(%{state | pending: state.ranked, wants_refresh: true})}
+    case state.ready do
+      [set | rest] ->
+        # The reserve exists for exactly this: swap it in without
+        # waiting on any task, and start a background ranking so the
+        # next refresh has a fresh pair to draw from.
+        state = %{state | rows: set, ready: rest}
+        {:noreply, refill(state)}
+
+      [] ->
+        if state.task_ref do
+          # A ranking is already in flight — it becomes the set this
+          # refresh is owed when it lands.
+          {:noreply, %{state | wants_serve: true}}
+        else
+          {:noreply, rank_now(state, state.ranked)}
+        end
     end
   end
 
@@ -107,40 +125,69 @@ defmodule HighWire.Suggester do
   def handle_info({ref, {rows1, rows2}}, %{task_ref: ref} = state)
       when is_list(rows1) and is_list(rows2) do
     Process.demonitor(ref, [:flush])
-    cache = state.cache_path
-    save_cache(cache, rows1)
 
-    rows_now = if state.rows == [], do: rows1, else: state.rows
-    next_now = if state.rows == [], do: rows2, else: rows1
+    # A serving ranking displays its first set and holds the second in
+    # reserve; a refill only grows the reserve — the rail keeps what a
+    # refresh already put in front of the user.
+    {rows, ready} =
+      if state.task_serve or state.wants_serve do
+        {rows1, state.ready ++ [rows2]}
+      else
+        {state.rows, state.ready ++ [rows1, rows2]}
+      end
 
-    new_state =
-      %{state | task_ref: nil, rows: rows_now, next_rows: next_now, wants_refresh: false}
-      |> maybe_rank()
+    save_cache(state.cache_path, rows)
 
-    {:noreply, new_state}
+    state = %{
+      state
+      | task_ref: nil,
+        task_serve: false,
+        wants_serve: false,
+        rows: rows,
+        ready: ready
+    }
+
+    {:noreply, maybe_rank(state)}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{task_ref: ref} = state) do
     Logger.debug("suggester: ranking failed: #{inspect(reason)}")
-    {:noreply, %{state | task_ref: nil, wants_refresh: false} |> maybe_rank()}
+    # wants_serve survives: a refresh clicked during the failed task is
+    # still owed a set, and the next ranking that runs is asked to
+    # display it.
+    {:noreply, maybe_rank(%{state | task_ref: nil, task_serve: false})}
   end
 
+  # A pending snapshot is only ever set while a task is running (the
+  # casts serialize here), so draining it at completion picks up the
+  # newest inputs; a completed ranking always displays changed inputs.
   defp maybe_rank(%{task_ref: ref} = state) when is_reference(ref), do: state
   defp maybe_rank(%{pending: nil} = state), do: state
+  defp maybe_rank(%{pending: inputs, ranked: inputs} = state), do: %{state | pending: nil}
+  defp maybe_rank(%{pending: inputs} = state), do: rank_now(%{state | pending: nil}, inputs)
 
-  defp maybe_rank(%{pending: inputs, ranked: inputs, wants_refresh: false} = state),
-    do: %{state | pending: nil}
+  defp refill(%{task_ref: nil, ranked: inputs} = state), do: rank(state, inputs, serve: false)
+  defp refill(state), do: state
 
-  defp maybe_rank(%{pending: {contact_msgs, follows, self_id} = inputs} = state) do
+  defp rank_now(%{task_ref: nil} = state, {_contact_msgs, _follows, _self_id} = inputs) do
+    rank(state, inputs, serve: true)
+  end
+
+  defp rank_now(state, _inputs), do: state
+
+  defp rank(%{task_ref: nil} = state, {contact_msgs, follows, self_id} = inputs, opts)
+       when is_list(contact_msgs) and is_list(follows) do
     task =
       Task.Supervisor.async_nolink(HighWire.TaskSupervisor, fn ->
-        rows1 = Suggest.rank(contact_msgs, follows, self_id, shuffle: true)
-        rows2 = Suggest.rank(contact_msgs, follows, self_id, shuffle: true)
-        {rows1, rows2}
+        Suggest.sets(contact_msgs, follows, self_id, shuffle: true)
       end)
 
-    %{state | pending: nil, ranked: inputs, task_ref: task.ref, wants_refresh: false}
+    %{state | task_ref: task.ref, task_serve: Keyword.fetch!(opts, :serve), ranked: inputs}
   end
+
+  # Nothing ranked yet (boot before the first snapshot) or a task is
+  # already in flight — either way there is nothing to start.
+  defp rank(state, _inputs, _opts), do: state
 
   defp load_cache(path) do
     with {:ok, bin} <- File.read(path),

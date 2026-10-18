@@ -74,6 +74,14 @@ defmodule HighWire.Timeline do
   # network poll or the 7s UI ticks.
   @drain_refresh_ms :timer.minutes(13)
 
+  # After a rail refresh the Suggester may serve a prefetched set at
+  # once or finish a background ranking in a second or two; the sync
+  # samples just long enough to catch either without waiting for the
+  # 11s network poll (25 x 400ms), then gives up — the poll still
+  # delivers anything slower.
+  @suggestions_sync_ms 400
+  @suggestions_sync_tries 25
+
   def topic, do: @topic
 
   @doc "PubSub topic for gossip events — the live connection set changing."
@@ -86,6 +94,15 @@ defmodule HighWire.Timeline do
   def set_activity(pid, active?) when is_pid(pid) and is_boolean(active?) do
     GenServer.cast(__MODULE__, {:set_activity, pid, active?})
   end
+
+  @doc """
+  Ask the Suggester for a fresh "Whom to follow" set. Ranking is
+  off-process and its rows land asynchronously, so this arms a short
+  sync that rebroadcasts the payload when they move instead of
+  leaving the rail waiting for the next network poll.
+  """
+  @spec refresh_suggestions() :: :ok
+  def refresh_suggestions, do: GenServer.cast(__MODULE__, :refresh_suggestions)
 
   @spec snapshot() :: {:ok | :loading | :connecting | :disabled | :down, map()}
   def snapshot do
@@ -589,6 +606,11 @@ defmodule HighWire.Timeline do
     {:noreply, drop_active(state, pid)}
   end
 
+  def handle_cast(:refresh_suggestions, state) do
+    Suggester.refresh()
+    {:noreply, schedule_suggestions_sync(state, @suggestions_sync_tries)}
+  end
+
   def handle_cast({:ensure_profiles, ids}, state) do
     known = state |> Map.get(:messages, %{}) |> Map.get(:profiles, %{})
 
@@ -654,6 +676,16 @@ defmodule HighWire.Timeline do
     else
       state
     end
+  end
+
+  # The sync is a sampling loop, not a one-shot: it re-arms itself
+  # while the fresh rows have not landed and it still has window left.
+  defp schedule_suggestions_sync(state, tries) do
+    if active?(state) do
+      Process.send_after(self(), {:suggestions_sync, tries}, @suggestions_sync_ms)
+    end
+
+    state
   end
 
   defp schedule_reload(state, delay) do
@@ -1539,6 +1571,26 @@ defmodule HighWire.Timeline do
   end
 
   def handle_info({:network, _stale}, state), do: {:noreply, state}
+
+  # The rail refresh's short sync: same compare-and-rebroadcast as the
+  # network poll's suggestion read, polled briefly until the fresh rows
+  # land (or the window closes and the poll takes over).
+  def handle_info({:suggestions_sync, tries}, state) do
+    fresh = Suggester.get_suggestions()
+
+    cond do
+      fresh != Map.get(state, :suggestions, []) and state.status == :ok ->
+        payload = Map.put(state.messages, :suggestions, fresh)
+        broadcast_updated(payload)
+        {:noreply, %{state | suggestions: fresh, messages: payload}}
+
+      tries > 0 ->
+        {:noreply, schedule_suggestions_sync(state, tries - 1)}
+
+      true ->
+        {:noreply, state}
+    end
+  end
 
   def handle_info({:reload, gen}, %{gen: current} = state) when gen == current do
     state = %{state | reload_timer: nil}

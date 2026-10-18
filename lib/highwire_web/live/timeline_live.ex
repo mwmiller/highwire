@@ -330,6 +330,14 @@ defmodule HighWireWeb.TimelineLive do
     {:noreply, assign(socket, contacts_expanded: !socket.assigns.contacts_expanded)}
   end
 
+  def handle_event("refresh-suggestions", _params, socket) do
+    # Ranking runs in HighWire.Suggester off-process; the fresh rows
+    # come back over the next payload broadcast, so the click itself
+    # never touches socket state.
+    Timeline.refresh_suggestions()
+    {:noreply, socket}
+  end
+
   # The post row's OpenPost hook ignores clicks on links/buttons, so a
   # title click lands here: hand the raw message key to the viewer as an
   # url-safe base64 path segment (message keys contain "/").
@@ -813,6 +821,13 @@ defmodule HighWireWeb.TimelineLive do
             />
             <span class="min-w-0 truncate">{Ident.display_name(s["id"], @profiles)}</span>
           </.link>
+          <button
+            type="button"
+            phx-click="refresh-suggestions"
+            class="w-full px-4 py-1 text-left text-[11px] text-faint transition hover:bg-raised hover:text-paper"
+          >
+            Show another set
+          </button>
         </div>
       </Nav.rail>
 

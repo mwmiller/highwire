@@ -102,4 +102,37 @@ defmodule HighWire.SuggesterTest do
              ]
            end)
   end
+
+  test "refresh serves the reserved set, then a freshly ranked pair" do
+    cache = tmp_cache_path()
+    start(cache)
+
+    # Nine candidates behind one follower: the ranking draws five of
+    # nine, shuffled, so consecutive sets differ.
+    candidates = for i <- 1..9, do: "@f#{i}=.ed25519"
+    contacts = Enum.map(candidates, &follow(@xxx, &1))
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, :test_suggester)
+
+    assert wait_until(fn -> length(Suggester.get_suggestions(:test_suggester)) == 5 end)
+    first = Suggester.get_suggestions(:test_suggester)
+
+    # Reads are pure — the reserved set does not rotate in on its own.
+    assert Suggester.get_suggestions(:test_suggester) == first
+
+    # The first refresh swaps in the set the initial ranking held in
+    # reserve, without waiting on any task.
+    assert :ok = Suggester.refresh(:test_suggester)
+    assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) != first end)
+    second = Suggester.get_suggestions(:test_suggester)
+    assert length(second) == 5
+
+    # The queue is dry now, so the next refresh is owed a set from the
+    # background ranking it kicks; it lands the same way.
+    assert :ok = Suggester.refresh(:test_suggester)
+    assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) != second end)
+    third = Suggester.get_suggestions(:test_suggester)
+
+    assert Enum.uniq_by(third, & &1["id"]) |> length() == 5
+    assert Enum.all?(third, &(&1["id"] in candidates))
+  end
 end

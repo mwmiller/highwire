@@ -136,6 +136,29 @@ defmodule HighWire.SSB.SuggestTest do
     assert length(ranked) == 5
   end
 
+  test "sets/4 draws two sets off a single graph pass" do
+    contact_msgs =
+      for i <- 1..9 do
+        follow("@xxx=.ed25519", "@f#{i}=.ed25519")
+      end
+
+    {rows1, rows2} = Suggest.sets(contact_msgs, [@me, "@xxx=.ed25519"], @me)
+
+    # Both sets are renderable rail rows drawn from the candidates.
+    for rows <- [rows1, rows2] do
+      assert length(rows) == 5
+      assert Enum.all?(rows, &(Map.has_key?(&1, "id") and Map.has_key?(&1, "followers")))
+      assert Enum.uniq_by(rows, & &1["id"]) |> length() == 5
+    end
+
+    # The draw is the only difference: unshuffled, both sets are the
+    # same deterministic ranking rank/4 returns.
+    {ranked1, ranked2} = Suggest.sets(contact_msgs, [@me, "@xxx=.ed25519"], @me, shuffle: false)
+
+    assert ranked1 == ranked2
+    assert ranked1 == Suggest.rank(contact_msgs, [@me, "@xxx=.ed25519"], @me, shuffle: false)
+  end
+
   test "a store with nothing to suggest ranks nothing" do
     assert Suggest.rank([], [@me], @me) == []
   end
