@@ -6,6 +6,9 @@ defmodule HighWire.SSB.Client do
   `call/3` performs sync/async requests (one reply). `stream/3` opens a
   source stream; items arrive as `{HighWire.SSB.Client, req, {:item, term}}`
   messages to the subscriber, terminated by `:done` or `{:error, term}`.
+  `req` is unique across connections, not per connection, so a
+  subscriber holding streams from more than one of them can tell the
+  two apart.
 
   Authenticating with the account's own keypair makes the sidecar treat
   this connection as `owner` class (publish, createUserStream, …);
@@ -83,7 +86,14 @@ defmodule HighWire.SSB.Client do
        enc_nonce: en,
        dec_key: dk,
        dec_nonce: dn,
-       next_req: 1
+       # Req ids come from a VM-wide unique source rather than a counter
+       # starting at one. One subscriber listens on several connections
+       # at once (the Timeline runs the contact drain on a dedicated
+       # connection beside the main one) and dispatches these messages
+       # on req alone: two connections counting from the same first
+       # number hand the same handle to both streams, and the wrong
+       # handler swallows the other's items and `:done`.
+       next_req: System.unique_integer([:positive, :monotonic])
      }}
   end
 
