@@ -28,10 +28,14 @@ defmodule Mix.Tasks.Engine.Build do
 
   @impl Mix.Task
   def run(args) do
-    {opts, _argv, _errors} =
+    {opts, argv, _errors} =
       OptionParser.parse(args, strict: [profile: :string])
 
-    profile = Keyword.get(opts, :profile, @profile)
+    # The profile arrives positionally (`mix engine.build prod`, as the
+    # moduledoc promises) or as --profile. OptionParser's strict mode
+    # silently drops the positional form, so pick it up from argv;
+    # rebar_args/1 below raises on anything that is not default/prod.
+    profile = Keyword.get(opts, :profile) || List.first(argv) || @profile
     dep = Path.join(Mix.Project.deps_path(), to_string(@dep))
 
     unless File.dir?(dep) do
