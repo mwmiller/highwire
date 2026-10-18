@@ -1,13 +1,11 @@
 name: Release
 
-# Tag push → five native builds (no cross-compiling: each runner builds
+# Tag push → four native builds (no cross-compiling: each runner builds
 # its own Burrito backend with BURRITO_TARGET, so the enacl NIF links
 # against the host), bundles the Tauri shell around it, and attaches the
 # installers to the GitHub release for that tag.
 #
 #   macos-14       → HighWire.app + .dmg   (backend: aarch64-apple-darwin)
-#   macos-15-intel → HighWire.app + .dmg   (backend: x86_64-apple-darwin;
-#                    the last x86_64 macOS image on Actions, EOL Aug 2027)
 #   ubuntu-22.04     → .deb + .rpm + .AppImage (backend: x86_64-unknown-linux-gnu)
 #   ubuntu-22.04-arm → .deb + .rpm + .AppImage (backend: aarch64-unknown-linux-gnu)
 #   windows-2022   → NSIS -setup.exe       (backend: x86_64-pc-windows-msvc)

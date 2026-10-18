@@ -16,7 +16,6 @@ Grab an installer from the
 | Platform | Artifact |
 | --- | --- |
 | macOS (Apple Silicon) | `HighWire_<v>_aarch64.dmg` |
-| macOS (Intel) | `HighWire_<v>_x64.dmg` |
 | Debian/Ubuntu | `HighWire_<v>_amd64.deb` |
 | Fedora/openSUSE | `HighWire-<v>-1.x86_64.rpm` |
 | Other Linux | `HighWire_<v>_amd64.AppImage` |
@@ -66,8 +65,8 @@ tag-triggered release workflow (`.github/workflows/release.yml`).
 
 **Build and packaging**
 
-- Tag push runs five native builds on free public runners — macOS
-  (arm64 + Intel), Linux (x86_64 + ARM64), Windows — each bundling
+- Tag push runs four native builds on free public runners — macOS
+  (arm64), Linux (x86_64 + ARM64), Windows — each bundling
   its own Burrito backend, then publishes the installers to the
   GitHub release for that tag. The workflow is also runnable by hand
   (workflow_dispatch) as a build-only dry run.
@@ -76,8 +75,6 @@ tag-triggered release workflow (`.github/workflows/release.yml`).
   NIF at its own directory, keeping the engine self-contained on Linux
   and macOS whatever the host provides. Known gap: the Windows build
   still needs `sodium.dll` beside the backend at runtime.
-- The Intel macOS leg rides `macos-15-intel`, the last x86_64 image
-  on GitHub Actions (EOL Aug 2027).
 
 ## Data and identity
 
