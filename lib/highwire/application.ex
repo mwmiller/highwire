@@ -12,7 +12,8 @@ defmodule HighWire.Application do
     children =
       [
         HighWireWeb.Telemetry,
-        {Phoenix.PubSub, name: HighWire.PubSub}
+        {Phoenix.PubSub, name: HighWire.PubSub},
+        {Task.Supervisor, name: HighWire.TaskSupervisor}
       ] ++
         if Sidecar.enabled?() do
           [Sidecar]
@@ -20,6 +21,8 @@ defmodule HighWire.Application do
           []
         end ++
         [
+          HighWire.Suggester,
+          HighWire.Contacts,
           HighWire.Timeline,
           HighWireWeb.Endpoint
         ]

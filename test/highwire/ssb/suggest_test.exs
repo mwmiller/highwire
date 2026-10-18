@@ -7,6 +7,7 @@ defmodule HighWire.SSB.SuggestTest do
   @a "@aaa=.ed25519"
   @b "@bbb=.ed25519"
   @c "@ccc=.ed25519"
+  @stranger "@stranger=.ed25519"
 
   defp msg(key, author, opts \\ []) do
     content = Keyword.get(opts, :content, %{"type" => "post", "text" => "hi"})
@@ -19,74 +20,125 @@ defmodule HighWire.SSB.SuggestTest do
     msg("follow-#{from}-#{to}", from, content: content)
   end
 
-  test "ranks unfollowed authors by activity, with distinct follower counts" do
-    messages = [
-      msg("k1", @a),
-      msg("k2", @a),
-      msg("k3", @a),
-      msg("k4", @b),
-      msg("k5", @c),
-      msg("k6", @me)
-    ]
-
+  test "ranks friend-of-friend candidates by endorsement from the follows" do
     contact_msgs = [
+      # Two feeds we follow both endorse @a; only one endorses @b; @c is
+      # endorsed only by a stranger, so it never qualifies.
+      follow(@a, @c),
       follow("@xxx=.ed25519", @a),
       follow("@yyy=.ed25519", @a),
-      # A follow/unfollow/follow churn by the same feed is one follower.
-      follow("@yyy=.ed25519", @a, false),
-      follow("@yyy=.ed25519", @a),
-      # `following: false` is an unfollow, not a follower.
-      follow("@zzz=.ed25519", @c, false)
+      follow("@yyy=.ed25519", @b),
+      follow(@stranger, @c)
     ]
 
-    # @me (self) and @b (followed) never appear; @a leads on activity
-    # and carries two distinct followers; @c counts zero.
-    assert Suggest.rank(messages, contact_msgs, [@me, @b], @me) == [
-             %{"id" => @a, "activity" => 3, "followers" => 2},
-             %{"id" => @c, "activity" => 1, "followers" => 0}
+    assert Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me) == [
+             %{"id" => @a, "activity" => 0, "followers" => 2},
+             %{"id" => @b, "activity" => 0, "followers" => 1}
            ]
   end
 
-  test "a message with a string content (undecrypted) still counts for activity" do
-    messages = [msg("k1", @a, content: "%DLW...==")]
-
-    assert [%{"id" => @a, "activity" => 1, "followers" => 0}] =
-             Suggest.rank(messages, [], [], @me)
-  end
-
-  test "messages without a usable author or key never become rows" do
-    messages = [
-      %{"key" => "k1", "value" => %{"content" => %{}}},
-      %{"value" => %{"author" => @a, "content" => %{}}},
-      msg("k2", @a),
-      msg("k2", @a)
+  test "followed feeds and self are never suggested" do
+    contact_msgs = [
+      # @a endorses @b (which we follow) and @me (self); neither surfaces.
+      follow(@a, @b),
+      follow(@a, @me)
     ]
 
-    # The duplicate key collapses (the window overlaps streams); the
-    # authorless message is dropped; the keyless one still counts its
-    # author. Malformed input degrades, never crashes the rank.
-    assert [%{"id" => @a, "activity" => 2, "followers" => 0}] =
-             Suggest.rank(messages, [], [], @me)
+    assert Suggest.rank([], contact_msgs, [@me, @a, @b], @me) == []
   end
 
-  test "ties break on followers, then id — deterministically" do
-    messages = [msg("k1", @c), msg("k2", @a), msg("k3", @b)]
+  test "a follow/unfollow/follow churn is one endorser" do
+    contact_msgs = [
+      follow("@xxx=.ed25519", @a),
+      follow("@xxx=.ed25519", @a, false),
+      follow("@xxx=.ed25519", @a)
+    ]
 
-    contact_msgs = [follow("@xxx=.ed25519", @c)]
+    assert [%{"id" => @a, "activity" => 0, "followers" => 1}] =
+             Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519"], @me)
+  end
 
-    # Same activity, @c wins on followers; the rest hold id order.
-    assert [%{"id" => @c}, %{"id" => @a}, %{"id" => @b}] =
-             Suggest.rank(messages, contact_msgs, [@me], @me)
+  test "an unfollow (following: false) is not an endorsement" do
+    contact_msgs = [follow("@xxx=.ed25519", @a, false)]
+
+    assert Suggest.rank([], contact_msgs, [@me], @me) == []
+  end
+
+  test "window activity rides along for candidates that also appear there" do
+    window = [msg("k1", @a), msg("k2", @a), msg("k3", @stranger)]
+    contact_msgs = [follow("@xxx=.ed25519", @a)]
+
+    # @a carries its window activity; the window author we do not follow
+    # and that no followed feed endorses never surfaces.
+    assert [%{"id" => @a, "activity" => 2, "followers" => 1}] =
+             Suggest.rank(window, contact_msgs, [@me, "@xxx=.ed25519"], @me)
+  end
+
+  test "endorsement outranks raw follower count" do
+    contact_msgs = [
+      # @a: endorsed by two feeds we follow, one follower each way.
+      follow("@xxx=.ed25519", @a),
+      follow("@yyy=.ed25519", @a),
+      # @b: endorsed by one feed we follow, but followed by a crowd of
+      # strangers — popularity without a personal link ranks lower.
+      follow("@zzz=.ed25519", @b),
+      follow("@s1=.ed25519", @b),
+      follow("@s2=.ed25519", @b),
+      follow("@s3=.ed25519", @b)
+    ]
+
+    follows = [@me, "@xxx=.ed25519", "@yyy=.ed25519", "@zzz=.ed25519"]
+
+    assert [%{"id" => @a}, %{"id" => @b}] =
+             Suggest.rank([], contact_msgs, follows, @me)
              |> Enum.map(&Map.take(&1, ["id"]))
   end
 
+  test "ties break on followers, then id — deterministically" do
+    contact_msgs = [
+      follow("@xxx=.ed25519", @a),
+      follow("@xxx=.ed25519", @b),
+      follow("@xxx=.ed25519", @c),
+      follow("@yyy=.ed25519", @c)
+    ]
+
+    # Equal endorsement; @c leads on followers, the rest hold id order.
+    assert [%{"id" => @c}, %{"id" => @a}, %{"id" => @b}] =
+             Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519", "@yyy=.ed25519"], @me)
+             |> Enum.map(&Map.take(&1, ["id"]))
+  end
+
+  test "encrypted contact rows (string content) never become endorsements" do
+    contact_msgs = [
+      msg("enc", "@xxx=.ed25519", content: "%DLW...=="),
+      follow("@xxx=.ed25519", @a)
+    ]
+
+    # The undecryptable row is ignored; the real follow still endorses @a.
+    assert [%{"id" => @a, "activity" => 0, "followers" => 1}] =
+             Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519"], @me)
+  end
+
+  test "contact rows without a usable author or contact are dropped" do
+    contact_msgs = [
+      %{"key" => "k1", "value" => %{"content" => %{"following" => true, "contact" => @a}}},
+      %{"value" => %{"author" => "@xxx=.ed25519", "content" => %{"following" => true}}},
+      follow("@xxx=.ed25519", @a)
+    ]
+
+    # Malformed input degrades, never crashes the rank: @a's one valid
+    # endorsement stands.
+    assert [%{"id" => @a, "activity" => 0, "followers" => 1}] =
+             Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519"], @me)
+  end
+
   test "the list is capped so the rail stays a nudge" do
-    messages =
+    contact_msgs =
       for i <- 1..9 do
-        msg("k#{i}", "@f#{i}=.ed25519")
+        follow("@xxx=.ed25519", "@f#{i}=.ed25519")
       end
 
-    ranked = Suggest.rank(messages, [], [@me], @me)
+    ranked = Suggest.rank([], contact_msgs, [@me, "@xxx=.ed25519"], @me)
     assert length(ranked) == 5
   end
 

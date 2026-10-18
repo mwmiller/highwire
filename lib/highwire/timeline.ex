@@ -56,7 +56,9 @@ defmodule HighWire.Timeline do
   require Logger
 
   alias HighWire.Blob
-  alias HighWire.SSB.{Client, Keys, Profile, Sidecar, Suggest}
+  alias HighWire.Contacts
+  alias HighWire.SSB.{Client, Keys, Profile, Sidecar}
+  alias HighWire.Suggester
 
   @topic "timeline"
   @gossip "gossip"
@@ -428,7 +430,8 @@ defmodule HighWire.Timeline do
       self_id: nil,
       profiles: %{},
       blob_rev: 0,
-      suggestions: []
+      suggestions: [],
+      contacts: []
     }
   end
 
@@ -461,7 +464,9 @@ defmodule HighWire.Timeline do
       blob_timer: nil,
       blob_rev: 0,
       network: nil,
-      suggestions: [],
+      # Seeded from the Suggester's disk cache so the rail shows
+      # last-known rows immediately; the ranking process replaces them.
+      suggestions: Suggester.get_suggestions(),
       active: %{},
       gen: 0,
       network_timer: nil,
@@ -1376,6 +1381,18 @@ defmodule HighWire.Timeline do
     follows = if is_binary(state.self_id), do: Enum.uniq([state.self_id | others]), else: others
     state = %{state | follows: follows, contacts_primed?: true}
 
+    # A changed follow list is a new ranking input (and the moment that
+    # matters most: following a suggested feed should regenerate the
+    # list). Hand it off-process only once the contact graph is loaded —
+    # before that there is nothing to rank against.
+    if state.contact_msgs != [] do
+      Suggester.cast_inputs(state.acc, state.contact_msgs, state.follows, state.self_id)
+    end
+
+    # The rail's contacts are drawn by HighWire.Contacts, which re-draws
+    # only when this list actually moves — so feed it the candidates.
+    Contacts.cast_contacts(Enum.reject(follows, &(&1 == state.self_id)))
+
     if first? do
       if follows == [] do
         {:noreply, finalize(state)}
@@ -1493,22 +1510,19 @@ defmodule HighWire.Timeline do
     # Update peer meta with recency
     state = update_peer_recency(state, old_net, new_net)
 
+    # Suggestion rows are ranked off-process (HighWire.Suggester) and
+    # read back here; the rail only needs them when they actually move,
+    # so a fresh read that differs from the last payload rebroadcasts.
     old = Map.get(state, :suggestions, [])
+    fresh = Suggester.get_suggestions()
 
     state =
-      Map.put(
-        state,
-        :suggestions,
-        Suggest.rank(state.acc, state.contact_msgs, state.follows, state.self_id)
-      )
-
-    state =
-      if state.suggestions != old and state.status == :ok do
-        payload = Map.put(state.messages, :suggestions, state.suggestions)
+      if fresh != old and state.status == :ok do
+        payload = Map.put(state.messages, :suggestions, fresh)
         broadcast_updated(payload)
-        %{state | messages: payload}
+        %{state | suggestions: fresh, messages: payload}
       else
-        state
+        %{state | suggestions: fresh}
       end
 
     {:noreply, schedule_network(state, 11_003)}
@@ -1907,6 +1921,12 @@ defmodule HighWire.Timeline do
         last_drain_at: System.monotonic_time(:millisecond)
     }
 
+    # A refilled store-wide contact graph is a new ranking input. Hand it
+    # to the Suggester off-process; Timeline never ranks inline.
+    if state.contact_msgs != [] do
+      Suggester.cast_inputs(state.acc, state.contact_msgs, state.follows, state.self_id)
+    end
+
     if fresh != [] and state.status == :ok and map_size(state.pending) == 0 do
       {:noreply, finalize(state)}
     else
@@ -1976,7 +1996,8 @@ defmodule HighWire.Timeline do
       self_id: state.self_id,
       profiles: base,
       blob_rev: state.blob_rev,
-      suggestions: suggestions
+      suggestions: suggestions,
+      contacts: Contacts.get_contacts()
     }
 
     {payload, missing, base, post_refs}

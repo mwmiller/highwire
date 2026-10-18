@@ -24,6 +24,7 @@ defmodule HighWireWeb.TimelineLive do
   require Logger
 
   alias HighWire.Avatar, as: Ident
+  alias HighWire.Contacts
   alias HighWire.Markdown
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
@@ -60,16 +61,6 @@ defmodule HighWireWeb.TimelineLive do
   @page_retry_ms 1_000
   @page_retry_max_ms 30_000
 
-  # How many contacts the rail shows before it offers to expand. A full
-  # follows list can run to forty names, which scrolls the rail and
-  # buries "Who to follow" and the network badge under the fold.
-  @max_sidebar_contacts 8
-
-  # How often the collapsed rail steps its window along the alphabetized
-  # contacts, in milliseconds. Slow enough to read a face, fast enough
-  # that the rest of the follows drift past over a session.
-  @contacts_rotate_ms 6_000
-
   @empty_payload %{
     feed: [],
     messages: [],
@@ -93,23 +84,17 @@ defmodule HighWireWeb.TimelineLive do
         Process.send_after(self(), :peers_tick, 7_000)
       end
 
-    contacts_timer =
-      if connected?(socket) do
-        Process.send_after(self(), :contacts_rotate, @contacts_rotate_ms)
-      end
-
     {status, payload} = Timeline.snapshot()
 
     socket =
       socket
       |> assign(:page_title, "Timeline")
       |> assign(:status, status)
-      |> assign(:contacts_offset, initial_contacts_offset(payload))
       |> assign_payload(payload)
       |> assign(:peers, live_network(Timeline.network()))
       |> assign(q: "", expanded: MapSet.new(), view: :public)
       |> assign(contacts_expanded: false)
-      |> assign(max_sidebar_contacts: @max_sidebar_contacts)
+      |> assign(max_sidebar_contacts: Contacts.subset_size())
       |> assign(compose: "", compose_error: nil)
       |> assign(mention_suggestions: [])
       |> assign(paged: %{}, page_inflight: MapSet.new(), page_retries: %{})
@@ -122,7 +107,6 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(seen_keys: top_keys(Map.get(payload, :feed, [])))
       |> assign(:transfer, Timeline.transfer_status())
       |> assign(transfer_timer: nil)
-      |> assign(contacts_timer: contacts_timer)
       |> maybe_load_page()
       |> merge_paged()
 
@@ -174,21 +158,6 @@ defmodule HighWireWeb.TimelineLive do
     else
       {:noreply, socket}
     end
-  end
-
-  # The collapsed rail walks one step along the alphabetized contacts on
-  # a slow clock, so faces surface over time without the churn of a
-  # reshuffle on every payload. The roll is a ring: a step past the last
-  # contact wraps back to the top.
-  def handle_info(:contacts_rotate, socket) do
-    contacts = socket.assigns.all_contacts
-    offset = rotate_offset(socket.assigns.contacts_offset, length(contacts))
-
-    {:noreply,
-     socket
-     |> assign(:contacts_offset, offset)
-     |> assign(:sidebar_contacts, contact_window(contacts, offset))
-     |> schedule_contacts()}
   end
 
   # Cursor pages load off the render path: maybe_load_page/1 plants a
@@ -356,8 +325,8 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   def handle_event("toggle-contacts", _params, socket) do
-    # The collapsed window is already kept current by the rotate timer,
-    # so folding the full list away just re-shows it where it stands.
+    # The collapsed draw is held by HighWire.Contacts, so folding the
+    # full list away just re-shows that draw where it stands.
     {:noreply, assign(socket, contacts_expanded: !socket.assigns.contacts_expanded)}
   end
 
@@ -391,19 +360,15 @@ defmodule HighWireWeb.TimelineLive do
       {:noreply, socket}
     else
       send(self(), :peers_tick)
-      {:noreply, socket |> assign(:active, true) |> schedule_contacts()}
+      {:noreply, assign(socket, :active, true)}
     end
   end
 
   def handle_event("tab-inactive", _params, socket) do
     Timeline.set_activity(self(), false)
     if socket.assigns.peers_timer, do: Process.cancel_timer(socket.assigns.peers_timer)
-    if socket.assigns.contacts_timer, do: Process.cancel_timer(socket.assigns.contacts_timer)
 
-    {:noreply,
-     socket
-     |> assign(:active, false)
-     |> assign(peers_timer: nil, contacts_timer: nil)}
+    {:noreply, socket |> assign(:active, false) |> assign(peers_timer: nil)}
   end
 
   # The mention popup's candidates: follows first (already sorted as
@@ -413,21 +378,13 @@ defmodule HighWireWeb.TimelineLive do
   # never becomes a second feed.
   defp mention_candidates(socket, q) do
     profiles = Map.get(socket.assigns, :profiles, %{})
-    follows = Map.get(socket.assigns, :sidebar_contacts, [])
+    follows = Map.get(socket.assigns, :all_contacts, [])
 
     Mentions.candidates(q, follows ++ Map.keys(profiles), &Ident.display_name(&1, profiles))
   end
 
   defp schedule_peers(socket) do
     assign(socket, :peers_timer, Process.send_after(self(), :peers_tick, 7_000))
-  end
-
-  defp schedule_contacts(socket) do
-    assign(
-      socket,
-      :contacts_timer,
-      Process.send_after(self(), :contacts_rotate, @contacts_rotate_ms)
-    )
   end
 
   # The active tab's first page: fetched once the engine reports :ok,
@@ -643,9 +600,6 @@ defmodule HighWireWeb.TimelineLive do
   @doc false
   def max_tab_rows, do: @max_tab_rows
 
-  @doc false
-  def max_sidebar_contacts, do: @max_sidebar_contacts
-
   # Exponential backoff, capped, for retrying a page the engine failed to
   # return. The exponent is clamped too: past a handful of attempts the
   # delay is pinned at the cap anyway, and the counter keeps climbing for
@@ -664,37 +618,6 @@ defmodule HighWireWeb.TimelineLive do
   # for an abandoned view is dropped when its timer next fires.
   defp pending_page?(pending, view) do
     Enum.any?(pending, fn {pending_view, _resume} -> pending_view == view end)
-  end
-
-  # The rail opens at a random point in the alphabetized roll so it does
-  # not always lead with the same faces. A list that already fits never
-  # rotates, so its offset is meaningless and stays put.
-  @doc false
-  def initial_contacts_offset(%{follows: follows, self_id: self_id}) when is_list(follows) do
-    count = follows |> Enum.reject(&(&1 == self_id)) |> length()
-
-    if count > @max_sidebar_contacts, do: :rand.uniform(count) - 1, else: 0
-  end
-
-  def initial_contacts_offset(_payload), do: 0
-
-  # One step along the ring: past the last contact it wraps back to the
-  # top, so the rail keeps walking through the whole roll.
-  defp rotate_offset(_offset, count) when count <= @max_sidebar_contacts, do: 0
-  defp rotate_offset(offset, count), do: rem(offset + 1, count)
-
-  # The visible slice of the alphabetized contacts: a max-sized window
-  # starting at the offset, wrapping at the end. When the list already
-  # fits there is nothing to rotate and the whole roll shows in order.
-  @doc false
-  def contact_window(contacts, _offset) when length(contacts) <= @max_sidebar_contacts,
-    do: contacts
-
-  def contact_window(contacts, offset) when is_list(contacts) and is_integer(offset) do
-    contacts
-    |> Stream.cycle()
-    |> Stream.drop(rem(offset, length(contacts)))
-    |> Enum.take(@max_sidebar_contacts)
   end
 
   # Thread identity is the root key — a window row whose root never
@@ -1404,13 +1327,10 @@ defmodule HighWireWeb.TimelineLive do
       |> Enum.reject(&(&1 == payload.self_id))
       |> Enum.sort_by(&String.downcase(Ident.display_name(&1, profiles)))
 
-    # The collapsed rail is a sliding window over the alphabetized roll,
-    # stepped along by the rotate timer rather than reshuffled. Payloads
-    # arrive on every broadcast, so a per-payload shuffle churned the
-    # handful constantly; a stable window recomputed from the current
-    # offset holds still until the clock moves it. The expanded list
-    # stays the full alphabetical roll.
-    sidebar_contacts = contact_window(contacts, Map.get(socket.assigns, :contacts_offset, 0))
+    # The collapsed rail is a draw HighWire.Contacts holds until the
+    # follow list changes, so it never churns under a payload broadcast.
+    # The expanded list stays the full alphabetical roll.
+    sidebar_contacts = Map.get(payload, :contacts, [])
 
     socket
     |> assign(:feed, feed)

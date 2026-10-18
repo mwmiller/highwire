@@ -1,21 +1,25 @@
 defmodule HighWire.SSB.Suggest do
   @moduledoc """
-  "Who to follow": active feeds we do not follow, ranked by activity
-  with follower counts.
+  "Who to follow": feeds we do not follow, ranked by friend-of-friend
+  endorsement from the store-wide contact graph.
 
-  Computed from what the Timeline already has in hand — the window's
-  messages for recent activity, the store-wide contact drain for the
-  follower graph — so discovery works against any engine. (The engine
-  has no `stats.whoToFollow`: the call answers "method not found",
-  which is why the sidebar never filled in while the ranking lived
-  behind that RPC.)
+  Discovery runs off the contact drain, not the timeline window. The
+  window only holds messages from feeds already followed (plus self),
+  so ranking window authors and then excluding follows leaves an empty
+  pool by construction — it can never surface anyone new. The contact
+  graph can: a candidate is any feed someone we follow follows, scored
+  by how many of the people we follow endorse it. That social proof is
+  what makes a suggestion worth acting on, and it works against any
+  engine. (The engine has no `stats.whoToFollow`: the call answers
+  "method not found", so ranking lives here against the drain.)
 
   Each row is a plain string-keyed map — `{id, activity, followers}` —
   the shape the sidebar renders: the id keys the avatar and profile
-  link, activity is how many of the window's messages the feed wrote,
-  followers is how many distinct feeds in the store follow it. Rows
-  without a usable id are dropped so the sidebar never renders a dead
-  link.
+  link, followers is how many distinct feeds in the store follow it,
+  activity is how many of the window's messages the feed wrote (a light
+  "recently around" signal; zero for candidates outside the window).
+  Rows without a usable id are dropped so the sidebar never renders a
+  dead link.
   """
 
   # A sidebar is a nudge, not a directory — a few rows below Contacts
@@ -23,22 +27,78 @@ defmodule HighWire.SSB.Suggest do
   @limit 5
 
   @doc """
-  Rank `messages` (the Timeline's window, raw as the engine sent them)
-  into suggestion rows. `follows` and `self_id` never appear — you do
-  not follow yourself. Deterministic: activity desc, then follower
-  count, then id, so the list only moves when the data does.
+  Rank the store's contact graph into suggestion rows.
+
+  Candidates are feeds we do not follow, endorsed by at least one feed
+  we do follow (friend-of-friend); self and already-followed feeds never
+  appear. Endorsements only count from feeds we follow — an endorsement
+  from ourselves, or from an inbound follower we do not follow, is not a
+  reason to follow someone. Sorted by endorsement (how many of the feeds
+  we follow follow it) desc, then total followers desc, then id, so the
+  list only moves when the data does.
   """
   @spec rank([map()], [map()], [String.t()], String.t() | nil) :: [map()]
-  def rank(messages, contact_msgs, follows, self_id) do
-    excluded =
+  def rank(window, contact_msgs, follows, self_id) do
+    # The set of feeds whose endorsements carry weight: the ones we
+    # follow. Self is deliberately left out of it.
+    endorsers_of_followed =
       follows
       |> Enum.filter(&is_binary/1)
       |> MapSet.new()
-      |> MapSet.put(self_id)
 
-    followers = follower_counts(contact_msgs)
+    {endorsers, followers} = graph(contact_msgs)
+    activity = activity_counts(window)
 
-    messages
+    # An endorsement only counts when it comes from a feed we follow —
+    # a crowd of strangers vouching for a feed carries no weight here —
+    # so a candidate qualifies on the strength of those endorsements
+    # alone, never on the size of its total follower set. Candidates we
+    # already follow (and self) are dropped outright.
+    endorsers
+    |> Map.reject(fn {id, _} -> id == self_id or MapSet.member?(endorsers_of_followed, id) end)
+    |> Enum.map(fn {id, set} ->
+      endorsement = Enum.count(set, &MapSet.member?(endorsers_of_followed, &1))
+
+      %{
+        "id" => id,
+        "endorsement" => endorsement,
+        "followers" => Map.get(followers, id, 0),
+        "activity" => Map.get(activity, id, 0)
+      }
+    end)
+    |> Enum.filter(fn s -> s["endorsement"] > 0 end)
+    |> Enum.sort_by(fn s -> {-s["endorsement"], -s["followers"], s["id"]} end)
+    |> Enum.map(&Map.take(&1, ["id", "activity", "followers"]))
+    |> Enum.take(@limit)
+  end
+
+  # One follower per distinct feed that said `following: true` — a
+  # follow/unfollow/follow churn must not count triple, and `false`
+  # (or a missing field) is not a follow at all. `endorsers` maps each
+  # contact to the set of feeds following it; `followers` is that set's
+  # size — the store-wide follower count.
+  defp graph(contact_msgs) do
+    g =
+      contact_msgs
+      |> Enum.reduce(%{}, fn msg, acc ->
+        c = content(msg)
+
+        with true <- c["following"] == true,
+             from when is_binary(from) <- author(msg),
+             to when is_binary(to) <- c["contact"] do
+          Map.update(acc, to, MapSet.new([from]), &MapSet.put(&1, from))
+        else
+          _ -> acc
+        end
+      end)
+
+    {g, Map.new(g, fn {id, set} -> {id, MapSet.size(set)} end)}
+  end
+
+  # Window activity per author, deduped by key — a light "recently
+  # around" signal for candidates that also appear in the window.
+  defp activity_counts(window) do
+    window
     |> Enum.uniq_by(& &1["key"])
     |> Enum.reduce(%{}, fn msg, acc ->
       case author(msg) do
@@ -46,31 +106,6 @@ defmodule HighWire.SSB.Suggest do
         id -> Map.update(acc, id, 1, &(&1 + 1))
       end
     end)
-    |> Map.reject(fn {id, _n} -> MapSet.member?(excluded, id) end)
-    |> Enum.map(fn {id, activity} ->
-      %{"id" => id, "activity" => activity, "followers" => Map.get(followers, id, 0)}
-    end)
-    |> Enum.sort_by(fn s -> {-s["activity"], -s["followers"], s["id"]} end)
-    |> Enum.take(@limit)
-  end
-
-  # One follower per distinct feed that said `following: true` — a
-  # follow/unfollow/follow churn must not count triple, and `false`
-  # (or a missing field) is not a follow at all.
-  defp follower_counts(contact_msgs) do
-    contact_msgs
-    |> Enum.reduce(%{}, fn msg, acc ->
-      c = content(msg)
-
-      with true <- c["following"] == true,
-           from when is_binary(from) <- author(msg),
-           to when is_binary(to) <- c["contact"] do
-        Map.update(acc, to, MapSet.new([from]), &MapSet.put(&1, from))
-      else
-        _ -> acc
-      end
-    end)
-    |> Map.new(fn {id, set} -> {id, MapSet.size(set)} end)
   end
 
   defp author(%{"value" => %{"author" => id}}) when is_binary(id), do: id

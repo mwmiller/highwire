@@ -59,84 +59,52 @@ defmodule HighWireWeb.TimelineLiveTest do
 
   test "the contacts rail caps the list and offers to expand it", %{conn: conn} do
     follows = for i <- 1..20, do: "@contact#{i}:.ed25519"
+    # the draw HighWire.Contacts would hold for this list: seven of the twenty
+    contacts = Enum.take(follows, 7)
 
     {:ok, view, _html} = live(conn, "/")
-    html = notify(view, feed_payload([], follows: follows))
+    html = notify(view, feed_payload([], follows: follows, contacts: contacts))
 
-    # Collapsed shows a max-sized window; the rest stay behind the toggle.
+    # The collapsed rail shows the draw; the rest wait behind the toggle.
     assert html =~ "Show all 20"
-    visible = count_visible_contacts(html, follows)
-    assert visible == HighWireWeb.TimelineLive.max_sidebar_contacts()
+    assert count_visible_contacts(html, follows) == 7
 
     html = render_click(view, "toggle-contacts", %{})
-    assert html =~ "contact9"
     assert html =~ "contact20"
     assert html =~ "Show fewer"
     assert count_visible_contacts(html, follows) == 20
 
     html = render_click(view, "toggle-contacts", %{})
     assert html =~ "Show all 20"
-
-    assert count_visible_contacts(html, follows) ==
-             HighWireWeb.TimelineLive.max_sidebar_contacts()
+    assert count_visible_contacts(html, follows) == 7
   end
 
-  test "the collapsed rail holds still across payloads and rotates on the timer", %{conn: conn} do
+  test "the collapsed rail holds its draw across payloads", %{conn: conn} do
+    follows = for i <- 1..20, do: "@contact#{i}:.ed25519"
+    contacts = Enum.take(follows, 7)
+
+    {:ok, view, _html} = live(conn, "/")
+    html = notify(view, feed_payload([], follows: follows, contacts: contacts))
+    window = visible_contacts(html, follows)
+    assert length(window) == 7
+
+    # Payloads arrive on every broadcast; the draw is unchanged, so the
+    # rail must not reshuffle out from under the reader.
+    same = notify(view, feed_payload([], follows: follows, contacts: contacts))
+    assert visible_contacts(same, follows) == window
+  end
+
+  test "the rail follows a redrawn contact list", %{conn: conn} do
     follows = for i <- 1..20, do: "@contact#{i}:.ed25519"
 
     {:ok, view, _html} = live(conn, "/")
-    html = notify(view, feed_payload([], follows: follows))
-    window = visible_contacts(html, follows)
-    assert length(window) == HighWireWeb.TimelineLive.max_sidebar_contacts()
+    html = notify(view, feed_payload([], follows: follows, contacts: Enum.take(follows, 7)))
+    assert visible_contacts(html, follows) == Enum.take(follows, 7)
 
-    # Payloads arrive on every broadcast; they must not reshuffle the
-    # window out from under the reader.
-    same = notify(view, feed_payload([], follows: follows))
-    assert visible_contacts(same, follows) == window
-
-    # The rotate clock advances the window one step along the alphabetical
-    # roll: the head drops off and the next follow enters the tail.
-    send(view.pid, :contacts_rotate)
-    rotated = visible_contacts(render(view), follows)
-    refute rotated == window
-    assert length(rotated) == HighWireWeb.TimelineLive.max_sidebar_contacts()
-  end
-
-  test "the rail window is a ring that wraps from the bottom back to the top" do
-    contacts = for i <- 1..11, do: "@c#{i}:.ed25519"
-
-    # offset 0 leads with the top of the roll.
-    assert HighWireWeb.TimelineLive.contact_window(contacts, 0) == Enum.take(contacts, 8)
-
-    # stepping past the last contact wraps to the front.
-    assert HighWireWeb.TimelineLive.contact_window(contacts, 10) ==
-             [Enum.at(contacts, 10) | Enum.take(contacts, 7)]
-
-    # a full lap lands exactly back where it started.
-    assert HighWireWeb.TimelineLive.contact_window(contacts, 11) ==
-             HighWireWeb.TimelineLive.contact_window(contacts, 0)
-
-    # a roll that already fits has nothing to rotate.
-    short = Enum.take(contacts, 8)
-    assert HighWireWeb.TimelineLive.contact_window(short, 3) == short
-  end
-
-  test "the rail opens at a random point in the roll, not always the top" do
-    follows = ["@me:.ed25519" | for(i <- 1..40, do: "@c#{i}:.ed25519")]
-    payload = %{follows: follows, self_id: "@me:.ed25519"}
-
-    # self is excluded: 40 follows remain, so the offset is a valid index.
-    offsets = for _ <- 1..100, do: HighWireWeb.TimelineLive.initial_contacts_offset(payload)
-    assert Enum.all?(offsets, &(&1 in 0..39))
-    assert length(Enum.uniq(offsets)) > 1
-
-    # a roll that fits, or a payload without follows, never rotates.
-    assert HighWireWeb.TimelineLive.initial_contacts_offset(%{
-             follows: ["@a:.ed25519"],
-             self_id: nil
-           }) == 0
-
-    assert HighWireWeb.TimelineLive.initial_contacts_offset(%{}) == 0
+    # The follow list changed, so HighWire.Contacts drew a fresh handful.
+    redrawn = Enum.take(Enum.drop(follows, 7), 7)
+    html = notify(view, feed_payload([], follows: follows, contacts: redrawn))
+    assert visible_contacts(html, follows) == redrawn
   end
 
   test "reply snippets render markdown as its text, not its source" do
@@ -1050,6 +1018,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     self_id = Keyword.get(opts, :self_id)
     follows = Keyword.get(opts, :follows, [])
     suggestions = Keyword.get(opts, :suggestions, [])
+    contacts = Keyword.get(opts, :contacts, [])
     likes = HighWire.Timeline.likes_state(msgs)
     counts = HighWire.Timeline.like_counts(likes)
 
@@ -1064,7 +1033,8 @@ defmodule HighWireWeb.TimelineLiveTest do
       follows: follows,
       self_id: self_id,
       profiles: %{},
-      suggestions: suggestions
+      suggestions: suggestions,
+      contacts: contacts
     }
   end
 
