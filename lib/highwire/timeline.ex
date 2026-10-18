@@ -108,7 +108,7 @@ defmodule HighWire.Timeline do
   def snapshot do
     case Process.whereis(__MODULE__) do
       nil -> {:disabled, empty_payload()}
-      pid -> GenServer.call(pid, :snapshot)
+      pid -> GenServer.call(pid, :snapshot, 500)
     end
   end
 
