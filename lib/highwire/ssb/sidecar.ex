@@ -31,7 +31,7 @@ defmodule HighWire.SSB.Sidecar do
 
   require Logger
 
-  alias HighWire.SSB.{Admin, Client, ConnSuppress, Import, Keys, Network}
+  alias HighWire.SSB.{Admin, Client, ConnSuppress, Identities, Import, Keys, Network}
 
   def config, do: Application.get_env(:highwire, :ssb, [])
 
@@ -142,6 +142,45 @@ defmodule HighWire.SSB.Sidecar do
         end
     end
   end
+
+  @doc """
+  Switch the posting identity: stop this sidecar and the engine, make
+  sure nothing still holds the muxrpc port, write the new identity's
+  keypair into `.ssberl/secret`, and start again — the engine and
+  every client then authenticate as the other feed. The store does
+  not move; only who you post as changes.
+
+  With the engine disabled the secret is written directly, which is
+  all that is needed (same as conn suppression). Unknown or disabled
+  identities are refused before anything stops, and a failure after
+  the stop rolls back to the previous engine — whose secret is still
+  the one in place.
+  """
+  @spec switch_identity(String.t()) :: :ok | {:error, term()}
+  def switch_identity(id) when is_binary(id) do
+    cond do
+      not enabled?() ->
+        Identities.activate(id)
+
+      id == Identities.active_id() ->
+        :ok
+
+      true ->
+        with :ok <- Identities.ensure_switchable(id),
+             :ok <- stop_child(),
+             :ok <- ensure_port_free(),
+             :ok <- Identities.activate(id),
+             {:ok, _pid} <- start_child() do
+          :ok
+        else
+          {:error, reason} ->
+            _ = start_child()
+            {:error, reason}
+        end
+    end
+  end
+
+  def switch_identity(_id), do: {:error, :unknown_identity}
 
   @doc """
   Suppress `addrs` in `conn.json` and restart the engine so the change
@@ -304,6 +343,11 @@ defmodule HighWire.SSB.Sidecar do
       # the spawn reads it, so a fresh install boots engine and clients
       # on the same network.
       _ = Network.ensure_default()
+
+      # Catch the identity registry up to whatever is running (a
+      # predating install's secret, an engine-minted one) before any
+      # page's rail asks it who is active.
+      _ = Identities.ensure_boot()
 
       case Import.detect() do
         {:ok, info} ->
