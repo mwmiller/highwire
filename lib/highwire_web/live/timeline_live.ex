@@ -34,20 +34,21 @@ defmodule HighWireWeb.TimelineLive do
 
   import HighWireWeb.Components.Time, only: [age: 1]
 
-  # Patchwork's feed tabs: the first three sit left of the search box,
-  # the last two right of it (as in Patchwork's top bar). Participating
-  # is opt-in — Settings → Notification options, after Patchwork — and
-  # hidden by CSS (html[data-participating]) until the pref is on.
+  # Patchwork's feed tabs: the three left of the search box, and the
+  # Mentions tab right of it beside the Profile link. The link is
+  # navigation — your own profile page, same as clicking your id — not
+  # a feed view. Participating is opt-in — Settings → Notification
+  # options, after Patchwork — and hidden by CSS
+  # (html[data-participating]) until the pref is on.
   @views [
     {:public, "Public"},
     {:private, "Private"},
     {:participating, "Participating"},
-    {:profile, "Profile"},
     {:mentions, "Mentions"}
   ]
 
   @left_views [:public, :private, :participating]
-  @right_views [:profile, :mentions]
+  @right_views [:mentions]
 
   # markdown image syntax: ![alt](target)
   @image_re ~r/!\[([^\]]*)\]\(([^()\s]+)\)/
@@ -709,11 +710,13 @@ defmodule HighWireWeb.TimelineLive do
 
   # The window reaches the Public tab whole (threads, follows, abouts);
   # the other tabs keep the thread-only predicates below, whose guards
-  # reject contact/other rows themselves.
+  # reject contact/other rows themselves. Private follows merge_into's
+  # rule: the public window never carries boxed messages, so a private
+  # search draws on loaded pages alone.
   defp in_scope?(:public, row, _self_id), do: row.kind in [:thread, :post, :contact, :other]
+  defp in_scope?(:private, _row, _self_id), do: false
   defp in_scope?(:participating, row, _self_id), do: participating?(row)
   defp in_scope?(:mentions, row, _self_id), do: mention_match?(row)
-  defp in_scope?(:profile, row, self_id), do: profile_match?(row, self_id)
 
   defp publish_error(:offline), do: "SSB engine offline."
 
@@ -838,7 +841,8 @@ defmodule HighWireWeb.TimelineLive do
           </nav>
           <%!-- The search takes whatever width the row can spare and
           caps at 18rem, so narrow windows shrink the box instead of
-          clipping the Profile/Mentions tabs and the peer chip. --%>
+          clipping the Profile link, the Mentions tab, and the peer
+          chip. --%>
           <form
             id="feed-search"
             phx-change="search"
@@ -855,7 +859,15 @@ defmodule HighWireWeb.TimelineLive do
               class="w-full rounded border border-edge bg-input px-2 py-1 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
             />
           </form>
-          <nav class="flex shrink-0 items-center gap-1" aria-label="Profile feeds">
+          <nav class="flex shrink-0 items-center gap-1" aria-label="Mentions and profile">
+            <.link
+              :if={@self_id}
+              navigate={profile_href(@self_id)}
+              title="Your profile"
+              class="rounded px-2 py-1 text-xs text-dim transition hover:bg-raised hover:text-paper"
+            >
+              Profile
+            </.link>
             <.feed_tab :for={{v, label} <- @right_views} v={v} label={label} current={@view} />
           </nav>
           <span
@@ -1442,15 +1454,6 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   # -- view filters ------------------------------------------------------
-
-  # Profile: this account's own posts and threads (votes, follows and
-  # other people's threads stay out).
-  defp profile_match?(%{kind: kind} = row, self)
-       when kind in [:post, :thread] and is_binary(self) do
-    author_of(row.msg) == self
-  end
-
-  defp profile_match?(_row, _self), do: false
 
   # Participating (Patchwork's tab): threads we have posted into — our
   # root or our reply. The Timeline already marks that as row.self?;

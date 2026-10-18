@@ -74,6 +74,20 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "Whom to follow"
   end
 
+  test "the header Profile link opens your own profile page", %{conn: conn} do
+    me = "@me=.ed25519"
+
+    {:ok, view, html} = live(conn, "/")
+    # No identity known yet — the link has nothing to point at.
+    refute html =~ "Your profile"
+
+    html = notify(view, feed_payload([], self_id: me))
+    assert html =~ ~s(title="Your profile")
+    assert html =~ ~s(href="/profile?id=#{URI.encode_www_form(me)}")
+    # The tab button is gone; the header offers navigation, not a feed view.
+    refute html =~ ~s(phx-value-v="profile")
+  end
+
   test "the contacts rail caps the list and offers to expand it", %{conn: conn} do
     follows = for i <- 1..20, do: "@contact#{i}:.ed25519"
     # the draw HighWire.Contacts would hold for this list: seven of the twenty
@@ -223,6 +237,28 @@ defmodule HighWireWeb.TimelineLiveTest do
       html = render_click(view, "view", %{"v" => "participating"})
       assert html =~ "my own words"
       refute html =~ dave
+    end
+
+    test "search does not crash on the Private tab", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%root-secret.sha256", "@alice:.ed25519", now, %{
+          "type" => "post",
+          "text" => "secret words"
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      _html = notify(view, feed_payload(msgs, self_id: "@me:.ed25519"))
+
+      _html = render_click(view, "view", %{"v" => "private"})
+
+      # search_rows filters the window through in_scope?, which had no
+      # :private clause — any query on this tab raised a
+      # FunctionClauseError and took the view down with it.
+      html = render_click(view, "search", %{"q" => "secret"})
+      assert is_binary(html)
     end
 
     test "a newer follow replaces the loaded follow row for that author", %{conn: conn} do
