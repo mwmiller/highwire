@@ -472,9 +472,11 @@ defmodule HighWire.Timeline do
       contact_buf: [],
       contact_msgs: [],
       about_ref: nil,
-      # nil until the first about pass completes: the feeds the store
-      # holds an `about` message for — the rail suggests nothing else.
-      about_ids: nil,
+      # The feeds the store holds an `about` message for — the rail
+      # suggests nothing else. Starts empty so the filter is armed from
+      # the first pass: the about drain fills it, and once it has read
+      # the store at least once the candidate list is narrowed for good.
+      about_ids: MapSet.new(),
       drain_client: nil,
       last_drain_at: nil,
       follows: [],

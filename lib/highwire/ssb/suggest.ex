@@ -38,10 +38,11 @@ defmodule HighWire.SSB.Suggest do
   we do follow (friend-of-friend); self and already-followed feeds never
   appear. Endorsements only count from feeds we follow, and — when
   `about_ids` is a set — the store must hold an `about` message for the
-  candidate (nil means the store's abouts have not been read yet and
-  leaves the list whole). Sorted by endorsement desc, then total
-  followers desc, then id, and the top of that ordering is shuffled and
-  drawn from — pass `shuffle: false` for the raw ranking.
+  candidate (a nil set is the deliberate "no filter"; Timeline passes an
+  empty set until the about pass has landed, which filters the list
+  blank rather than rendering bare ids). Sorted by endorsement desc,
+  then total followers desc, then id, and the top of that ordering is
+  shuffled and drawn from — pass `shuffle: false` for the raw ranking.
   """
   @spec rank([map()], [String.t()], String.t() | nil, MapSet.t() | nil, keyword()) :: [map()]
   def rank(contact_msgs, follows, self_id, about_ids, opts \\ []) do
@@ -90,10 +91,10 @@ defmodule HighWire.SSB.Suggest do
     |> Enum.take(@pool)
   end
 
-  # Only feeds the store holds an about message for. nil — the about
-  # pass has not read the store yet — keeps everything: the first
-  # contact pass can land first, and the completed about pass re-ranks
-  # the list tighter.
+  # Only feeds the store holds an about message for. A nil set is the
+  # deliberate "no filter" (tests); an empty one — the state before the
+  # about pass has landed — filters everything out, so the rail is
+  # blank rather than full of bare short ids.
   defp narrow(candidates, nil), do: candidates
 
   defp narrow(candidates, about_ids),

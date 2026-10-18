@@ -177,11 +177,15 @@ defmodule HighWire.SSB.SuggestTest do
     assert [%{"id" => @b, "followers" => 1}] =
              Suggest.rank(contact_msgs, follows, @me, MapSet.new([@b]))
 
-    # nil — the about pass has not read the store yet — keeps the list
-    # whole; the first contact ranking never waits on it.
+    # nil is the deliberate "no filter" (tests, and any caller that
+    # wants the raw ranking).
     assert [%{"id" => @a}, %{"id" => @b}] =
              Suggest.rank(contact_msgs, follows, @me, nil, shuffle: false)
              |> Enum.map(&Map.take(&1, ["id"]))
+
+    # An empty set — Timeline's state until the about pass has landed —
+    # filters everything out: a blank rail, never bare short ids.
+    assert Suggest.rank(contact_msgs, follows, @me, MapSet.new()) == []
 
     # Sets draw from the same narrowed pool.
     {rows1, rows2} = Suggest.sets(contact_msgs, follows, @me, MapSet.new([@a]))
