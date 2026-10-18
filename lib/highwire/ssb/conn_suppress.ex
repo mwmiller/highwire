@@ -49,34 +49,35 @@ defmodule HighWire.SSB.ConnSuppress do
   def book_peers do
     case File.read(path()) do
       {:ok, text} ->
-        text
-        |> String.split("\n")
-        |> Enum.reduce({[], nil, true}, fn line, {acc, current, ac} ->
-          case Regex.run(~r/^    "(.+)": \{$/, line) do
-            [_, key] ->
-              {flush(acc, current, ac), key, true}
+        {acc, current, ac} =
+          text
+          |> String.split("\n")
+          |> Enum.reduce({[], nil, true}, &book_line/2)
 
-            nil ->
-              if line == "    }" do
-                {flush(acc, current, ac), nil, true}
-              else
-                if String.contains?(line, "\"autoconnect\": false") do
-                  {acc, current, false}
-                else
-                  if String.contains?(line, "\"autoconnect\": true") do
-                    {acc, current, true}
-                  else
-                    {acc, current, ac}
-                  end
-                end
-              end
-          end
-        end)
-        |> then(fn {acc, current, ac} -> flush(acc, current, ac) end)
-        |> Enum.reverse()
+        acc |> flush(current, ac) |> Enum.reverse()
 
       _ ->
         []
+    end
+  end
+
+  # A line naming an address opens an entry; a line carrying
+  # autoconnect decides its fate; a line closing the entry flushes it.
+  # "false" wins when a file contradicts itself.
+  defp book_line(line, {acc, current, ac}) do
+    case Regex.run(~r/^    "(.+)": \{$/, line) do
+      [_, key] -> {flush(acc, current, ac), key, true}
+      nil -> book_state(line, acc, current, ac)
+    end
+  end
+
+  defp book_state("    }", acc, current, ac), do: {flush(acc, current, ac), nil, true}
+
+  defp book_state(line, acc, current, ac) do
+    cond do
+      String.contains?(line, "\"autoconnect\": false") -> {acc, current, false}
+      String.contains?(line, "\"autoconnect\": true") -> {acc, current, true}
+      true -> {acc, current, ac}
     end
   end
 
@@ -122,45 +123,55 @@ defmodule HighWire.SSB.ConnSuppress do
     set = MapSet.new(addrs)
     file = path()
 
-    with {:ok, text} <- File.read(file) do
-      backup = file <> ".bak-" <> to_string(System.system_time(:second))
+    with {:ok, text} <- File.read(file),
+         {:ok, backup} <- write_backup(file, text) do
+      {out, changed} = suppress_lines(String.split(text, "\n"), set)
 
-      case File.write(backup, text) do
-        :ok ->
-          lines = String.split(text, "\n")
-
-          {out, {_current, changed}} =
-            Enum.map_reduce(lines, {nil, 0}, fn line, {current, changed} ->
-              case Regex.run(~r/^    "(.+)": \{$/, line) do
-                [_, key] ->
-                  {line, {key, changed}}
-
-                nil ->
-                  cond do
-                    line == "    }" ->
-                      {line, {nil, changed}}
-
-                    current != nil and MapSet.member?(set, current) and
-                        String.contains?(line, "\"autoconnect\": true") ->
-                      {String.replace(line, "\"autoconnect\": true", "\"autoconnect\": false"),
-                       {current, changed + 1}}
-
-                    true ->
-                      {line, {current, changed}}
-                  end
-              end
-            end)
-
-          with :ok <- File.write(file, Enum.join(out, "\n")) do
-            {:ok, changed, backup}
-          end
-
-        {:error, reason} ->
-          {:error, {:backup_failed, reason}}
+      with :ok <- File.write(file, Enum.join(out, "\n")) do
+        {:ok, changed, backup}
       end
     end
   rescue
     e -> {:error, e}
+  end
+
+  defp write_backup(file, text) do
+    backup = file <> ".bak-" <> to_string(System.system_time(:second))
+
+    case File.write(backup, text) do
+      :ok -> {:ok, backup}
+      {:error, reason} -> {:error, {:backup_failed, reason}}
+    end
+  end
+
+  # Every "autoconnect": true belonging to a listed address is
+  # rewritten; every other line passes through untouched, so the
+  # file's own formatting and field order survive the rewrite.
+  defp suppress_lines(lines, set) do
+    {out, {_current, changed}} =
+      Enum.map_reduce(lines, {nil, 0}, fn line, {current, changed} ->
+        case Regex.run(~r/^    "(.+)": \{$/, line) do
+          [_, key] -> {line, {key, changed}}
+          nil -> suppress_line(line, current, changed, set)
+        end
+      end)
+
+    {out, changed}
+  end
+
+  defp suppress_line(line, current, changed, set) do
+    cond do
+      line == "    }" ->
+        {line, {nil, changed}}
+
+      current != nil and MapSet.member?(set, current) and
+          String.contains?(line, "\"autoconnect\": true") ->
+        {String.replace(line, "\"autoconnect\": true", "\"autoconnect\": false"),
+         {current, changed + 1}}
+
+      true ->
+        {line, {current, changed}}
+    end
   end
 
   # -- classification ----------------------------------------------------

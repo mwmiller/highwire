@@ -4,6 +4,7 @@ defmodule HighWire.SSB.ConnSuppressTest do
   use ExUnit.Case, async: false
 
   alias HighWire.SSB.ConnSuppress
+  alias HighWire.SSB.Sidecar
 
   defp peer(addr, extra \\ %{}) do
     Map.merge(%{"address" => addr, "autoconnect" => true}, extra)
@@ -151,7 +152,7 @@ defmodule HighWire.SSB.ConnSuppressTest do
       # No sidecar runs in tests, so the engine is disabled: the change is
       # just the file write, with no stop/start.
       assert {:ok, 1, _backup} =
-               HighWire.SSB.Sidecar.apply_conn_suppression(["net:127.0.0.1:8020~shs:key"])
+               Sidecar.apply_conn_suppression(["net:127.0.0.1:8020~shs:key"])
 
       text = File.read!(Path.join([home, ".ssberl", "conn.json"]))
       assert text =~ ~r/"net:127\.0\.0\.1:8020~shs:key": \{[^}]*"autoconnect": false/s
