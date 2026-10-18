@@ -19,19 +19,31 @@ defmodule HighWire.SSB.ConnSuppressTest do
         peer("net:foo.onion:8008~shs:key"),
         peer("net:2001:db8::1:8008~shs:key"),
         peer("ws://localhost:8999~shs:key"),
+        peer("ws://pub.example.com:8999~shs:key"),
         peer("net:example.com:99999~shs:key")
       ]
 
       {addrs, counts} = ConnSuppress.classify(peers, %{})
 
-      assert length(addrs) == 8
-      assert counts[:loopback] == 1
+      assert length(addrs) == 9
+      # The host decides first: ws://localhost is loopback, scheme or
+      # not — and a non-loopback ws:// address is still wrong scheme.
+      assert counts[:loopback] == 2
       assert counts[:rfc1918] == 3
       assert counts[:onion] == 1
       assert counts[:ipv6] == 1
       assert counts[:scheme] == 1
       assert counts[:port] == 1
-      assert counts[:total] == 8
+      assert counts[:total] == 9
+    end
+
+    test "localhost is a loopback whichever way the address spells it" do
+      for addr <- ["net:localhost:32772~shs:key", "ws://localhost:8999~shs:key"] do
+        {addrs, counts} = ConnSuppress.classify([peer(addr)], %{})
+
+        assert addrs == [addr]
+        assert counts[:loopback] == 1, addr
+      end
     end
 
     test "flags an address with repeated failures and no handshake on record" do

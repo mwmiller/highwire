@@ -197,22 +197,42 @@ defmodule HighWire.SSB.ConnSuppress do
   end
 
   defp category(addr) do
-    if bad_scheme?(addr) do
-      :scheme
-    else
-      case host_port(addr) do
-        {host, port} ->
-          if loopback?(host) do
-            :loopback
-          else
-            classify_host_port(host, port)
-          end
+    cond do
+      loopback_addr?(addr) ->
+        :loopback
 
-        :error ->
-          :unparseable
-      end
+      bad_scheme?(addr) ->
+        :scheme
+
+      true ->
+        case host_port(addr) do
+          {host, port} -> classify_host_port(host, port)
+          :error -> :unparseable
+        end
     end
   end
+
+  # The host decides first, whatever scheme wraps it:
+  # "net:localhost:8008~shs:KEY" and "ws://localhost:8999~shs:KEY" are
+  # both loopback, and loopback is the truer label — a scheme that also
+  # happens to be wrong says less than a host that can never answer
+  # from here under any scheme.
+  defp loopback_addr?(addr) when is_binary(addr) do
+    hostport =
+      addr
+      |> String.split("://", parts: 2)
+      |> List.last()
+      |> String.replace_prefix("net:", "")
+      |> String.split("~", parts: 2)
+      |> hd()
+
+    case String.split(hostport, ":") do
+      [_only] -> false
+      parts -> parts |> Enum.drop(-1) |> Enum.join(":") |> loopback?()
+    end
+  end
+
+  defp loopback_addr?(_addr), do: false
 
   defp classify_host_port(host, port) do
     cond do
