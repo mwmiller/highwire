@@ -1513,12 +1513,22 @@ defmodule HighWire.Timeline do
     # Suggestion rows are ranked off-process (HighWire.Suggester) and
     # read back here; the rail only needs them when they actually move,
     # so a fresh read that differs from the last payload rebroadcasts.
+    # The rail's contacts are drawn just as asynchronously
+    # (HighWire.Contacts), and a payload built before the draw lands
+    # would otherwise wait for a finalize that may never come.
     old = Map.get(state, :suggestions, [])
     fresh = Suggester.get_suggestions()
+    old_contacts = Map.get(state.messages, :contacts, [])
+    fresh_contacts = Contacts.get_contacts()
+    moved? = fresh != old or fresh_contacts != old_contacts
 
     state =
-      if fresh != old and state.status == :ok do
-        payload = Map.put(state.messages, :suggestions, fresh)
+      if moved? and state.status == :ok do
+        payload =
+          state.messages
+          |> Map.put(:suggestions, fresh)
+          |> Map.put(:contacts, fresh_contacts)
+
         broadcast_updated(payload)
         %{state | suggestions: fresh, messages: payload}
       else
