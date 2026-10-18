@@ -272,7 +272,13 @@ jobs:
             (cd deps/erlbutt && DEBUG=1 timeout 15m ./rebar3 as prod release)
             echo "== phase: rebar3 release done =="
           else
-            make -C deps/erlbutt prod
+            # The same task `mix setup` runs in dev, at the prod
+            # profile: it removes the release dir first (no stale
+            # lib/<app>-<oldver> shadow beams), prepends Homebrew
+            # libsodium flags when brew is present (Linux needs none
+            # anyway: apt's paths are clang's defaults), and drives
+            # the dep's vendored rebar3.
+            mix engine.build prod
           fi
           echo "== phase: embedding rel into priv/erlbutt =="
           mkdir -p priv/erlbutt
