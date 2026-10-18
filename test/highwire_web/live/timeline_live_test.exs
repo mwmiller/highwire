@@ -43,6 +43,20 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "No contacts yet"
   end
 
+  test "the rail shows Who to follow when a payload carries suggestions", %{conn: conn} do
+    {:ok, view, html} = live(conn, "/")
+    refute html =~ "Who to follow"
+
+    row = %{"id" => "@stranger=.ed25519", "activity" => 3, "followers" => 2}
+    html = notify(view, %{feed_payload([]) | suggestions: [row]})
+
+    assert html =~ "Who to follow"
+    assert html =~ "2 followers · 3 messages"
+    # With no profile loaded the name falls back to the shortened id,
+    # and the row still links to the full one.
+    assert html =~ ~s(href="/profile?id=%40stranger%3D.ed25519")
+  end
+
   test "the contacts rail caps the list and offers to expand it", %{conn: conn} do
     follows = for i <- 1..20, do: "@contact#{i}:.ed25519"
 
@@ -1035,6 +1049,7 @@ defmodule HighWireWeb.TimelineLiveTest do
   defp feed_payload(msgs, opts \\ []) do
     self_id = Keyword.get(opts, :self_id)
     follows = Keyword.get(opts, :follows, [])
+    suggestions = Keyword.get(opts, :suggestions, [])
     likes = HighWire.Timeline.likes_state(msgs)
     counts = HighWire.Timeline.like_counts(likes)
 
@@ -1049,7 +1064,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       follows: follows,
       self_id: self_id,
       profiles: %{},
-      suggestions: []
+      suggestions: suggestions
     }
   end
 

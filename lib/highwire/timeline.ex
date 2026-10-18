@@ -56,7 +56,7 @@ defmodule HighWire.Timeline do
   require Logger
 
   alias HighWire.Blob
-  alias HighWire.SSB.{Client, Keys, Sidecar}
+  alias HighWire.SSB.{Client, Keys, Sidecar, Suggest}
 
   @topic "timeline"
   @gossip "gossip"
@@ -838,26 +838,6 @@ defmodule HighWire.Timeline do
     end
   end
 
-  # stats.whoToFollow — active feeds we do not follow, ranked by
-  # activity with follower counts. Each row is a plain string-keyed map
-  # ({id, activity, followers}); rows without a usable id are dropped
-  # so the sidebar never renders a dead link.
-  defp fetch_suggestions(client) do
-    if is_pid(client) and Process.alive?(client) do
-      case Client.call(client, ["stats", "whoToFollow"], [], 2_000) do
-        {:ok, %{"candidates" => list}} when is_list(list) ->
-          Enum.filter(list, &(is_map(&1) and is_binary(&1["id"])))
-
-        _ ->
-          []
-      end
-    else
-      []
-    end
-  catch
-    _, _ -> []
-  end
-
   # One-shot history pull on the shared client: open the stream, drain
   # it here (the GenServer mailbox receives it while the caller waits),
   # and return the messages. `order: "timestamp"` is the profile page's
@@ -1473,10 +1453,11 @@ defmodule HighWire.Timeline do
   end
 
   # gossip.peers refresh for the /network dashboard — a cheap local
-  # sync RPC — and the stats.whoToFollow feed for the sidebar. Both are
-  # absent on engines predating those RPCs (the calls answer `true`,
-  # which neither branch accepts), so the dashboard and the "Who to
-  # follow" section simply stay hidden.
+  # sync RPC — and the "Who to follow" ranking, computed here from
+  # the window and the contact drain (Suggest.rank/4; the engine has
+  # no whoToFollow RPC). The dashboard stays hidden on engines
+  # predating its RPC (the call answers `true`, which the branch does
+  # not accept).
   def handle_info({:network, gen}, %{gen: current} = state) when gen == current do
     state = %{state | network_timer: nil}
     old_net = Map.get(state, :network)
@@ -1504,7 +1485,11 @@ defmodule HighWire.Timeline do
     old = Map.get(state, :suggestions, [])
 
     state =
-      Map.put(state, :suggestions, fetch_suggestions(Map.get(state, :client)))
+      Map.put(
+        state,
+        :suggestions,
+        Suggest.rank(state.acc, state.contact_msgs, state.follows, state.self_id)
+      )
 
     state =
       if state.suggestions != old and state.status == :ok do
