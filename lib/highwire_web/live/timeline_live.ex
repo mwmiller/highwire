@@ -551,7 +551,7 @@ defmodule HighWireWeb.TimelineLive do
   # pages are the reader's way into the past and are never dropped.
   # Losing the tail loses only the stalest window rows; a row whose
   # root is in a cursor page survives the dedupe via that page.
-  @max_tab_rows 120
+  @max_tab_rows 30
 
   defp merge_into(view, entry, socket) do
     self_id = socket.assigns.self_id
