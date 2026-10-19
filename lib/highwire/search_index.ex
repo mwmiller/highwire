@@ -81,7 +81,14 @@ defmodule HighWire.SearchIndex do
     _ -> :connecting
   end
 
-  @doc "Search whole-store index for q (async). Sends {:search_results, q, hits} to owner."
+  @doc """
+  Search whole-store index for q (async). Sends
+  `{:search_results, q, hits}` to owner.
+
+  Returns `:ok`, or `{:error, reason}` when the query task could not be
+  started — the caller must not wait for an answer that is not coming.
+  """
+  @spec search(String.t(), pid()) :: :ok | {:error, term()}
   def search(q, owner) when is_binary(q) and is_pid(owner) do
     ql = String.trim(q)
 
@@ -89,11 +96,18 @@ defmodule HighWire.SearchIndex do
       send(owner, {:search_results, "", []})
       :ok
     else
-      Task.Supervisor.start_child(HighWire.TaskSupervisor, fn ->
-        send(owner, {:search_results, ql, query(ql)})
-      end)
-
-      :ok
+      # start_child exits rather than answering when the supervisor is
+      # gone, which is a failed search like any other to the caller.
+      try do
+        case Task.Supervisor.start_child(HighWire.TaskSupervisor, fn ->
+               send(owner, {:search_results, ql, query(ql)})
+             end) do
+          {:ok, _pid} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      catch
+        :exit, reason -> {:error, reason}
+      end
     end
   end
 

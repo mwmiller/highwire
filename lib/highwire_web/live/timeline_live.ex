@@ -113,6 +113,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(transfer_timer: nil)
       |> assign(:search_hits, [])
       |> assign(:search_q_kicked, "")
+      |> assign(:search_state, :idle)
       |> assign(:index_status, SearchIndex.status())
       |> maybe_load_page()
       |> merge_paged()
@@ -255,7 +256,7 @@ defmodule HighWireWeb.TimelineLive do
     qd = socket.assigns.q
 
     if q != "" and String.downcase(q) == qd do
-      {:noreply, assign(socket, search_hits: hits || [])}
+      {:noreply, assign(socket, search_hits: hits || [], search_state: :idle)}
     else
       {:noreply, socket}
     end
@@ -278,12 +279,28 @@ defmodule HighWireWeb.TimelineLive do
     socket = assign(socket, q: qd)
 
     if qd != "" and qd != socket.assigns.search_q_kicked do
-      HighWire.SearchIndex.search(qtrim, self())
-      socket = assign(socket, search_q_kicked: qd, search_hits: socket.assigns.search_hits)
-      {:noreply, socket}
+      # The answer comes back from a query task, and a fold of the store
+      # is not instant. Until it lands the view knows nothing either way,
+      # so it says that instead of reading as an answer — and the hits on
+      # screen belong to the previous query, so they come down with it.
+      socket =
+        assign(socket, search_q_kicked: qd, search_hits: [], search_state: :pending)
+
+      case SearchIndex.search(qtrim, self()) do
+        :ok ->
+          {:noreply, socket}
+
+        {:error, reason} ->
+          # No answer is coming; do not leave the reader waiting on one.
+          Logger.warning(
+            "timeline: search for #{inspect(qtrim)} did not start: #{inspect(reason)}"
+          )
+
+          {:noreply, assign(socket, search_state: :stalled)}
+      end
     else
       if qd == "" do
-        {:noreply, assign(socket, search_hits: [], search_q_kicked: "")}
+        {:noreply, assign(socket, search_hits: [], search_q_kicked: "", search_state: :idle)}
       else
         {:noreply, socket}
       end
@@ -807,6 +824,10 @@ defmodule HighWireWeb.TimelineLive do
   # While it is still building (or absent), the loaded-row filter runs
   # alongside, so a search never comes up emptier than the feed on
   # screen.
+  #
+  # And a third: has the index answered at all? A query in flight is not
+  # a result, so an empty screen while one is out says it is searching
+  # rather than reading as "nothing matches".
   defp ui_state(assigns, page, rows) do
     store_results? = assigns.q != "" and assigns.index_status == :live
     local_rows? = not store_results?
@@ -830,8 +851,8 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   defp empty_search?(assigns, rows, local_rows?) do
-    assigns.status == :ok and assigns.q != "" and assigns.search_hits == [] and
-      (not local_rows? or rows == [])
+    assigns.status == :ok and assigns.q != "" and assigns.search_state == :idle and
+      assigns.search_hits == [] and (not local_rows? or rows == [])
   end
 
   @impl true
@@ -1086,6 +1107,18 @@ defmodule HighWireWeb.TimelineLive do
             </p>
             <p :if={@status == :disabled} class="px-4 py-3 text-sm text-dim">
               SSB engine disabled in this configuration.
+            </p>
+            <p
+              :if={@status == :ok and @q != "" and @search_state == :pending}
+              class="px-4 py-3 text-sm text-info"
+            >
+              Searching the store…
+            </p>
+            <p
+              :if={@status == :ok and @q != "" and @search_state == :stalled}
+              class="px-4 py-3 text-sm text-warn"
+            >
+              The store index did not answer — this search may be incomplete.
             </p>
             <p :if={@empty_search?} class="px-4 py-3 text-sm text-dim">
               {search_empty_message(@index_status, @q)}

@@ -818,8 +818,77 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "the main topic"
 
     html = render_change(view, "search", %{"q" => "zzznope"})
+
+    # The query is still out. Nothing is known yet, so the view says so
+    # rather than presenting "no matches" as an answer.
+    assert html =~ "Searching the store"
+    refute html =~ "Nothing matches"
+
+    html = wait_for_search_answer(view)
     assert html =~ "Nothing matches"
     refute html =~ "the main topic"
+  end
+
+  test "a search says it is searching until the index answers", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    notify(view, feed_payload([]))
+
+    html = render_change(view, "search", %{"q" => "zzznope"})
+    assert html =~ "Searching the store"
+    refute html =~ "Nothing matches"
+
+    # The test store answers empty, and only then is that claim honest.
+    html = wait_for_search_answer(view)
+    refute html =~ "Searching the store"
+    assert html =~ "Nothing matches"
+  end
+
+  test "hits from an earlier query come down when a new one is asked", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    notify(view, feed_payload([]))
+    render_change(view, "search", %{"q" => "needle"})
+    Process.sleep(50)
+
+    send(
+      view.pid,
+      {:search_results, "needle",
+       [%{key: "%h.sha256", author: "@alice.ed25519", text: "a needle", ts: 1_700_000_000_000}]}
+    )
+
+    assert render(view) =~ "1 match"
+
+    # The hits belong to the query they answered, not to this one.
+    html = render_change(view, "search", %{"q" => "haystack"})
+    refute html =~ ~s(id="search-results")
+    assert html =~ "Searching the store"
+  end
+
+  test "a search the index cannot answer does not claim there are no matches", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    notify(view, feed_payload([]))
+
+    # Wait the real answer out first, so nothing else is in flight and
+    # the state below stands still.
+    render_change(view, "search", %{"q" => "needle"})
+    assert wait_for_search_answer(view) =~ "Nothing matches"
+
+    # The state a query that could not be started leaves behind, which is
+    # the one case where no answer is coming at all.
+    :sys.replace_state(view.pid, fn state ->
+      socket = state.socket
+      assigns = socket.assigns
+      changed = Map.put(assigns.__changed__, :search_state, true)
+      assigns = %{assigns | search_state: :stalled, __changed__: changed}
+      %{state | socket: %{socket | assigns: assigns}}
+    end)
+
+    # A message wakes the view so it renders the change (and the barrier
+    # puts the diff in the test client's mailbox before it is asked).
+    send(view.pid, :nudge)
+    :sys.get_state(view.pid)
+    html = render(view)
+    assert html =~ "did not answer"
+    refute html =~ "Nothing matches"
   end
 
   test "store hits are the results — no separate framing, no contradiction", %{conn: conn} do
@@ -1221,6 +1290,20 @@ defmodule HighWireWeb.TimelineLiveTest do
 
   defp ssb_msg(key, author, ts, content) do
     %{"key" => key, "value" => %{"author" => author, "timestamp" => ts, "content" => content}}
+  end
+
+  # A store query runs in its own task, so the answer lands a tick after
+  # the change that asked for it. Wait the view out of its searching
+  # state rather than sleeping a fixed span.
+  defp wait_for_search_answer(view, tries \\ 100) do
+    html = render(view)
+
+    if tries > 0 and html =~ "Searching the store" do
+      Process.sleep(10)
+      wait_for_search_answer(view, tries - 1)
+    else
+      html
+    end
   end
 
   # Mirrors the payload's search projection: only key, author and the
