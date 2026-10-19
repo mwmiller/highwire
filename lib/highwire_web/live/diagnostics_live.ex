@@ -49,6 +49,12 @@ defmodule HighWireWeb.DiagnosticsLive do
     {:noreply, assign(socket, :report, Timeline.diagnose())}
   end
 
+  # Nothing sends here but the reprobe timer — but a live view that
+  # matches only its own messages dies on anything else, and a
+  # diagnostics page must not be the thing that falls over.
+  @impl true
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
   @impl true
   def render(assigns) do
     ~H"""

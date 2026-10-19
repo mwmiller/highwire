@@ -35,6 +35,14 @@ defmodule HighWire.Suggester do
   alias HighWire.SSB.Suggest
 
   @cache "suggestions.json"
+  # One reserve set to serve the next refresh, one behind it. Every
+  # ranking that needs no serve appends two more, so without a bound
+  # `ready` grows for as long as the app runs.
+  @max_ready 2
+  # A failed ranking with a refresh still owed is retried, but only
+  # after a pause: a ranker that dies on this input would otherwise be
+  # respawned in a hot loop.
+  @retry_ms 5_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []),
@@ -87,6 +95,7 @@ defmodule HighWire.Suggester do
        rows: load_cache(cache),
        ready: [],
        cache_path: cache,
+       retry_ms: Keyword.get(opts, :retry_ms, @retry_ms),
        ranked: nil,
        pending: nil,
        task_ref: nil,
@@ -136,9 +145,9 @@ defmodule HighWire.Suggester do
     # refresh already put in front of the user.
     {rows, ready} =
       if state.task_serve or state.wants_serve do
-        {rows1, state.ready ++ [rows2]}
+        {rows1, cap_ready(state.ready ++ [rows2])}
       else
-        {state.rows, state.ready ++ [rows1, rows2]}
+        {state.rows, cap_ready(state.ready ++ [rows1, rows2])}
       end
 
     save_cache(state.cache_path, rows)
@@ -157,11 +166,27 @@ defmodule HighWire.Suggester do
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{task_ref: ref} = state) do
     Logger.debug("suggester: ranking failed: #{inspect(reason)}")
+
     # wants_serve survives: a refresh clicked during the failed task is
     # still owed a set, and the next ranking that runs is asked to
-    # display it.
+    # display it. New inputs only arrive by cast, though, so with none
+    # coming the owed click would wait forever — schedule the ranking
+    # it asked for instead of relying on the next snapshot.
+    if state.wants_serve do
+      Process.send_after(self(), :retry_serve, Map.get(state, :retry_ms, @retry_ms))
+    end
+
     {:noreply, maybe_rank(%{state | task_ref: nil, task_serve: false})}
   end
+
+  # The ranked inputs are non-nil whenever a task existed, so this
+  # cannot start a ranking blind; it stands down if anything else has
+  # started one since (task_ref set) or the debt was cleared.
+  def handle_info(:retry_serve, %{wants_serve: true, task_ref: nil} = state) do
+    {:noreply, rank_now(state, state.ranked)}
+  end
+
+  def handle_info(:retry_serve, state), do: {:noreply, state}
 
   # A pending snapshot is only ever set while a task is running (the
   # casts serialize here), so draining it at completion picks up the
@@ -170,6 +195,11 @@ defmodule HighWire.Suggester do
   defp maybe_rank(%{pending: nil} = state), do: state
   defp maybe_rank(%{pending: inputs, ranked: inputs} = state), do: %{state | pending: nil}
   defp maybe_rank(%{pending: inputs} = state), do: rank_now(%{state | pending: nil}, inputs)
+
+  # A refresh consumes the head of the reserve; anything that lands
+  # afterwards appends to the tail. Keep only the newest few, or the
+  # queue outlives every consumer of it.
+  defp cap_ready(ready), do: Enum.take(ready, -@max_ready)
 
   defp refill(%{task_ref: nil, ranked: inputs} = state), do: rank(state, inputs, serve: false)
   defp refill(state), do: state

@@ -20,6 +20,53 @@ defmodule HighWireWeb.PostLiveTest do
     assert html =~ "← Timeline"
   end
 
+  test "a transient fetch failure does not blank the thread on screen", %{conn: conn} do
+    key = Base.url_encode64("%transient=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    root = %{
+      "key" => "%transient=.sha256",
+      "value" => %{
+        "author" => "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519",
+        "timestamp" => 1_700_000_000_000,
+        "content" => %{"type" => "post", "text" => "seedkeep"}
+      }
+    }
+
+    # Stand up the state a loaded thread has: a root on screen.
+    :sys.replace_state(view.pid, fn state ->
+      socket = state.socket
+      assigns = socket.assigns
+
+      changed =
+        assigns.__changed__
+        |> Map.put(:root, assigns.root)
+        |> Map.put(:not_found, assigns.not_found)
+
+      assigns =
+        assigns
+        |> Map.put(:root, root)
+        |> Map.put(:not_found, false)
+        |> Map.put(:__changed__, changed)
+
+      %{state | socket: %{socket | assigns: assigns}}
+    end)
+
+    send(view.pid, :nudge)
+    assert render(view) =~ "seedkeep"
+
+    # A broadcast re-reads the thread. With the engine off Timeline.post/1
+    # answers nil — the same nil a timed-out fetch gives — and that must
+    # not tell the reader the post is gone.
+    send(view.pid, {HighWire.Timeline, :updated, %{}})
+    :sys.get_state(view.pid)
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert assigns.root == root
+    refute assigns.not_found
+    assert render(view) =~ "seedkeep"
+  end
+
   test "the reply box opens the mention popup", %{conn: conn} do
     alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
     key = Base.url_encode64("%reply-mentions=.sha256", padding: false)
@@ -184,7 +231,12 @@ defmodule HighWireWeb.PostLiveTest do
     # lingering as a heart that never happened
     html = element(view, ~s(button[aria-label="Like"])) |> render_click()
     refute html =~ ~s(aria-pressed="true")
-    assert html =~ "not in the local store"
+
+    # That re-read finds nothing in the engine-off test store; a nil
+    # fetch must not blank a thread already on screen, so the reader
+    # keeps the post they were reading and only the heart reverts.
+    assert html =~ "the thing"
+    refute html =~ "not in the local store"
   end
 
   test "a message with no text renders a sentence describing it", %{conn: conn} do

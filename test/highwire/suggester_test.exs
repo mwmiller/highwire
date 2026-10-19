@@ -33,8 +33,10 @@ defmodule HighWire.SuggesterTest do
     end
   end
 
-  defp start(cache) do
-    start_supervised!({Suggester, name: :test_suggester, cache_path: cache})
+  defp start(cache, opts \\ []) do
+    start_supervised!(
+      {Suggester, Keyword.merge([name: :test_suggester, cache_path: cache], opts)}
+    )
   end
 
   test "loads the persisted cache at startup, dropping rows with no id" do
@@ -152,5 +154,54 @@ defmodule HighWire.SuggesterTest do
 
     assert Enum.uniq_by(third, & &1["id"]) |> length() == 5
     assert Enum.all?(third, &(&1["id"] in candidates))
+  end
+
+  test "the prefetched reserve does not grow without bound" do
+    cache = tmp_cache_path()
+    start(cache)
+
+    candidates = for i <- 1..9, do: "@f#{i}=.ed25519"
+    contacts = Enum.map(candidates, &follow(@xxx, &1))
+
+    # Every snapshot that differs from the last ranks again, and a
+    # ranking that needs no serve appends its spare set to the reserve.
+    # Nothing consumes it here (a refresh is what does), so without a cap
+    # it would grow for as long as the app runs.
+    for i <- 1..6 do
+      Suggester.cast_inputs(
+        contacts,
+        [@me, @xxx],
+        @me,
+        MapSet.new(["@k#{i}=.ed25519"]),
+        :test_suggester
+      )
+
+      assert wait_until(fn ->
+               st = :sys.get_state(:test_suggester)
+               st.task_ref == nil and st.pending == nil
+             end)
+    end
+
+    assert length(:sys.get_state(:test_suggester).ready) <= 2
+  end
+
+  test "a ranking that dies while a refresh is owed is retried, not dropped" do
+    cache = tmp_cache_path()
+    start(cache, retry_ms: 20)
+
+    contacts = [follow(@xxx, @a)]
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, :test_suggester)
+    assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) != [] end)
+
+    # The moment a failed ranking leaves behind: no task, a refresh
+    # still owed. New inputs only arrive by cast, so if this debt is not
+    # retried the click is never served. A stand-in ref keeps the case
+    # deterministic (the previous ranking has already landed).
+    ref = make_ref()
+    :sys.replace_state(:test_suggester, fn st -> %{st | task_ref: ref, wants_serve: true} end)
+
+    send(:test_suggester, {:DOWN, ref, :process, self(), :boom})
+
+    assert wait_until(fn -> :sys.get_state(:test_suggester).wants_serve == false end)
   end
 end

@@ -86,14 +86,15 @@ defmodule HighWireWeb.PostLive do
   defp load(socket, raw_key) do
     {status, payload} = Timeline.snapshot()
     post = Timeline.post(raw_key)
+    {root, replies, not_found} = thread(post, socket.assigns)
 
     socket
     |> assign(
       raw_key: raw_key,
       status: status,
-      root: post && post.root,
-      replies: (post && post.replies) || [],
-      not_found: post == nil,
+      root: root,
+      replies: replies,
+      not_found: not_found,
       # Same accumulate as handle_info — snapshot payloads evict the same
       # way broadcasts do, and a reload here must not undo a fill-in.
       profiles:
@@ -106,6 +107,21 @@ defmodule HighWireWeb.PostLive do
     )
     |> request_missing_profiles()
   end
+
+  # Timeline.post/1 answers nil both for a key the local store does not
+  # hold and for a fetch that failed — its call has a hard timeout and
+  # the engine restarts on a store switch or a sidecar bounce. Only the
+  # first is news: blanking a thread already on screen because a call
+  # timed out reads as "this post was deleted", and a reload here runs
+  # on every broadcast. So a nil keeps what we are showing, and
+  # not-found stands only when there is nothing to keep.
+  defp thread(nil, %{root: root} = assigns) when not is_nil(root) do
+    {root, Map.get(assigns, :replies, []), false}
+  end
+
+  defp thread(nil, _assigns), do: {nil, [], true}
+
+  defp thread(post, _assigns), do: {post.root, post.replies || [], false}
 
   # Whatever this thread renders that no payload ever shipped a profile
   # for goes back to the Timeline as an ensure — the same contract the

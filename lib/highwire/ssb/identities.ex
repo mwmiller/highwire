@@ -50,8 +50,13 @@ defmodule HighWire.SSB.Identities do
       |> Map.drop(["private"])
       |> Map.put("active", row["id"] == active)
     end)
-    |> Enum.sort_by(fn row -> {not row["active"], -Map.get(row, "created_at", 0)} end)
+    |> Enum.sort_by(fn row -> {not row["active"], -timestamp(row["created_at"])} end)
   end
+
+  # created_at is written as a unix second, but a hand-edited or older
+  # registry can carry null or a string; sorting must not raise on it.
+  defp timestamp(n) when is_number(n), do: n
+  defp timestamp(_), do: 0
 
   @doc """
   The id actually running: the secret's, falling back to the

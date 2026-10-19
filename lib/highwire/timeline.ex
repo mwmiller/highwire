@@ -118,8 +118,24 @@ defmodule HighWire.Timeline do
   def snapshot do
     case Process.whereis(__MODULE__) do
       nil -> {:disabled, empty_payload()}
-      pid -> GenServer.call(pid, :snapshot, 500)
+      pid -> snapshot(pid)
     end
+  end
+
+  # Split out so a test can drive the timeout against a process that
+  # never answers, without suspending the live timeline every other
+  # caller shares.
+  @doc false
+  @spec snapshot(pid()) :: {:ok | :loading | :connecting | :disabled | :down, map()}
+  def snapshot(pid) when is_pid(pid) do
+    GenServer.call(pid, :snapshot, 500)
+  catch
+    # The 500ms budget is meant to lose a race with a reload, not to
+    # crash the caller: every mount reads this, and a reload that
+    # overruns would otherwise take the LiveView down with it. ":loading"
+    # is the honest answer — the process is alive, mid-payload — and the
+    # broadcast that ends the reload fills the view in.
+    :exit, _ -> {:loading, empty_payload()}
   end
 
   @doc """
@@ -2360,7 +2376,8 @@ defmodule HighWire.Timeline do
   defp post_image_refs(acc) do
     acc
     |> Enum.filter(&post?/1)
-    |> Enum.map(fn msg -> content(msg)["text"] || "" end)
+    |> Enum.map(fn msg -> content(msg)["text"] end)
+    |> Enum.filter(&is_binary/1)
     |> Enum.flat_map(fn body ->
       Regex.scan(~r/!\[[^\]]*\]\(\s*(&[A-Za-z0-9+\/=_-]+\.sha256)/, body, capture: :all_but_first)
       |> List.flatten()
@@ -2381,6 +2398,16 @@ defmodule HighWire.Timeline do
   # row per author per direction per spate listing who they touched.
   @doc false
   def build_feed(acc, self_id, like_counts) do
+    # Every row builder below names a message by its value map
+    # (value["author"], value["content"], …), so a record whose envelope
+    # carries no value map — a corrupt one — would crash the timeline
+    # process, and because the supervisor restarts it into the same
+    # store window, crash it again on the next reload. Drop those once,
+    # here, rather than guarding each reader; a message with nothing in
+    # its value has nothing to render anyway.
+    acc = Enum.filter(acc, &value_of/1)
+    acc = Enum.map(acc, &sanitize_text/1)
+
     # Boxed (encrypted) messages never form public rows — the Private tab
     # shows them decrypted, straight from privateFeed.
     acc = Enum.reject(acc, &boxed?/1)
@@ -2591,7 +2618,7 @@ defmodule HighWire.Timeline do
     # here or the thread renders backwards — and keep the newest cap.
     recent = item["latestReplies"] |> List.wrap() |> Enum.reverse() |> Enum.take(3)
     replies = item["totalReplies"] || 0
-    author = msg["value"]["author"]
+    author = value_of(msg)["author"]
 
     activity =
       [bump_ts(msg) | Enum.map(recent, &bump_ts/1)]
@@ -2627,7 +2654,10 @@ defmodule HighWire.Timeline do
   # Names us anywhere in the post's raw text (markdown link targets
   # include the full id, e.g. [@dtBy](@DgsA...=.ed25519)).
   defp mentions_self?(msg, self_id) when is_binary(self_id) do
-    String.contains?(content(msg)["text"] || "", self_id)
+    case content(msg)["text"] do
+      text when is_binary(text) -> String.contains?(text, self_id)
+      _ -> false
+    end
   end
 
   defp mentions_self?(_msg, _self_id), do: false
@@ -2731,7 +2761,7 @@ defmodule HighWire.Timeline do
   defp vote?(msg), do: content(msg)["type"] == "vote"
   defp contact?(msg), do: content(msg)["type"] == "contact"
   defp post?(msg), do: content(msg)["type"] == "post"
-  defp boxed?(msg), do: is_binary(msg["value"]["content"])
+  defp boxed?(msg), do: is_binary(value_of(msg)["content"])
 
   # Replies reference the thread root by key; counts only count post
   # messages, not votes/contacts that share the root.
@@ -2873,6 +2903,26 @@ defmodule HighWire.Timeline do
     end
   end
 
+  # The message's value map, or nil when the envelope has none. Readers
+  # use this instead of msg["value"] directly: indexing a non-map (a
+  # corrupt value that arrived as a string, say) raises rather than
+  # answering nil, and every caller here wants "absent" over a crash.
+  defp value_of(%{"value" => v}) when is_map(v), do: v
+  defp value_of(_msg), do: nil
+
+  # A post's text is a binary or it is nothing. A corrupt record with,
+  # say, a number there would otherwise reach the row templates and the
+  # markdown renderer, which expect to slice a string; dropping the key
+  # makes it a textless post — the case the feed already has a
+  # description for — rather than a crash. Only the offending messages
+  # are rebuilt.
+  defp sanitize_text(%{"value" => %{"content" => %{"text" => t} = c} = v} = msg)
+       when not is_binary(t) do
+    %{msg | "value" => %{v | "content" => Map.delete(c, "text")}}
+  end
+
+  defp sanitize_text(msg), do: msg
+
   # A payload message trimmed to only what the LiveView's search reads:
   # the key (rootless posts key a row by it), the author, and the post
   # text's type/root. Everything else — signature, previous, hash, the
@@ -2923,6 +2973,7 @@ defmodule HighWire.Timeline do
 
   defp reset_connection(state) do
     schedule_reconnect()
+    state = stop_client(state)
 
     %{
       state
@@ -2934,6 +2985,22 @@ defmodule HighWire.Timeline do
         blob_ls_ref: nil
     }
   end
+
+  # A reconnect drops the client. If it is still alive — the whoami
+  # path can fail while the socket is fine — nothing else will ever
+  # stop it: it holds its connection and keeps streaming into refs this
+  # process no longer tracks, so every item it delivers lands as a
+  # "stray" while the next connection duplicates the work. The client
+  # is linked, so a dead one has already told us via :EXIT; GenServer.stop
+  # exits on a dead pid, so only touch a live one.
+  defp stop_client(%{client: pid} = state) when is_pid(pid) do
+    if Process.alive?(pid), do: Client.stop(pid)
+    %{state | client: nil}
+  catch
+    :exit, _ -> %{state | client: nil}
+  end
+
+  defp stop_client(state), do: %{state | client: nil}
 
   defp schedule_reconnect, do: Process.send_after(self(), :connect, 3_000)
 

@@ -137,6 +137,27 @@ defmodule HighWire.SSB.IdentitiesTest do
       assert [row] = Identities.list()
       refute Map.has_key?(row, "private")
     end
+
+    test "a row with no usable created_at still lists", %{home: home} do
+      # A hand-edited or predating registry can carry null (or a string)
+      # there; ordering must not raise on it.
+      File.write!(
+        registry_path(home),
+        Jason.encode!(%{
+          "identities" => [
+            %{"id" => "@old=.ed25519", "label" => "Old", "created_at" => nil},
+            %{"id" => "@string=.ed25519", "label" => "Str", "created_at" => "soon"},
+            %{"id" => "@new=.ed25519", "label" => "New", "created_at" => 1_700_000_000}
+          ]
+        })
+      )
+
+      assert [new | _rest] = Identities.list()
+      assert new["id"] == "@new=.ed25519"
+
+      assert Enum.map(Identities.list(), & &1["id"]) |> Enum.sort() ==
+               ["@new=.ed25519", "@old=.ed25519", "@string=.ed25519"]
+    end
   end
 
   describe "switching" do

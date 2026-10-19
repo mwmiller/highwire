@@ -201,6 +201,19 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  describe "snapshot/1" do
+    test "a timeline that does not answer in time reads as loading, not a crash" do
+      # A reload can overrun the 500ms budget; the caller is a LiveView
+      # mount, so an exit here would take the page down with it.
+      pid = spawn(fn -> Process.sleep(:infinity) end)
+
+      assert {:loading, payload} = Timeline.snapshot(pid)
+      assert is_map(payload)
+
+      Process.exit(pid, :kill)
+    end
+  end
+
   describe "build_feed/3" do
     # Thread factory: root nil → a rootless (own-key) post. Keys carry
     # the .sha256 suffix msg_id?/1 requires of thread root references.
@@ -227,6 +240,29 @@ defmodule HighWire.TimelineTest do
       assert row.edited_by == ["@alice"]
       # the edit is activity on the post, so the row sits at the edit's time
       assert row.activity == 2_000
+    end
+
+    test "a corrupt message is dropped rather than crashing the feed" do
+      # A value that is not a map, and a text that is not a string, both
+      # raised FunctionClauseError out of the row builders. The feed must
+      # still render its readable messages.
+      bad_value = %{"key" => "%bad.sha256", "value" => "not-a-map", "timestamp" => 3}
+      bad_text = msg("@alice", "%num.sha256", 2, %{"type" => "post", "text" => 12_345})
+      good = post("@alice", "%good.sha256", 1)
+
+      rows = Timeline.build_feed([bad_value, bad_text, good], "@me", %{})
+
+      keys = Enum.map(rows, & &1.msg["key"])
+      refute "%bad.sha256" in keys
+      assert "%good.sha256" in keys
+      # The numeric text became "no text" rather than a crash.
+      assert "%num.sha256" in keys
+    end
+
+    test "a post with no text at all still builds a row" do
+      textless = msg("@alice", "%bare.sha256", 5, %{"type" => "post"})
+      assert [row] = Timeline.build_feed([textless], "@me", %{})
+      assert row.msg["key"] == "%bare.sha256"
     end
 
     test "the newest revision wins when several edits land" do
@@ -611,6 +647,29 @@ defmodule HighWire.TimelineTest do
       )
       |> Map.put(:_post, post)
       |> Map.put(:_follow, follow)
+    end
+
+    test "a stream failure stops the client it abandons" do
+      # The client is only ever replaced, never stopped, on a reconnect:
+      # a live one keeps its socket and streams into refs this process
+      # has dropped. The contacts stream ending mid-session takes that
+      # path, so the abandoned client must be closed on the way out.
+      client =
+        start_supervised!(%{id: :abandoned_client, start: {FakeClient, :start_link, [nil]}})
+
+      st =
+        drain_state(
+          client: client,
+          contacts_ref: :cref,
+          contacts_primed?: true,
+          blob_ls_ref: nil
+        )
+
+      {:noreply, st} = Timeline.handle_info({Client, :cref, {:error, :closed}}, st)
+
+      refute Process.alive?(client)
+      assert st.client == nil
+      assert st.status == :connecting
     end
 
     test "a drain landing after the feed payload rebuilds with follow rows, window intact" do

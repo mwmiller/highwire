@@ -74,6 +74,78 @@ defmodule HighWire.SearchIndexTest do
     assert SearchIndex.status() == :disabled
   end
 
+  describe "crawl robustness" do
+    test "a message whose content is not a map is skipped, not fatal", %{key: key} do
+      # get_in/2 raises on a boxed-string content; that would crash the
+      # GenServer mid-crawl and the restart would re-crawl into the same
+      # record forever.
+      boom = key <> "-boxed"
+
+      on_exit(fn ->
+        :dets.delete(:highwire_search, boom)
+        :dets.delete(:highwire_search, boom <> "2")
+      end)
+
+      SearchIndex.ingest([
+        %{"key" => boom, "value" => "not-a-map", "timestamp" => 1},
+        %{"key" => boom <> "2", "value" => %{"content" => "abc.box"}, "timestamp" => 2}
+      ])
+
+      :sys.get_state(SearchIndex)
+
+      # The index survived and still serves the records around it.
+      tag = "survived #{System.unique_integer([:positive])}"
+
+      SearchIndex.ingest([%{"key" => key, "author" => "@a", "text" => tag, "ts" => 3}])
+      :sys.get_state(SearchIndex)
+
+      assert Process.alive?(Process.whereis(SearchIndex))
+      SearchIndex.search(tag, self())
+      assert_receive {:search_results, ^tag, [hit]}, 2_000
+      assert hit.key == key
+    end
+
+    test "records written before the pre-normalised shape still match", %{key: key} do
+      # A live session hot-reloads the new reader over the old table; the
+      # 4-tuple records must keep answering until the next boot rebuilds.
+      legacy = key <> "-legacy"
+      on_exit(fn -> :dets.delete(:highwire_search, legacy) end)
+      :dets.insert(:highwire_search, {legacy, "@Alice.Example", "Legacy Record", 1})
+
+      SearchIndex.search("legacy record", self())
+      assert_receive {:search_results, "legacy record", hits}, 2_000
+      assert Enum.any?(hits, &(&1.key == legacy))
+
+      SearchIndex.search("alice.example", self())
+      assert_receive {:search_results, "alice.example", hits2}, 2_000
+      assert Enum.any?(hits2, &(&1.key == legacy))
+    end
+
+    test "a broad query is capped at the newest 200, not every match", %{key: key} do
+      tag = "captag#{System.unique_integer([:positive])}"
+
+      items =
+        for n <- 1..205 do
+          %{"key" => "#{key}-#{n}", "author" => "@a", "text" => "#{tag} #{n}", "ts" => n}
+        end
+
+      SearchIndex.ingest(items)
+      :sys.get_state(SearchIndex)
+
+      on_exit(fn ->
+        for n <- 1..205, do: :dets.delete(:highwire_search, "#{key}-#{n}")
+      end)
+
+      SearchIndex.search(tag, self())
+      assert_receive {:search_results, ^tag, hits}, 5_000
+
+      assert length(hits) == 200
+      # Newest first, and the five oldest fall off the cap.
+      assert hd(hits).key == "#{key}-205"
+      assert Enum.all?(hits, &(&1.key != "#{key}-1"))
+    end
+  end
+
   describe "next_backlog_step/1 (what a finished backlog page means)" do
     test "a request that delivers nothing ends the crawl" do
       assert SearchIndex.next_backlog_step(%{

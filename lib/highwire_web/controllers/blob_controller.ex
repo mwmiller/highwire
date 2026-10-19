@@ -48,6 +48,7 @@ defmodule HighWireWeb.BlobController do
         conn
         |> put_resp_content_type(type)
         |> put_resp_header("cache-control", "public, max-age=60")
+        |> put_blob_headers(type)
         |> send_file(200, path)
 
       {:error, _} ->
@@ -60,6 +61,26 @@ defmodule HighWireWeb.BlobController do
     |> put_resp_content_type("image/svg+xml")
     |> put_resp_header("cache-control", "public, max-age=60")
     |> send_resp(200, data)
+  end
+
+  # These bytes are a peer's, not ours. `nosniff` stops a browser from
+  # re-typing them by content the way it re-reads a sniffed type; an SVG
+  # is worse than that — it is a document, and served same-origin it
+  # would run script in the app's own origin the moment a post links
+  # `&<blob>.sha256`. The sandbox costs the ordinary case nothing (an
+  # `<img>` load ignores CSP) and removes script execution from a
+  # document context, which is the whole attack.
+  defp put_blob_headers(conn, "image/svg+xml") do
+    conn
+    |> put_resp_header("x-content-type-options", "nosniff")
+    |> put_resp_header(
+      "content-security-policy",
+      "sandbox; default-src 'none'; style-src 'unsafe-inline'"
+    )
+  end
+
+  defp put_blob_headers(conn, _type) do
+    put_resp_header(conn, "x-content-type-options", "nosniff")
   end
 
   def ident(conn, %{"key" => key}) do

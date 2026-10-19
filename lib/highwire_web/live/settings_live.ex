@@ -53,6 +53,12 @@ defmodule HighWireWeb.SettingsLive do
      )}
   end
 
+  # Nothing should message this page, but a live view that matches only
+  # its own messages dies on anything else; a settings page must not be
+  # the thing that falls over.
+  @impl true
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
   @impl true
   def render(assigns) do
     ~H"""

@@ -23,6 +23,18 @@ defmodule HighWire.SearchIndex do
   directly (`:dets.foldl`), so a search never queues behind crawl items
   in this process's mailbox. Records are inserted into DETS as they
   arrive — no staging batch — so a query task always sees them.
+
+  Records carry the text twice: the original (for the snippet the feed
+  shows) and a downcased copy the query matches against, plus the same
+  pair for the author. Folding the table once per query to downcase
+  every text is by far the most expensive part of a search — measured at
+  ~1.8s for the text and ~0.8s for the authors over a 263k-record index,
+  *independent of how many rows match*, so even a query with no hits
+  paid it. Normalising at ingest moves that cost to a one-off per
+  record; a query then only compares bytes. The fold keeps just the
+  newest `@max_hits` in a bounded set rather than collecting every match
+  and sorting it after (measured ~2.6s against ~10s for "the", with the
+  identical top `@max_hits`).
   """
 
   use GenServer
@@ -32,7 +44,14 @@ defmodule HighWire.SearchIndex do
 
   @table :highwire_search
   @status :highwire_search_status
-  @version 2
+
+  # 3 — records carry their pre-normalised text/author alongside the
+  # original. A version mismatch clears the table so the next boot
+  # rebuilds it in the new shape; until then collect/3 still normalises
+  # the older 4-tuple records on the fly, so a live session's search
+  # keeps working across the reload.
+  @version 3
+  @max_hits 200
   @page 5_000
 
   def start_link(opts \\ []) do
@@ -86,28 +105,69 @@ defmodule HighWire.SearchIndex do
   defp query(ql) do
     qd = String.downcase(ql)
 
-    :dets.foldl(&collect(&1, &2, qd), [], @table)
-    |> Enum.sort_by(& &1.ts, :desc)
-    |> Enum.take(200)
+    :dets.foldl(&collect(&1, &2, qd), :gb_sets.empty(), @table)
+    |> :gb_sets.to_list()
+    |> Enum.reverse()
+    |> Enum.map(fn {ts, key, author, text} ->
+      %{key: key, author: author, text: text, ts: ts}
+    end)
   rescue
-    _ -> []
+    e ->
+      Logger.warning("[search_index] query #{inspect(ql)} failed: #{Exception.message(e)}")
+      []
   catch
-    _, _ -> []
+    kind, reason ->
+      Logger.warning("[search_index] query #{inspect(ql)} failed: #{inspect({kind, reason})}")
+      []
   end
 
-  defp collect({key, author, text, ts}, acc, qd)
-       when is_binary(text) or is_binary(author) do
-    t = if is_binary(text), do: String.downcase(text), else: ""
-    a = if is_binary(author), do: String.downcase(author), else: ""
+  # Records written since @version 3 carry their normalised text and
+  # author; the match is a plain byte search against them.
+  defp collect({key, author, text, ts, text_lc, author_lc}, acc, qd) do
+    t = if is_binary(text_lc), do: text_lc, else: ""
+    a = if is_binary(author_lc), do: author_lc, else: ""
 
-    if String.contains?(t, qd) or String.contains?(a, qd) do
-      [%{key: key, author: author, text: text, ts: ts} | acc]
+    if :binary.match(t, qd) != :nomatch or :binary.match(a, qd) != :nomatch do
+      cap_hits(:gb_sets.add_element({ts, key, author, text}, acc))
     else
       acc
     end
   end
 
+  # A record indexed before @version 3 has no normalised copy. Rather
+  # than miss it, normalise it here; the next boot's rebuild replaces
+  # every such record, so this path is only the transition.
+  defp collect({key, author, text, ts}, acc, qd) do
+    collect({key, author, text, ts, normalize(text), normalize(author)}, acc, qd)
+  end
+
   defp collect(_record, acc, _qd), do: acc
+
+  # The fold visits the table in key order, so nothing bounds it: keep
+  # only the newest @max_hits. The tuple sorts by ts first (then the
+  # unique key), so dropping the smallest reproduces "sort by ts
+  # descending, take @max_hits" exactly — verified against the old shape
+  # on the live index.
+  defp cap_hits(set) do
+    if :gb_sets.size(set) > @max_hits do
+      {_oldest, set} = :gb_sets.take_smallest(set)
+      set
+    else
+      set
+    end
+  end
+
+  # Downcasing is not the query's job once the record is written. A
+  # record whose text is not valid UTF-8 (or not a binary at all) must
+  # not take the index down while crawling, so fall back to the raw
+  # bytes rather than raising.
+  defp normalize(s) when is_binary(s) do
+    String.downcase(s)
+  rescue
+    _ -> s
+  end
+
+  defp normalize(_), do: ""
 
   @doc "Ingest a list of post maps (for tests/live tail)."
   def ingest(items) when is_list(items) do
@@ -290,10 +350,23 @@ defmodule HighWire.SearchIndex do
     cursor = if ts_int > state.cursor, do: ts_int, else: state.cursor
     shown = if is_number(shown_ts), do: trunc(shown_ts), else: ts_int
 
-    :dets.insert(@table, {key, author, text, shown})
+    :dets.insert(@table, {key, author, text, shown, normalize(text), normalize(author)})
     state = %{state | cursor: cursor, indexed: state.indexed + 1}
     maybe_write_meta(state)
     state
+  end
+
+  # `get_in/2` raises when an intermediate value is not a map — a message
+  # whose content is a boxed string, say. That would take the index down
+  # mid-crawl and the restart would re-crawl into the same record
+  # forever, so an unreadable field is simply nothing to index.
+  defp field(value, path) do
+    Enum.reduce_while(path, value, fn key, acc ->
+      case acc do
+        %{} = map -> {:cont, Map.get(map, key)}
+        _ -> {:halt, nil}
+      end
+    end)
   end
 
   # The envelope's timestamp is when the engine *received* the message — a
@@ -329,8 +402,8 @@ defmodule HighWire.SearchIndex do
     state =
       Enum.reduce(items, state, fn
         %{"key" => k, "value" => v, "timestamp" => ts}, st ->
-          author = get_in(v, ["author"])
-          text = get_in(v, ["content", "text"])
+          author = field(v, ["author"])
+          text = field(v, ["content", "text"])
           put_item(st, k, author, text, authored_ts(v) || ts, ts)
 
         %{"key" => k, "author" => a, "text" => t, "ts" => ts}, st ->
@@ -380,8 +453,8 @@ defmodule HighWire.SearchIndex do
     state =
       case item do
         %{"key" => k, "value" => v, "timestamp" => ts} ->
-          author = get_in(v, ["author"])
-          text = get_in(v, ["content", "text"])
+          author = field(v, ["author"])
+          text = field(v, ["content", "text"])
           put_item(state, k, author, text, authored_ts(v) || ts, ts)
 
         # A live stream parks a {sync: true} sentinel between its

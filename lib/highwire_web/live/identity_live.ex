@@ -190,6 +190,7 @@ defmodule HighWireWeb.IdentityLive do
   end
 
   def handle_info({Timeline, :transfer, _status}, socket), do: {:noreply, socket}
+  def handle_info(_msg, socket), do: {:noreply, socket}
 
   defp switched(socket, :ok, id) do
     socket

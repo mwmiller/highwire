@@ -134,6 +134,42 @@ defmodule HighWireWeb.BlobControllerTest do
     end
   end
 
+  test "an svg blob is sandboxed, so a linked document cannot script", %{
+    conn: conn,
+    hex: hex,
+    cache: cache
+  } do
+    # Blob bytes are a peer's, and SVG is a document: served same-origin
+    # it would run script in the app's origin the moment a post links it.
+    File.mkdir_p!(Path.dirname(cache))
+
+    File.write!(
+      cache,
+      ~s{<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>}
+    )
+
+    conn = get(conn, "/blob/#{hex}")
+
+    assert response(conn, 200) =~ "<svg"
+    assert media_type(conn) == "image/svg+xml"
+    assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+
+    assert [csp] = get_resp_header(conn, "content-security-policy")
+    assert csp =~ "sandbox"
+  end
+
+  test "raster blobs carry nosniff too", %{conn: conn, hex: hex, cache: cache} do
+    File.mkdir_p!(Path.dirname(cache))
+    File.write!(cache, @png)
+
+    conn = get(conn, "/blob/#{hex}")
+
+    assert media_type(conn) == "image/png"
+    assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+    # A raster image is not a script-bearing document; no sandbox needed.
+    assert get_resp_header(conn, "content-security-policy") == []
+  end
+
   test "identicon: deterministic framed svg, cached immutably", %{conn: conn} do
     id = "@" <> String.duplicate("A", 43) <> "=.ed25519"
     key = Base.encode16(id, case: :lower)

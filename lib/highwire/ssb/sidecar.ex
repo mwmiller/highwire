@@ -271,7 +271,14 @@ defmodule HighWire.SSB.Sidecar do
   defp stop_pidfile_engine do
     case read_pidfile() do
       %{"os_pid" => pid} when is_integer(pid) ->
-        System.cmd("kill", ["-TERM", to_string(pid)], stderr_to_stdout: true)
+        # The pidfile survives the process that wrote it, so its pid can
+        # name anything by now. Only ever signal our own engine: a
+        # recycled pid would take an innocent process down with it. A
+        # stale pidfile is dropped either way.
+        if beam?(to_string(pid)) do
+          System.cmd("kill", ["-TERM", to_string(pid)], stderr_to_stdout: true)
+        end
+
         remove_pidfile(pid)
 
       _none ->
@@ -522,17 +529,19 @@ defmodule HighWire.SSB.Sidecar do
 
   @impl true
   def terminate(_reason, state) do
-    if is_integer(state.os_pid) do
+    if is_integer(state.os_pid) and beam?(to_string(state.os_pid)) do
       System.cmd("kill", ["-TERM", to_string(state.os_pid)], stderr_to_stdout: true)
-      remove_pidfile(state.os_pid)
     end
+
+    if is_integer(state.os_pid), do: remove_pidfile(state.os_pid)
 
     # An import orphan is just as dangerous as an engine: it writes the
     # store HighWire is about to reopen.
-    if is_integer(state.import_pid) do
+    if is_integer(state.import_pid) and beam?(to_string(state.import_pid)) do
       System.cmd("kill", ["-TERM", to_string(state.import_pid)], stderr_to_stdout: true)
-      remove_pidfile(state.import_pid)
     end
+
+    if is_integer(state.import_pid), do: remove_pidfile(state.import_pid)
 
     :ok
   end
