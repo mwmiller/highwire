@@ -49,6 +49,30 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ ~s(data-status="disabled")
   end
 
+  test "the crawling index tooltip separates thousands instead of eating a digit", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    # The count the header reported as "6000,000": the pattern captured
+    # the lookahead's triplet in \1 and replaced the digit it meant to
+    # keep, so no count of 1,000 or more came out right.
+    :sys.replace_state(view.pid, fn state ->
+      socket = state.socket
+      assigns = socket.assigns
+      changed = Map.put(assigns.__changed__, :index_status, true)
+      assigns = %{assigns | index_status: {:crawling, 60_000}, __changed__: changed}
+      %{state | socket: %{socket | assigns: assigns}}
+    end)
+
+    # A message wakes the view so it renders the change (and the barrier
+    # puts the diff in the test client's mailbox before it is asked).
+    send(view.pid, :nudge)
+    :sys.get_state(view.pid)
+    html = render(view)
+
+    assert html =~ "60,000 messages indexed so far"
+    refute html =~ "6000,000"
+  end
+
   test "the contacts rail never sits empty", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/")
     assert html =~ "No contacts yet"

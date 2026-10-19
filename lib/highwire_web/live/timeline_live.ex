@@ -1768,8 +1768,11 @@ defmodule HighWireWeb.TimelineLive do
   defp search_empty_message(_status, q), do: "Nothing matches “#{q}”."
 
   # 412553 -> 412,553. The header's only big number, and not a library.
+  # The lookahead is non-capturing on purpose: a capture there lands its
+  # triplet in \1 and replaces the digit we mean to keep, so 60_000 came
+  # out "6000,000" and every count from 1,000 up lost a digit.
   defp format_count(n) when is_integer(n),
-    do: Regex.replace(~r/\d(?=(\d{3})+$)/, Integer.to_string(n), "\\1,")
+    do: Regex.replace(~r/(\d)(?=(?:\d{3})+$)/, Integer.to_string(n), "\\1,")
 
   # -- message helpers ---------------------------------------------------
 
