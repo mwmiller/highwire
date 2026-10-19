@@ -48,6 +48,8 @@ defmodule HighWire.SearchIndexTest do
   test "records are dated by the author's timestamp, not the receive time", %{key: key} do
     # A bulk import stamps thousands of messages with one received time;
     # the author's claimed time (value.timestamp) is what a reader sees.
+    tag = "dated by authorship #{System.unique_integer([:positive])}"
+
     SearchIndex.ingest([
       %{
         "key" => key,
@@ -55,15 +57,15 @@ defmodule HighWire.SearchIndexTest do
         "value" => %{
           "author" => "@alice.example",
           "timestamp" => 1_500_000_000_000,
-          "content" => %{"text" => "dated by authorship"}
+          "content" => %{"text" => tag}
         }
       }
     ])
 
     :sys.get_state(SearchIndex)
 
-    SearchIndex.search("dated by authorship", self())
-    assert_receive {:search_results, "dated by authorship", [hit]}, 2_000
+    SearchIndex.search(tag, self())
+    assert_receive {:search_results, ^tag, [hit]}, 2_000
     assert hit.ts == 1_500_000_000_000
   end
 

@@ -1116,7 +1116,7 @@ defmodule HighWireWeb.TimelineLive do
                       <span class="shrink-0 text-faint">{format_ts(h.ts)}</span>
                     </div>
                     <p class="mt-0.5 whitespace-pre-wrap break-words text-sm text-ink">
-                      {snippet_hit(h.text)}
+                      {snippet_hit(h.text, @q)}
                     </p>
                   </div>
                 </article>
@@ -1936,10 +1936,100 @@ defmodule HighWireWeb.TimelineLive do
 
   defp format_ts(_), do: ""
 
-  defp snippet_hit(nil), do: ""
+  # A result snippet is a three-line window (at text-sm in the reading
+  # column) centred on the first match, ellipsised wherever the text
+  # continues. Whitespace collapses first so a snippet cannot sprawl to
+  # however many lines the original post used.
+  @snippet_chars 200
+  @snippet_lead 100
+  # How far either cut edge may reach to finish the word it landed in.
+  @snippet_snap 30
 
-  defp snippet_hit(text) when is_binary(text) do
-    t = String.trim(text)
-    if String.length(t) > 280, do: String.slice(t, 0, 277) <> "...", else: t
+  defp snippet_hit(nil, _q), do: ""
+
+  defp snippet_hit(text, q) when is_binary(text) do
+    t = text |> String.trim() |> String.replace(~r/\s+/u, " ")
+    total = String.length(t)
+
+    if total <= @snippet_chars do
+      t
+    else
+      at =
+        case query_offset(t, q) do
+          nil -> 0
+          byte -> String.length(binary_part(t, 0, byte))
+        end
+
+      cut = min(max(at - @snippet_lead, 0), total - @snippet_chars)
+      more? = cut + @snippet_chars < total
+      first = if cut > 0, do: snap_open(t, cut), else: 0
+      last = if more?, do: snap_closed(t, cut + @snippet_chars), else: total
+
+      prefix = if first > 0, do: "…", else: ""
+      suffix = if last < total, do: "…", else: ""
+      prefix <> String.slice(t, first, last - first) <> suffix
+    end
+  end
+
+  # The window edges are chosen by character count, so they land inside
+  # words. Reach out to complete the first and last word rather than serve
+  # a fragment ("…ure ~dtBy is supposed") — but only within a word's
+  # length: an unbroken run longer than the cap (URL, hash, stuck
+  # keyboard) is left cut, because it is not a word a reader expects to
+  # see finished.
+  defp snap_open(t, idx) do
+    if word_char?(t, idx) do
+      start = word_start(t, idx)
+      if idx - start <= @snippet_snap, do: start, else: idx
+    else
+      idx
+    end
+  end
+
+  defp snap_closed(t, idx) do
+    if word_char?(t, idx) do
+      stop = word_stop(t, idx)
+      if stop - idx <= @snippet_snap, do: stop, else: idx
+    else
+      idx
+    end
+  end
+
+  defp word_char?(t, idx) do
+    case String.at(t, idx) do
+      nil -> false
+      " " -> false
+      _ -> true
+    end
+  end
+
+  defp word_start(t, idx) do
+    before = String.slice(t, 0, idx)
+
+    case Regex.run(~r/\S+$/u, before, return: :index) do
+      [{start, _len}] -> String.length(binary_part(before, 0, start))
+      _ -> idx
+    end
+  end
+
+  defp word_stop(t, idx) do
+    rest = String.slice(t, idx, String.length(t) - idx)
+
+    case Regex.run(~r/\A\S+/u, rest, return: :index) do
+      [{0, len}] -> idx + String.length(binary_part(rest, 0, len))
+      _ -> idx
+    end
+  end
+
+  # First match of q in text, as a byte offset (case-insensitive, and the
+  # query is escaped — it is user input). nil when the post only matched
+  # on its author, in which case the snippet opens the post instead.
+  defp query_offset(text, q) do
+    case Regex.run(~r/#{Regex.escape(q)}/iu, text, return: :index) do
+      [{start, _len}] -> start
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 end

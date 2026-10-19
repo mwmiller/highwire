@@ -781,6 +781,55 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ ~s(id="compose")
   end
 
+  test "store snippets are a three-line window centred on the query", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    render_change(view, "search", %{"q" => "needle"})
+    Process.sleep(50)
+
+    # match deep in a long body, with distinctive runs on either side
+    long =
+      String.duplicate("X", 500) <>
+        " needle appears deep in this body " <> String.duplicate("Y", 500)
+
+    send(
+      view.pid,
+      {:search_results, "needle",
+       [%{key: "%long-hit.sha256", author: "@alice.ed25519", text: long, ts: 1_700_000_000_000}]}
+    )
+
+    html = render(view)
+
+    assert html =~ "needle appears deep in this body"
+    # the passage continues either side of the window, with ellipses
+    assert html =~ "…"
+    # and the window is bounded: neither unbroken run appears at full length
+    refute html =~ String.duplicate("X", 130)
+    refute html =~ String.duplicate("Y", 130)
+  end
+
+  test "store snippets open and close on whole words", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    render_change(view, "search", %{"q" => "needle"})
+    Process.sleep(50)
+
+    # the cut lands mid-word on both sides: 140 is inside "alpha", 340 is
+    # inside "omega" — the snippet must still carry both words whole
+    long = String.duplicate("alpha ", 40) <> "needle" <> String.duplicate(" omega", 40)
+
+    send(
+      view.pid,
+      {:search_results, "needle",
+       [%{key: "%word-hit.sha256", author: "@alice.ed25519", text: long, ts: 1_700_000_000_000}]}
+    )
+
+    html = render(view)
+
+    assert html =~ "…alpha alpha"
+    assert html =~ "omega…"
+    refute html =~ "…lpha"
+    refute html =~ "omeg…"
+  end
+
   describe "feed coherence" do
     test "a reply bumps an already-shown thread to the top", %{conn: conn} do
       base = 1_700_000_000_000
