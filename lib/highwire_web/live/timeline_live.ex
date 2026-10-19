@@ -32,6 +32,7 @@ defmodule HighWireWeb.TimelineLive do
   alias HighWireWeb.Components.Heart
   alias HighWireWeb.Components.Mentions
   alias HighWireWeb.Components.Nav
+  alias HighWireWeb.MessageText
 
   import HighWireWeb.Components.Time, only: [age: 1]
 
@@ -562,9 +563,17 @@ defmodule HighWireWeb.TimelineLive do
   defp row_profile_ids(row, likes_by) do
     likers = Map.get(likes_by, like_target(row), [])
 
-    [author_of(row.msg), Map.get(row, :participants, []), Map.get(row, :followed, []), likers]
+    [author_of(row.msg), Map.get(row, :participants, []), contact_people(row), likers]
     |> List.flatten()
     |> Enum.filter(&(is_binary(&1) and String.starts_with?(&1, "@")))
+  end
+
+  # Everyone a contact row is about — the lists are the row's action
+  # (:followed, :blocked, :unfollowed), so all three must be collected
+  # for profiles and search alike.
+  defp contact_people(row) do
+    Map.get(row, :followed, []) ++
+      Map.get(row, :blocked, []) ++ Map.get(row, :unfollowed, [])
   end
 
   # Private rows come from the decrypted feed; the public window never
@@ -689,8 +698,12 @@ defmodule HighWireWeb.TimelineLive do
   defp row_uid(%{root_key: root}) when is_binary(root), do: root
   defp row_uid(%{msg: msg}), do: msg["key"]
 
-  # One row per follow author; everything else keys by thread identity.
-  defp dedupe_id(%{kind: :contact} = row), do: {:contact, author_of(row.msg)}
+  # One row per author per contact direction — a follow and a block by
+  # the same author are two rows; everything else keys by thread
+  # identity.
+  defp dedupe_id(%{kind: :contact} = row),
+    do: {:contact, author_of(row.msg), Map.get(row, :contact_action, :followed)}
+
   defp dedupe_id(row), do: {:row, row_uid(row)}
 
   # DOM identity for a feed row. LiveView patches repeated children by
@@ -1354,25 +1367,34 @@ defmodule HighWireWeb.TimelineLive do
     """
   end
 
+  # The direction word between the author and the chips.
+  defp contact_verb(:blocked), do: "blocked"
+  defp contact_verb(:unfollowed), do: "unfollowed"
+  defp contact_verb(_), do: "followed"
+
   attr :row, :map, required: true
   attr :ctx, :map, required: true
 
-  # Feed rows carry :followed (the collapsed list); the arrival tab's
-  # individual contact messages fall back to their single contact.
-  # "+N more" toggles the full list (same expand event as post bodies);
-  # each followed chip links to that feed's profile.
+  # Feed rows carry the collapsed list for their relationship —
+  # :followed, :blocked or :unfollowed, keyed by the row's :contact_action
+  # (the Timeline groups contact edits by direction so a block never
+  # masquerades as a follow). The flat window's individual contact
+  # messages fall back to their single contact and its verb. "+N more"
+  # toggles the full list (same expand event as post bodies); each chip
+  # links to that feed's profile.
   defp contact_row(assigns) do
-    followed =
-      Map.get(assigns.row, :followed) || [content(assigns.row.msg)["contact"]]
+    action = Map.get(assigns.row, :contact_action, :followed)
+    people = Map.get(assigns.row, action) || [content(assigns.row.msg)["contact"]]
 
-    followed = Enum.filter(followed, &is_binary/1)
+    people = Enum.filter(people, &is_binary/1)
     expanded? = MapSet.member?(assigns.ctx.expanded, assigns.row.msg["key"])
 
     assigns =
       assigns
       |> assign(:author, author_of(assigns.row.msg))
-      |> assign(:followed, followed)
-      |> assign(:shown_followed, if(expanded?, do: followed, else: Enum.take(followed, 3)))
+      |> assign(:verb, contact_verb(action))
+      |> assign(:people, people)
+      |> assign(:shown, if(expanded?, do: people, else: Enum.take(people, 3)))
       |> assign(:expanded?, expanded?)
 
     ~H"""
@@ -1400,9 +1422,9 @@ defmodule HighWireWeb.TimelineLive do
         <span :if={profile_href(@author) == nil} class="text-ink">
           {Ident.display_name(@author, @ctx)}
         </span>
-        followed
+        {@verb}
         <span class="ml-1 inline-flex flex-wrap items-center gap-x-3 gap-y-1 align-middle">
-          <span :for={fid <- @shown_followed} class="inline-flex items-center gap-1.5">
+          <span :for={fid <- @shown} class="inline-flex items-center gap-1.5">
             <.link
               navigate={profile_href(fid)}
               class="inline-flex items-center gap-1.5 hover:opacity-80"
@@ -1417,16 +1439,16 @@ defmodule HighWireWeb.TimelineLive do
             </.link>
           </span>
           <button
-            :if={length(@followed) > length(@shown_followed)}
+            :if={length(@people) > length(@shown)}
             type="button"
             phx-click="expand"
             phx-value-key={@row.msg["key"]}
             class="text-accent hover:underline"
           >
-            +{length(@followed) - length(@shown_followed)} more
+            +{length(@people) - length(@shown)} more
           </button>
           <button
-            :if={@expanded? and length(@followed) > 3}
+            :if={@expanded? and length(@people) > 3}
             type="button"
             phx-click="expand"
             phx-value-key={@row.msg["key"]}
@@ -1465,7 +1487,7 @@ defmodule HighWireWeb.TimelineLive do
           </.link>
           <span :if={@href == nil}>{Ident.display_name(author_of(@row.msg), @ctx)}</span>
         </span>
-        {other_label(@row.msg, @ctx)}
+        {MessageText.describe(@row.msg, @ctx)}
       </p>
       <span class="ml-auto not-italic text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
     </div>
@@ -1585,7 +1607,7 @@ defmodule HighWireWeb.TimelineLive do
   defp matches_query?(row, q) do
     String.contains?(String.downcase(author_of(row.msg)), q) or
       String.contains?(String.downcase(text(row.msg)), q) or
-      Enum.any?(Map.get(row, :followed, []), &String.contains?(String.downcase(&1), q))
+      Enum.any?(contact_people(row), &String.contains?(String.downcase(&1), q))
   end
 
   # -- view filters ------------------------------------------------------
@@ -1734,10 +1756,16 @@ defmodule HighWireWeb.TimelineLive do
   # One-line plain preview of a recent reply. The markdown renders
   # first — so **bold**, > quotes and [links](…) preview as their text
   # instead of their source — then tags drop out, entities decode, and
-  # the line clamps. Public (with @doc false) for direct tests.
+  # the line clamps. A message with no text at all describes itself in
+  # a sentence instead (a block, a like, a channel toggle), so the
+  # preview line never comes up blank. Public (with @doc false) for
+  # direct tests.
   @doc false
   def snippet(msg, ctx \\ %{rev: nil}) do
-    snippet_of(text(msg), Map.get(ctx, :rev))
+    case text(msg) do
+      "" -> MessageText.describe(msg, ctx)
+      body -> snippet_of(body, Map.get(ctx, :rev))
+    end
   end
 
   # The rendered HTML is immediately stripped back to text, so the
@@ -1831,103 +1859,8 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
-  # Each of these types carries a specific payload, so name the specific
-  # thing rather than echoing the raw protocol type at the reader. A bare
-  # "sent a post-edit message" tells the reader nothing they can act on.
-  defp other_label(msg, ctx) do
-    case content(msg) do
-      c when map_size(c) == 0 -> "sent a private message"
-      %{"type" => "channel"} = c -> channel_label(c)
-      %{"type" => "about"} = c -> about_label(c, ctx)
-      %{"type" => "pub"} = c -> pub_label(c)
-      %{"type" => "room/alias"} = c -> alias_label(c)
-      %{"type" => "post-edit"} = c -> edit_label(c, msg, ctx)
-      %{"type" => type} when is_binary(type) -> "sent a #{humanize_type(type)} message"
-      _ -> "sent a message"
-    end
-  end
-
-  # An about message sets a name/description for the feed it points at.
-  # Resolve that feed to a display name when we can; fall back to the
-  # generic phrase when the target isn't in the index.
-  defp about_label(%{"about" => about} = c, ctx) when is_binary(about) do
-    target = Map.get(ctx.index, about) || about
-
-    cond do
-      is_binary(c["name"]) -> "set #{Ident.display_name(target, ctx)}'s display name"
-      is_binary(c["description"]) -> "wrote #{Ident.display_name(target, ctx)}'s bio"
-      true -> "updated #{Ident.display_name(target, ctx)}'s profile"
-    end
-  end
-
-  defp about_label(c, _ctx) do
-    cond do
-      Map.has_key?(c, "name") -> "set a display name"
-      Map.has_key?(c, "description") -> "wrote a bio"
-      true -> "updated a profile"
-    end
-  end
-
-  defp pub_label(%{"address" => %{"host" => host}}) when is_binary(host),
-    do: "announced the pub #{host}"
-
-  defp pub_label(_), do: "announced a pub"
-
-  defp alias_label(%{"alias" => alias} = c) when is_binary(alias) do
-    room = if is_binary(c["room"]), do: " on #{c["room"]}", else: ""
-    "registered the alias #{alias}#{room}"
-  end
-
-  defp alias_label(_), do: "registered a room alias"
-
-  # A post-edit points at the post it revises via revisionRoot/revisionBranch.
-  # Resolve that key to a name through the index so the row reads as
-  # "edited their post" or "edited <name>'s post" instead of naming the
-  # protocol type.
-  defp edit_label(c, msg, ctx) do
-    root = c["revisionRoot"] || c["revisionBranch"] || c["root"]
-    author = author_of(msg)
-
-    cond do
-      is_nil(root) ->
-        "edited a post"
-
-      Map.get(ctx.index, root) == author ->
-        "edited their post"
-
-      target = Map.get(ctx.index, root) ->
-        "edited #{Ident.display_name(target, ctx)}'s post"
-
-      true ->
-        "edited an older post"
-    end
-  end
-
-  # The last-resort fallback: strip protocol punctuation so an unknown
-  # type reads as a phrase, not as "sent a room/alias message".
-  defp humanize_type(type) do
-    type
-    |> String.replace(["/", "_", "-"], " ")
-    |> String.downcase()
-  end
-
-  # Subscription toggles get a sentence of their own: "sent a channel
-  # message" hid both the channel and which way the toggle went.
-  defp channel_label(%{"channel" => channel, "subscribed" => subscribed})
-       when is_binary(channel) and is_boolean(subscribed) do
-    name = channel |> String.trim() |> String.trim_leading("#")
-
-    if name == "" do
-      "toggled a channel subscription"
-    else
-      "#{channel_verb(subscribed)} ##{name}"
-    end
-  end
-
-  defp channel_label(_), do: "toggled a channel subscription"
-
-  defp channel_verb(true), do: "subscribed to"
-  defp channel_verb(false), do: "unsubscribed from"
+  # Each message type's sentence lives in HighWireWeb.MessageText, shared
+  # with the thread page — a block reads the same wherever it appears.
 
   defp format_ts(ts) when is_integer(ts) do
     {:ok, dt} = DateTime.from_unix(ts, :millisecond)

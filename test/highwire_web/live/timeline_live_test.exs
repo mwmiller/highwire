@@ -272,6 +272,48 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert is_binary(html)
     end
 
+    test "blocks land as their own rows beside follows and unfollows", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%follow-dave.sha256", "@alice:.ed25519", now - 2_000, %{
+          "type" => "contact",
+          "contact" => "@dave:.ed25519",
+          "following" => true
+        }),
+        ssb_msg("%block-eve.sha256", "@alice:.ed25519", now - 1_000, %{
+          "type" => "contact",
+          "contact" => "@eve:.ed25519",
+          "blocking" => true
+        }),
+        ssb_msg("%unfollow-frank.sha256", "@alice:.ed25519", now - 500, %{
+          "type" => "contact",
+          "contact" => "@frank:.ed25519",
+          "following" => false
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      # each direction is named, not lumped under "followed"
+      assert html =~ "followed"
+      assert html =~ "blocked"
+      assert html =~ "unfollowed"
+
+      dave = URI.encode_www_form("@dave:.ed25519")
+      eve = URI.encode_www_form("@eve:.ed25519")
+      frank = URI.encode_www_form("@frank:.ed25519")
+
+      assert html =~ dave
+      assert html =~ eve
+      assert html =~ frank
+
+      # one row per direction, newest activity first
+      assert pos(html, frank) < pos(html, eve)
+      assert pos(html, eve) < pos(html, dave)
+    end
+
     test "a newer follow replaces the loaded follow row for that author", %{conn: conn} do
       now = 1_700_000_000_000
 

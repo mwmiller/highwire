@@ -12,8 +12,9 @@ defmodule HighWire.Timeline do
       ("bump") — replies push old threads back to the top
     * votes (likes) never create rows and never bump; they only add to
       like counts inside their thread
-    * contact (follow) messages collapse into one row per author listing
-      who they followed, positioned at the author's latest follow
+    * contact (follow/block) messages collapse into one row per author
+      per direction — who they followed, who they blocked, who they let
+      go — positioned at the author's latest edit of that kind
     * timestamps are clamped to now (Poncho's `min(arrival, claimed)`
       future-dated guard; arrival time itself is not exposed over muxrpc)
 
@@ -2420,19 +2421,21 @@ defmodule HighWire.Timeline do
     |> Enum.take(2000)
   end
 
-  # A run of "X followed a", "X followed b" messages collapses into ONE
-  # row per author — listing everyone they followed (the UI shows their
-  # avatars) — positioned at the latest follow.
+  # Contact edits arrive as many messages per author; they collapse into
+  # one row per author *per direction* — who they followed, who they
+  # blocked, who they let go — positioned at the latest edit in that
+  # group. The direction is the group's key, not a detail: a block shown
+  # as a follow would invert the reader's picture of the graph.
   defp contact_rows(msgs, self_id) do
     msgs
     |> Enum.filter(fn msg ->
       is_binary(msg["value"]["author"]) and is_binary(content(msg)["contact"])
     end)
-    |> Enum.group_by(& &1["value"]["author"])
-    |> Enum.map(fn {author, group} ->
+    |> Enum.group_by(fn msg -> {msg["value"]["author"], contact_action(content(msg))} end)
+    |> Enum.map(fn {{author, action}, group} ->
       latest = Enum.max_by(group, &bump_ts/1)
 
-      followed =
+      contacts =
         group
         |> Enum.map(&content(&1)["contact"])
         |> Enum.uniq()
@@ -2441,9 +2444,17 @@ defmodule HighWire.Timeline do
         self_id: self_id,
         rooted: true
       )
-      |> Map.put(:followed, followed)
+      |> Map.put(action, contacts)
+      |> Map.put(:contact_action, action)
     end)
   end
+
+  # Which way a contact edit went. Blocking wins: an edit may carry both
+  # flags, and the block is the relationship that matters.
+  defp contact_action(%{"blocking" => true}), do: :blocked
+  defp contact_action(%{"following" => true}), do: :followed
+  defp contact_action(%{"following" => false}), do: :unfollowed
+  defp contact_action(_), do: :followed
 
   defp build_entry(kind, msg, activity, participants, replies, likes, recent, opts) do
     self_id = Keyword.fetch!(opts, :self_id)

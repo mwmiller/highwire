@@ -186,4 +186,64 @@ defmodule HighWireWeb.PostLiveTest do
     refute html =~ ~s(aria-pressed="true")
     assert html =~ "not in the local store"
   end
+
+  test "a message with no text renders a sentence describing it", %{conn: conn} do
+    jeremy = "@0W1ekqmNIN4e1IsAWBM1Kft6w5w86BMUdPO2M0SO83I=.ed25519"
+    silvia = "@SS47qSh5M6HsOZOAGzeQDG0s0G1dXbSzLsQWML7Cfzo=.ed25519"
+    key = Base.url_encode64("%block-thread=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    # The root is a contact edit — no body text at all — with a reply
+    # that is a textless post carrying only a channel.
+    root = %{
+      "key" => "%block-thread=.sha256",
+      "value" => %{
+        "author" => jeremy,
+        "timestamp" => 1_700_000_000_000,
+        "content" => %{
+          "type" => "contact",
+          "contact" => silvia,
+          "blocking" => true,
+          "about" => %{"name" => "Szilvia"}
+        }
+      }
+    }
+
+    reply = %{
+      "key" => "%channel-reply=.sha256",
+      "value" => %{
+        "author" => jeremy,
+        "timestamp" => 1_700_000_060_000,
+        "content" => %{"type" => "post", "channel" => "drama"}
+      }
+    }
+
+    :sys.replace_state(view.pid, fn state ->
+      socket = state.socket
+      assigns = socket.assigns
+
+      changed =
+        assigns.__changed__
+        |> Map.put(:root, assigns.root)
+        |> Map.put(:replies, assigns.replies)
+        |> Map.put(:not_found, assigns.not_found)
+
+      assigns =
+        assigns
+        |> Map.put(:root, root)
+        |> Map.put(:replies, [reply])
+        |> Map.put(:not_found, false)
+        |> Map.put(:__changed__, changed)
+
+      %{state | socket: %{socket | assigns: assigns}}
+    end)
+
+    send(view.pid, :nudge)
+    html = render(view)
+
+    # the name rides the contact edit itself, so it shows even though no
+    # profile for the target was ever fetched
+    assert html =~ "blocked Szilvia"
+    assert html =~ "posted in #drama"
+  end
 end

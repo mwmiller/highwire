@@ -20,6 +20,7 @@ defmodule HighWireWeb.PostLive do
   alias HighWireWeb.Components.Heart
   alias HighWireWeb.Components.Mentions
   alias HighWireWeb.Components.Nav
+  alias HighWireWeb.MessageText
 
   import HighWireWeb.Components.Time, only: [age: 1]
 
@@ -375,6 +376,14 @@ defmodule HighWireWeb.PostLive do
                     {raw(Markdown.to_html(text(@root), blob_rev: @blob_rev))}
                   </div>
 
+                  <%!-- A message that says nothing in words still said
+                  something — a block, a follow, a like — and reads as a
+                  sentence here instead of leaving a blank body under the
+                  byline. --%>
+                  <p :if={text(@root) == ""} class="mt-3 text-sm italic text-sub">
+                    {MessageText.describe(@root, %{profiles: @profiles})}
+                  </p>
+
                   <div class="mt-3 flex gap-4 text-xs text-dim">
                     <span :if={length(@replies) > 0}>
                       {length(@replies)} {if length(@replies) == 1, do: "reply", else: "replies"}
@@ -446,6 +455,10 @@ defmodule HighWireWeb.PostLive do
                 <div :if={text(reply) != ""} class="md-body mt-1.5 text-sm text-ink">
                   {raw(Markdown.to_html(text(reply), blob_rev: @blob_rev))}
                 </div>
+
+                <p :if={text(reply) == ""} class="mt-1.5 text-sm italic text-sub">
+                  {MessageText.describe(reply, %{profiles: @profiles})}
+                </p>
 
                 <div class="mt-1.5 flex items-center gap-1.5">
                   <Heart.pill key={reply["key"]} liked={reply["key"] in @my_likes} />

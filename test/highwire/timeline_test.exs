@@ -329,6 +329,49 @@ defmodule HighWire.TimelineTest do
 
       assert is_list(Timeline.build_feed([a, b], "@me", %{}))
     end
+
+    test "contact edits group by direction: a block is not a follow" do
+      follow =
+        msg("@alice", "%f1.sha256", 1_000, %{
+          "type" => "contact",
+          "contact" => "@dave.ed25519",
+          "following" => true
+        })
+
+      block =
+        msg("@alice", "%b1.sha256", 2_000, %{
+          "type" => "contact",
+          "contact" => "@eve.ed25519",
+          "blocking" => true
+        })
+
+      unfollow =
+        msg("@alice", "%u1.sha256", 3_000, %{
+          "type" => "contact",
+          "contact" => "@frank.ed25519",
+          "following" => false
+        })
+
+      # a block that also carries following: false stays a block
+      both =
+        msg("@alice", "%b2.sha256", 4_000, %{
+          "type" => "contact",
+          "contact" => "@gina.ed25519",
+          "blocking" => true,
+          "following" => false
+        })
+
+      rows = Timeline.build_feed([follow, block, unfollow, both], "@me", %{})
+
+      # one row per author per direction, newest edit first: both blocks
+      # collapse into one row (which never claims those feeds were
+      # followed), and the follow/unfollow stay distinct
+      assert Enum.map(rows, &{&1.contact_action, Map.get(&1, &1.contact_action)}) == [
+               {:blocked, ["@eve.ed25519", "@gina.ed25519"]},
+               {:unfollowed, ["@frank.ed25519"]},
+               {:followed, ["@dave.ed25519"]}
+             ]
+    end
   end
 
   describe "contacts stream items" do
