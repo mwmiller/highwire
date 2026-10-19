@@ -188,6 +188,112 @@ let OpenPost = {
   }
 }
 
+// Downsized markdown images open over the page on click. `.md-body img` is
+// capped at 16rem tall and the reading column, so most photos arrive shrunk;
+// one already at its natural size is left alone. Delegated from the document
+// in the capture phase: markdown surfaces are everywhere (timeline, thread,
+// profile), live navigation rebuilds them, and the capture phase runs before
+// the post row's own click-to-open — which must not fire for the same click.
+const shrunk = (img) =>
+  img.naturalWidth > img.clientWidth + 1 || img.naturalHeight > img.clientHeight + 1
+
+// Only the path carries the blob id: the renderer cache-busts image URLs with
+// ?v=<n>, and an author's link to the same blob has no query.
+function urlPath(url) {
+  try {
+    return new URL(url, document.baseURI).pathname
+  } catch (_) {
+    return url
+  }
+}
+
+// The cursor is the only hint before the click, and it can only be honest
+// once the bytes are in and the layout has settled, so mark the ones that
+// are actually being shrunk. A stale mark costs nothing: the click decides
+// for itself. Re-measured rather than marked once, because both the set of
+// images and the size they get change underneath us: LiveView rebuilds rows
+// it has already drawn (an added class does not survive the patch), and
+// narrowing the window re-wraps bodies. `load` is in the capture phase
+// because it does not bubble — a lazy image arrives with no patch at all.
+function markZoomable() {
+  document.querySelectorAll(".md-body img").forEach((img) => {
+    img.classList.toggle("zoomable", img.complete && shrunk(img))
+  })
+}
+
+document.addEventListener("load", (e) => {
+  const img = e.target
+  if (img instanceof HTMLImageElement && img.closest(".md-body") && shrunk(img)) {
+    img.classList.add("zoomable")
+  }
+}, true)
+
+markZoomable()
+document.addEventListener("phx:page-loading-stop", markZoomable)
+window.addEventListener("phx:update", markZoomable)
+
+let zoomFrame = null
+window.addEventListener("resize", () => {
+  cancelAnimationFrame(zoomFrame)
+  zoomFrame = requestAnimationFrame(markZoomable)
+})
+
+let zoomed = null
+
+function onZoomKey(e) {
+  if (e.key !== "Escape") return
+  e.preventDefault()
+  closeZoom()
+}
+
+function closeZoom() {
+  if (!zoomed) return
+  const {overlay, opener} = zoomed
+  zoomed = null
+  document.removeEventListener("keydown", onZoomKey)
+  overlay.remove()
+  document.body.classList.remove("zoom-open")
+  // The image itself is not focusable; a link around it is, and that link
+  // is what the viewer stood in for.
+  const back = opener.closest("a[href]") || opener
+  if (back.isConnected) back.focus({preventScroll: true})
+}
+
+function openZoom(img) {
+  const overlay = document.createElement("div")
+  overlay.id = "image-zoom"
+  overlay.tabIndex = -1
+  overlay.setAttribute("role", "dialog")
+  overlay.setAttribute("aria-modal", "true")
+
+  const full = document.createElement("img")
+  full.src = img.currentSrc || img.src
+  full.alt = img.alt || ""
+  overlay.appendChild(full)
+
+  overlay.addEventListener("click", closeZoom)
+  zoomed = {overlay, opener: img}
+  document.body.appendChild(overlay)
+  document.body.classList.add("zoom-open")
+  document.addEventListener("keydown", onZoomKey)
+  overlay.focus({preventScroll: true})
+}
+
+document.addEventListener("click", (e) => {
+  const img = e.target instanceof Element ? e.target.closest(".md-body img") : null
+  if (!img || zoomed || !shrunk(img)) return
+
+  // A link around the image is the author's own target — a bigger blob, a
+  // page — so the link keeps the click; only a link back to the image itself
+  // is taken over, which is what a self-link wants anyway.
+  const link = img.closest("a[href]")
+  if (link && urlPath(link.href) !== urlPath(img.currentSrc || img.src)) return
+
+  e.preventDefault()
+  e.stopPropagation()
+  openZoom(img)
+}, true)
+
 let TabActivity = {
   mounted() {
     this.active = null
