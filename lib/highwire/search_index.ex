@@ -8,8 +8,9 @@ defmodule HighWire.SearchIndex do
   top-level `timestamp`). One request serves at most `@page` rows and
   `gt` compares strictly (`ts > gt`), so:
 
-    * a full page re-opens from the cursor until a short page proves the
-      backlog is exhausted;
+    * the engine omits rows whose message it cannot hydrate, so a
+      delivered page shorter than `limit` does not prove the backlog is
+      exhausted — only a request that delivers nothing does;
     * `gt` resumes one *below* the cursor — received timestamps are not
       unique, and a strict `>` at the boundary would silently skip the
       message's same-millisecond siblings (the primary key absorbs the
@@ -171,10 +172,13 @@ defmodule HighWire.SearchIndex do
     enabled? = Keyword.get(opts, :enabled?, Sidecar.enabled?())
 
     # Our own supervisor/owner: with trap_exit on, its exit signal
-    # arrives as a message and must stop us, not be dropped.
+    # arrives as a message and must stop us, not be dropped. Ancestors
+    # record a registered supervisor by name, so resolve that to the
+    # pid its exit signal will come from.
     parent =
       case Process.get(:"$ancestors") do
         [p | _] when is_pid(p) -> p
+        [name | _] when is_atom(name) -> Process.whereis(name)
         _ -> nil
       end
 
@@ -375,31 +379,17 @@ defmodule HighWire.SearchIndex do
   end
 
   def handle_info({Client, ref, :done}, %{ref: ref, phase: :backlog, client: client} = state) do
-    full? = state.page_count >= @page
-    advanced? = state.cursor > state.page_start_cursor
+    case next_backlog_step(state) do
+      :live ->
+        # An empty page: the backlog is exhausted. Checkpoint, then tail.
+        write_meta(state.cursor)
+        open_live_stream(state)
 
-    cond do
-      full? and advanced? ->
-        # More backlog behind this page: re-open from the cursor.
-        case open_backlog(client, resume_gt(state.cursor)) do
+      {:page, gt} ->
+        case open_backlog(client, gt) do
           nil -> reconnect_soon(state, 5_000)
           ref2 -> {:noreply, begin_stream(state, ref2, :backlog)}
         end
-
-      full? ->
-        # A full page that moved nothing means every row was already
-        # indexed (one absurd same-millisecond burst). Stop paging
-        # rather than loop forever; live will pick up from here.
-        Logger.warning(
-          "[search_index] backlog stalled at cursor #{state.cursor} (full page made no progress); going live"
-        )
-
-        open_live_stream(state)
-
-      true ->
-        # Short page: the backlog is exhausted. Checkpoint, then tail.
-        write_meta(state.cursor)
-        open_live_stream(state)
     end
   end
 
@@ -437,6 +427,25 @@ defmodule HighWire.SearchIndex do
   # Stale messages from a stream we have already swapped out (or any
   # other stray send): the ref no longer matches, so they are dropped.
   def handle_info(_msg, state), do: {:noreply, state}
+
+  # What a finished backlog page means. The delivered count cannot stand
+  # in for "the engine had nothing more": rows whose message cannot be
+  # hydrated are omitted (not sent as nulls), so a limit-sized read can
+  # deliver fewer frames than it served. A short page is therefore not
+  # proof of exhaustion — only an empty one is.
+  @doc false
+  def next_backlog_step(%{page_count: 0}), do: :live
+
+  def next_backlog_step(%{cursor: cursor, page_start_cursor: start}) when cursor > start,
+    do: {:page, cursor - 1}
+
+  # Rows arrived but none moved the cursor: a wall of rows sharing one
+  # received millisecond. Re-reading behind it would serve the same page
+  # forever, so step strictly past the wall. (A single millisecond
+  # holding more than a page of posts — far beyond anything this store
+  # has — would lose its overflow here; the strict read is the only way
+  # forward.)
+  def next_backlog_step(%{cursor: cursor}), do: {:page, cursor}
 
   # Opening a stream is the one signal we have for where the crawl
   # stands: backlog open → counting, live open → caught up.

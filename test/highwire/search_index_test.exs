@@ -49,4 +49,43 @@ defmodule HighWire.SearchIndexTest do
     # The engine is disabled under test, so the index never dials.
     assert SearchIndex.status() == :disabled
   end
+
+  describe "next_backlog_step/1 (what a finished backlog page means)" do
+    test "a request that delivers nothing ends the crawl" do
+      assert SearchIndex.next_backlog_step(%{
+               page_count: 0,
+               cursor: 10,
+               page_start_cursor: 10
+             }) == :live
+    end
+
+    test "a short page that moved the cursor keeps paging" do
+      # The engine omits rows whose message it cannot hydrate, so a
+      # limit-sized read can deliver fewer frames while more rows remain.
+      # Treating that as exhaustion is what lost 88k rows once.
+      assert SearchIndex.next_backlog_step(%{
+               page_count: 4_902,
+               cursor: 100,
+               page_start_cursor: 50
+             }) == {:page, 99}
+    end
+
+    test "resume reads one behind the cursor so same-millisecond siblings survive" do
+      assert SearchIndex.next_backlog_step(%{
+               page_count: 5_000,
+               cursor: 100,
+               page_start_cursor: 50
+             }) == {:page, 99}
+    end
+
+    test "a page that moved nothing steps strictly past the millisecond wall" do
+      # Re-reading behind a shared millisecond would serve the same page
+      # forever; the strict read is the only way forward.
+      assert SearchIndex.next_backlog_step(%{
+               page_count: 5_000,
+               cursor: 100,
+               page_start_cursor: 100
+             }) == {:page, 100}
+    end
+  end
 end
