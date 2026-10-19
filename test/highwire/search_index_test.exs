@@ -44,4 +44,9 @@ defmodule HighWire.SearchIndexTest do
     SearchIndex.search("zzz-no-such-post-zzz", self())
     assert_receive {:search_results, "zzz-no-such-post-zzz", []}, 2_000
   end
+
+  test "status reports the index state the header chip consumes" do
+    # The engine is disabled under test, so the index never dials.
+    assert SearchIndex.status() == :disabled
+  end
 end

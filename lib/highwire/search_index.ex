@@ -30,11 +30,35 @@ defmodule HighWire.SearchIndex do
   alias HighWire.SSB.{Client, Keys, Sidecar}
 
   @table :highwire_search
+  @status :highwire_search_status
   @version 1
   @page 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @doc """
+  The index's current state, for the header indicator:
+
+    * `:connecting`    — dialling the engine (or between retries)
+    * `{:crawling, n}` — backlog paging; `n` posts indexed this session
+    * `:live`          — backlog done, live tail attached (up to date)
+    * `:reconnecting`  — stream dropped; resumes from the checkpoint
+    * `:disabled`      — engine off in config
+    * `:unavailable`   — the DETS table could not be opened
+
+  Read from an ETS snapshot rather than by calling the GenServer: during
+  a backlog flood the mailbox holds thousands of crawl items and a call
+  would wait behind all of them.
+  """
+  def status do
+    case :ets.lookup(@status, :status) do
+      [{:status, status}] -> status
+      [] -> :connecting
+    end
+  rescue
+    _ -> :connecting
   end
 
   @doc "Search whole-store index for q (async). Sends {:search_results, q, hits} to owner."
@@ -107,6 +131,23 @@ defmodule HighWire.SearchIndex do
     :dets.insert(@table, {:meta, @version, cursor})
   end
 
+  # The status snapshot lives in its own ETS table (created once per
+  # incarnation, owner-only writes) so the LiveView header can poll it
+  # without queuing behind the crawl's mailbox.
+  defp ensure_status_table do
+    case :ets.whereis(@status) do
+      :undefined -> :ets.new(@status, [:named_table, :protected, read_concurrency: true])
+      _tid -> :ok
+    end
+  end
+
+  defp put_status(status) do
+    :ets.insert(@status, {:status, status})
+    :ok
+  rescue
+    _ -> :ok
+  end
+
   defp open_dets(path) do
     case :dets.open_file(@table, [
            {:file, String.to_charlist(path)},
@@ -129,9 +170,18 @@ defmodule HighWire.SearchIndex do
     path = Keyword.get(opts, :path, dets_path())
     enabled? = Keyword.get(opts, :enabled?, Sidecar.enabled?())
 
+    # Our own supervisor/owner: with trap_exit on, its exit signal
+    # arrives as a message and must stop us, not be dropped.
+    parent =
+      case Process.get(:"$ancestors") do
+        [p | _] when is_pid(p) -> p
+        _ -> nil
+      end
+
     base = %{
       path: path,
       enabled?: enabled?,
+      parent: parent,
       cursor: 0,
       indexed: 0,
       client: nil,
@@ -141,21 +191,28 @@ defmodule HighWire.SearchIndex do
       page_start_cursor: 0
     }
 
+    ensure_status_table()
+
     case open_dets(path) do
       :ok ->
         {v, cursor} = read_meta()
 
-        if v != @version do
-          Logger.info("[search_index] version mismatch (#{v}!=#{@version}), clearing")
-          :dets.delete_all_objects(@table)
-          write_meta(0)
-          {:ok, %{base | cursor: 0}, {:continue, :maybe_connect}}
-        else
-          {:ok, %{base | cursor: cursor}, {:continue, :maybe_connect}}
-        end
+        cursor =
+          if v != @version do
+            Logger.info("[search_index] version mismatch (#{v}!=#{@version}), clearing")
+            :dets.delete_all_objects(@table)
+            write_meta(0)
+            0
+          else
+            cursor
+          end
+
+        put_status(if enabled?, do: :connecting, else: :disabled)
+        {:ok, %{base | cursor: cursor}, {:continue, :maybe_connect}}
 
       {:error, reason} ->
         Logger.error("[search_index] failed to open dets #{inspect(path)}: #{inspect(reason)}")
+        put_status(:unavailable)
         {:ok, %{base | enabled?: false}}
     end
   end
@@ -213,7 +270,10 @@ defmodule HighWire.SearchIndex do
 
   defp stop_client(%{client: pid} = state) do
     try do
-      Client.stop(pid)
+      # Bounded, unlike Client.stop/1's :infinity: a wedged client must
+      # not hang a reconnect (or terminate/2) forever. A late exit from
+      # a stop that timed out lands in the catch-all below.
+      GenServer.stop(pid, :normal, 5_000)
     catch
       _, _ -> :ok
     end
@@ -233,12 +293,15 @@ defmodule HighWire.SearchIndex do
 
   # The cursor rides along with every live-tail item (rare — cheap) and
   # every 1000th backlog item. A crash re-pages at most that far, and
-  # re-paging is idempotent thanks to the primary key.
+  # re-paging is idempotent thanks to the primary key. The same
+  # checkpoints refresh the indicator's running count.
   defp maybe_write_meta(%{phase: :live, cursor: cursor}), do: write_meta(cursor)
 
-  defp maybe_write_meta(%{indexed: n, cursor: cursor})
-       when is_integer(n) and rem(n, 1000) == 0,
-       do: write_meta(cursor)
+  defp maybe_write_meta(%{indexed: n, cursor: cursor} = state)
+       when is_integer(n) and rem(n, 1000) == 0 do
+    write_meta(cursor)
+    put_status({:crawling, state.indexed})
+  end
 
   defp maybe_write_meta(_state), do: :ok
 
@@ -269,6 +332,7 @@ defmodule HighWire.SearchIndex do
     case start_client() do
       nil ->
         Logger.warning("[search_index] could not start SSB client; retrying in 2s")
+        put_status(:connecting)
         Process.send_after(self(), :connect, 2_000)
         {:noreply, state}
 
@@ -276,6 +340,7 @@ defmodule HighWire.SearchIndex do
         case open_backlog(client, resume_gt(state.cursor)) do
           nil ->
             Logger.warning("[search_index] could not open backlog stream; retrying in 2s")
+            put_status(:connecting)
             Process.send_after(self(), :connect, 2_000)
             {:noreply, stop_client(%{state | client: client})}
 
@@ -353,10 +418,18 @@ defmodule HighWire.SearchIndex do
     reconnect_soon(stop_client(state), 5_000)
   end
 
+  # The supervisor/owner is stopping us: trap_exit turned its exit
+  # signal into a message, and ignoring it would burn the whole
+  # shutdown timeout and get us brutally killed without terminate/2.
+  def handle_info({:EXIT, parent, reason}, %{parent: parent} = state) when is_pid(parent) do
+    {:stop, reason, state}
+  end
+
   # The client is linked to us; with trap_exit on, a dead engine lands
   # here instead of taking the index down with it.
   def handle_info({:EXIT, pid, reason}, %{client: pid} = state) do
     Logger.warning("[search_index] client exited: #{inspect(reason)}; reconnecting in 5s")
+    put_status(:reconnecting)
     Process.send_after(self(), :connect, 5_000)
     {:noreply, %{state | client: nil, ref: nil, phase: :idle}}
   end
@@ -365,8 +438,12 @@ defmodule HighWire.SearchIndex do
   # other stray send): the ref no longer matches, so they are dropped.
   def handle_info(_msg, state), do: {:noreply, state}
 
+  # Opening a stream is the one signal we have for where the crawl
+  # stands: backlog open → counting, live open → caught up.
   defp begin_stream(state, ref, phase) do
-    %{state | ref: ref, phase: phase, page_count: 0, page_start_cursor: state.cursor}
+    state = %{state | ref: ref, phase: phase, page_count: 0, page_start_cursor: state.cursor}
+    put_status(if phase == :live, do: :live, else: {:crawling, state.indexed})
+    state
   end
 
   defp open_live_stream(%{client: client} = state) do
@@ -377,6 +454,7 @@ defmodule HighWire.SearchIndex do
   end
 
   defp reconnect_soon(state, ms) do
+    put_status(:reconnecting)
     Process.send_after(self(), :connect, ms)
     {:noreply, %{state | ref: nil, phase: :idle}}
   end

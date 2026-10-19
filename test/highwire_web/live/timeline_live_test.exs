@@ -38,6 +38,15 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ ~s(href="/network")
   end
 
+  test "the header shows the search index status", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/")
+
+    # engine disabled under test — same contract as the network chip:
+    # the indicator renders its state rather than hiding
+    assert html =~ ~s(id="search-index-status")
+    assert html =~ "search off"
+  end
+
   test "the contacts rail never sits empty", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/")
     assert html =~ "No contacts yet"

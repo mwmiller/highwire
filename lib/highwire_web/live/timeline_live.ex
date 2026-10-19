@@ -26,6 +26,7 @@ defmodule HighWireWeb.TimelineLive do
   alias HighWire.Avatar, as: Ident
   alias HighWire.Contacts
   alias HighWire.Markdown
+  alias HighWire.SearchIndex
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Heart
@@ -82,6 +83,7 @@ defmodule HighWireWeb.TimelineLive do
       if connected?(socket) do
         Phoenix.PubSub.subscribe(HighWire.PubSub, Timeline.topic())
         Timeline.set_activity(self(), true)
+        Process.send_after(self(), :index_tick, 4_000)
         Process.send_after(self(), :peers_tick, 7_000)
       end
 
@@ -110,6 +112,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(transfer_timer: nil)
       |> assign(:search_hits, [])
       |> assign(:search_q_kicked, "")
+      |> assign(:index_status, SearchIndex.status())
       |> maybe_load_page()
       |> merge_paged()
 
@@ -161,6 +164,23 @@ defmodule HighWireWeb.TimelineLive do
     else
       {:noreply, socket}
     end
+  end
+
+  # The index reports through its own ETS table, so this is a lookup
+  # rather than a GenServer call that could queue behind a backlog
+  # flood. Assign only on change — an unchanged tick must not re-render
+  # the header.
+  def handle_info(:index_tick, socket) do
+    status = SearchIndex.status()
+
+    socket =
+      if status == socket.assigns.index_status do
+        socket
+      else
+        assign(socket, :index_status, status)
+      end
+
+    {:noreply, schedule_index_tick(socket)}
   end
 
   # Cursor pages load off the render path: maybe_load_page/1 plants a
@@ -421,6 +441,14 @@ defmodule HighWireWeb.TimelineLive do
 
   defp schedule_peers(socket) do
     assign(socket, :peers_timer, Process.send_after(self(), :peers_tick, 7_000))
+  end
+
+  # Deliberately not stored or cancelled: one ETS lookup every 4s is
+  # cheaper than the bookkeeping, and the chip should stay fresh even
+  # while another tab is in front.
+  defp schedule_index_tick(socket) do
+    Process.send_after(self(), :index_tick, 4_000)
+    socket
   end
 
   # The active tab's first page: fetched once the engine reports :ok,
@@ -897,6 +925,17 @@ defmodule HighWireWeb.TimelineLive do
             </.link>
             <.feed_tab :for={{v, label} <- @right_views} v={v} label={label} current={@view} />
           </nav>
+          <span
+            id="search-index-status"
+            title={index_status_title(@index_status)}
+            class={[
+              "flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs transition",
+              index_status_tone(@index_status)
+            ]}
+          >
+            <span class={["h-1.5 w-1.5 rounded-full", index_status_dot(@index_status)]}></span>
+            {index_status_label(@index_status)}
+          </span>
           <span
             :if={@transfer.active?}
             id="transfer-activity"
@@ -1562,6 +1601,53 @@ defmodule HighWireWeb.TimelineLive do
   defp peer_tone(peers, _status) do
     if peer_count(peers) > 0, do: "text-ok", else: "text-dim"
   end
+
+  # -- search index status chip ------------------------------------------
+  # The counterpart to the peer chip: SearchIndex.status/0 (an ETS read)
+  # rendered as dot + label + tooltip. The middle of the store's crawl
+  # is the interesting state — it is the only one with a number in it.
+
+  defp index_status_label(:disabled), do: "search off"
+  defp index_status_label(:unavailable), do: "search unavailable"
+  defp index_status_label(:connecting), do: "search connecting"
+  defp index_status_label(:reconnecting), do: "search resuming"
+  defp index_status_label(:live), do: "search ready"
+  defp index_status_label({:crawling, n}), do: "indexing #{format_count(n)}"
+
+  defp index_status_dot(:live), do: "bg-dot-ok"
+  defp index_status_dot(:reconnecting), do: "bg-warn animate-pulse"
+  defp index_status_dot(:unavailable), do: "bg-dot-bad"
+  defp index_status_dot(:disabled), do: "bg-dot"
+  defp index_status_dot(_connecting_or_crawling), do: "bg-dot-info animate-pulse"
+
+  defp index_status_tone(:live), do: "text-ok"
+  defp index_status_tone(:reconnecting), do: "text-warn"
+  defp index_status_tone(:unavailable), do: "text-bad"
+  defp index_status_tone(:disabled), do: "text-dim"
+  defp index_status_tone(_connecting_or_crawling), do: "text-info"
+
+  defp index_status_title(:disabled),
+    do: "SSB engine disabled in config — store-wide search is off"
+
+  defp index_status_title(:unavailable),
+    do: "The search index file could not be opened — store-wide search is unavailable"
+
+  defp index_status_title(:connecting),
+    do: "Connecting to the engine to build the search index"
+
+  defp index_status_title(:reconnecting),
+    do: "Index stream dropped — reconnecting and catching up from the last checkpoint"
+
+  defp index_status_title(:live),
+    do: "Search index up to date — covers every message in the store"
+
+  defp index_status_title({:crawling, n}),
+    do:
+      "Building the store-wide index — #{format_count(n)} messages indexed so far; search is usable but incomplete"
+
+  # 412553 -> 412,553. The header's only big number, and not a library.
+  defp format_count(n) when is_integer(n),
+    do: Regex.replace(~r/\d(?=(\d{3})+$)/, Integer.to_string(n), "\\1,")
 
   # -- message helpers ---------------------------------------------------
 
