@@ -105,22 +105,6 @@ defmodule HighWire.SearchIndexTest do
       assert hit.key == key
     end
 
-    test "records written before the pre-normalised shape still match", %{key: key} do
-      # A live session hot-reloads the new reader over the old table; the
-      # 4-tuple records must keep answering until the next boot rebuilds.
-      legacy = key <> "-legacy"
-      on_exit(fn -> :dets.delete(:highwire_search, legacy) end)
-      :dets.insert(:highwire_search, {legacy, "@Alice.Example", "Legacy Record", 1})
-
-      SearchIndex.search("legacy record", self())
-      assert_receive {:search_results, "legacy record", hits}, 2_000
-      assert Enum.any?(hits, &(&1.key == legacy))
-
-      SearchIndex.search("alice.example", self())
-      assert_receive {:search_results, "alice.example", hits2}, 2_000
-      assert Enum.any?(hits2, &(&1.key == legacy))
-    end
-
     test "a broad query is capped at the newest 200, not every match", %{key: key} do
       tag = "captag#{System.unique_integer([:positive])}"
 

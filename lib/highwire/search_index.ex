@@ -45,12 +45,6 @@ defmodule HighWire.SearchIndex do
   @table :highwire_search
   @status :highwire_search_status
 
-  # 3 — records carry their pre-normalised text/author alongside the
-  # original. A version mismatch clears the table so the next boot
-  # rebuilds it in the new shape; until then collect/3 still normalises
-  # the older 4-tuple records on the fly, so a live session's search
-  # keeps working across the reload.
-  @version 3
   @max_hits 200
   @page 5_000
 
@@ -135,8 +129,8 @@ defmodule HighWire.SearchIndex do
       []
   end
 
-  # Records written since @version 3 carry their normalised text and
-  # author; the match is a plain byte search against them.
+  # The table holds one record layout, and it carries the normalised text
+  # and author alongside the original, so the match is a plain byte search.
   defp collect({key, author, text, ts, text_lc, author_lc}, acc, qd) do
     t = if is_binary(text_lc), do: text_lc, else: ""
     a = if is_binary(author_lc), do: author_lc, else: ""
@@ -148,20 +142,15 @@ defmodule HighWire.SearchIndex do
     end
   end
 
-  # A record indexed before @version 3 has no normalised copy. Rather
-  # than miss it, normalise it here; the next boot's rebuild replaces
-  # every such record, so this path is only the transition.
-  defp collect({key, author, text, ts}, acc, qd) do
-    collect({key, author, text, ts, normalize(text), normalize(author)}, acc, qd)
-  end
-
+  # Anything else is not a row this index can match; skipping it beats
+  # taking the query task down.
   defp collect(_record, acc, _qd), do: acc
 
   # The fold visits the table in key order, so nothing bounds it: keep
   # only the newest @max_hits. The tuple sorts by ts first (then the
   # unique key), so dropping the smallest reproduces "sort by ts
-  # descending, take @max_hits" exactly — verified against the old shape
-  # on the live index.
+  # descending, take @max_hits" exactly — verified against the previous
+  # implementation on the live index.
   defp cap_hits(set) do
     if :gb_sets.size(set) > @max_hits do
       {_oldest, set} = :gb_sets.take_smallest(set)
@@ -192,18 +181,18 @@ defmodule HighWire.SearchIndex do
     Path.join(HighWire.home_dir(), "search.dets")
   end
 
-  defp read_meta do
+  # The crawl position is the one thing the table stores besides rows, and
+  # it is what `gt` resumes from after a restart. A table without one is
+  # crawled from the top and refilled from the store.
+  defp read_cursor do
     case :dets.lookup(@table, :meta) do
-      [{:meta, v, cursor}] when is_integer(v) and (is_integer(cursor) or cursor == nil) ->
-        {v, cursor || 0}
-
-      _ ->
-        {nil, 0}
+      [{:meta, cursor}] when is_integer(cursor) -> cursor
+      _ -> 0
     end
   end
 
-  defp write_meta(cursor) do
-    :dets.insert(@table, {:meta, @version, cursor})
+  defp write_cursor(cursor) do
+    :dets.insert(@table, {:meta, cursor})
   end
 
   # The status snapshot lives in its own ETS table (created once per
@@ -273,20 +262,8 @@ defmodule HighWire.SearchIndex do
 
     case open_dets(path) do
       :ok ->
-        {v, cursor} = read_meta()
-
-        cursor =
-          if v != @version do
-            Logger.info("[search_index] version mismatch (#{v}!=#{@version}), clearing")
-            :dets.delete_all_objects(@table)
-            write_meta(0)
-            0
-          else
-            cursor
-          end
-
         put_status(if enabled?, do: :connecting, else: :disabled)
-        {:ok, %{base | cursor: cursor}, {:continue, :maybe_connect}}
+        {:ok, %{base | cursor: read_cursor()}, {:continue, :maybe_connect}}
 
       {:error, reason} ->
         Logger.error("[search_index] failed to open dets #{inspect(path)}: #{inspect(reason)}")
@@ -366,7 +343,7 @@ defmodule HighWire.SearchIndex do
 
     :dets.insert(@table, {key, author, text, shown, normalize(text), normalize(author)})
     state = %{state | cursor: cursor, indexed: state.indexed + 1}
-    maybe_write_meta(state)
+    maybe_write_cursor(state)
     state
   end
 
@@ -401,15 +378,15 @@ defmodule HighWire.SearchIndex do
   # every 1000th backlog item. A crash re-pages at most that far, and
   # re-paging is idempotent thanks to the primary key. The same
   # checkpoints refresh the indicator's running count.
-  defp maybe_write_meta(%{phase: :live, cursor: cursor}), do: write_meta(cursor)
+  defp maybe_write_cursor(%{phase: :live, cursor: cursor}), do: write_cursor(cursor)
 
-  defp maybe_write_meta(%{indexed: n, cursor: cursor} = state)
+  defp maybe_write_cursor(%{indexed: n, cursor: cursor} = state)
        when is_integer(n) and rem(n, 1000) == 0 do
-    write_meta(cursor)
+    write_cursor(cursor)
     put_status({:crawling, state.indexed})
   end
 
-  defp maybe_write_meta(_state), do: :ok
+  defp maybe_write_cursor(_state), do: :ok
 
   @impl true
   def handle_cast({:ingest, items}, state) do
@@ -427,7 +404,7 @@ defmodule HighWire.SearchIndex do
           st
       end)
 
-    write_meta(state.cursor)
+    write_cursor(state.cursor)
     {:noreply, state}
   end
 
@@ -484,7 +461,7 @@ defmodule HighWire.SearchIndex do
     case next_backlog_step(state) do
       :live ->
         # An empty page: the backlog is exhausted. Checkpoint, then tail.
-        write_meta(state.cursor)
+        write_cursor(state.cursor)
         open_live_stream(state)
 
       {:page, gt} ->
@@ -500,13 +477,13 @@ defmodule HighWire.SearchIndex do
   # pages from the stored cursor, so nothing between then and now is
   # lost.
   def handle_info({Client, ref, :done}, %{ref: ref} = state) do
-    write_meta(state.cursor)
+    write_cursor(state.cursor)
     reconnect_soon(stop_client(state), 60_000)
   end
 
   def handle_info({Client, ref, {:error, e}}, %{ref: ref} = state) do
     Logger.warning("[search_index] stream error: #{inspect(e)}; retrying backlog in 5s")
-    write_meta(state.cursor)
+    write_cursor(state.cursor)
     reconnect_soon(stop_client(state), 5_000)
   end
 
@@ -580,7 +557,7 @@ defmodule HighWire.SearchIndex do
 
   @impl true
   def terminate(_reason, state) do
-    write_meta(state.cursor)
+    write_cursor(state.cursor)
     stop_client(state)
     :dets.close(@table)
     :ok
