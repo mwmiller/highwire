@@ -74,6 +74,77 @@ defmodule HighWire.SearchIndexTest do
     assert SearchIndex.status() == :disabled
   end
 
+  describe "matching" do
+    test "a query is a literal, never a pattern", %{key: key} do
+      tag = "literal#{System.unique_integer([:positive])}"
+      dotted = key <> "-dot"
+      on_exit(fn -> :dets.delete(:highwire_search, dotted) end)
+
+      SearchIndex.ingest([
+        %{"key" => key, "author" => "@a", "text" => "#{tag} axbzz", "ts" => 1},
+        %{"key" => dotted, "author" => "@a", "text" => "#{tag} a.bzz c++zz", "ts" => 2}
+      ])
+
+      :sys.get_state(SearchIndex)
+
+      # `.` must not stand for `x`, and `++` must not read as repetition
+      # (an unescaped `c++` would not even compile, answering nothing).
+      for q <- ["a.b", "c++"] do
+        SearchIndex.search(q, self())
+        assert_receive {:search_results, ^q, hits}, 2_000
+        assert Enum.any?(hits, &(&1.key == dotted)), "#{q} missed the literal post"
+        refute Enum.any?(hits, &(&1.key == key)), "#{q} matched as a pattern"
+      end
+    end
+
+    test "matching is caseless by Unicode rules", %{key: key} do
+      SearchIndex.ingest([
+        %{
+          "key" => key,
+          "author" => "@a",
+          "text" => "CafÉ Ünïcode ΣΟΦΟΣ İstanbul",
+          "ts" => 1
+        }
+      ])
+
+      :sys.get_state(SearchIndex)
+
+      # A plain `:caseless` match folds ASCII only and would miss the
+      # first three; `σοφος` also survives the final-sigma rule.
+      for q <- ["café", "ünïcode", "σοφος", "İstanbul"] do
+        SearchIndex.search(q, self())
+        assert_receive {:search_results, ^q, hits}, 2_000
+        assert Enum.any?(hits, &(&1.key == key)), "#{q} missed the post"
+      end
+    end
+
+    test "a text that is not valid UTF-8 is stored without text, not fatal", %{key: key} do
+      tag = "guard#{System.unique_integer([:positive])}"
+
+      SearchIndex.ingest([
+        %{
+          "key" => key,
+          "author" => "@#{tag}",
+          "text" => "#{tag} zebrabad" <> <<0xFF>>,
+          "ts" => 1
+        }
+      ])
+
+      :sys.get_state(SearchIndex)
+
+      # `:re` raises on a subject that is not valid UTF-8; the query
+      # answers anyway, and the row is still findable by its author.
+      SearchIndex.search(tag, self())
+      assert_receive {:search_results, ^tag, [hit]}, 2_000
+      assert hit.key == key
+      assert hit.text == nil
+
+      # Unreadable bytes are not searchable text.
+      SearchIndex.search("zebrabad", self())
+      assert_receive {:search_results, "zebrabad", []}, 2_000
+    end
+  end
+
   describe "crawl robustness" do
     test "a message whose content is not a map is skipped, not fatal", %{key: key} do
       # get_in/2 raises on a boxed-string content; that would crash the

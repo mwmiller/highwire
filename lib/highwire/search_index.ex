@@ -24,17 +24,27 @@ defmodule HighWire.SearchIndex do
   in this process's mailbox. Records are inserted into DETS as they
   arrive — no staging batch — so a query task always sees them.
 
-  Records carry the text twice: the original (for the snippet the feed
-  shows) and a downcased copy the query matches against, plus the same
-  pair for the author. Folding the table once per query to downcase
-  every text is by far the most expensive part of a search — measured at
-  ~1.8s for the text and ~0.8s for the authors over a 263k-record index,
-  *independent of how many rows match*, so even a query with no hits
-  paid it. Normalising at ingest moves that cost to a one-off per
-  record; a query then only compares bytes. The fold keeps just the
-  newest `@max_hits` in a bounded set rather than collecting every match
-  and sorting it after (measured ~2.6s against ~10s for "the", with the
-  identical top `@max_hits`).
+  A record holds the text once — the original, which is what the feed's
+  snippet needs — and the query matches it with a case-insensitive
+  literal, so the index carries no second, downcased copy of every text
+  and author. Those copies were 194 MiB of a 420 MiB file: the same 264k
+  records without them measure 225 MiB. Matching them with a plain byte
+  search took ~0.43s per fold, matching the originals with `Regex` takes
+  ~0.56s, and downcasing every record *per query* — the third option —
+  took ~1.7s, which is why the copies existed at all.
+
+  The pattern is `Regex.escape/1`d, so a query is never read as one, and
+  compiled with `:unicode`, because a plain `:caseless` match folds ASCII
+  only and would miss "CafÉ" and "Ünïcode". The query is matched raw
+  rather than downcased first: `İstanbul` then finds the post that says
+  `İstanbul`, which folding both sides does not. `:re` raises on a
+  subject that is not valid UTF-8, so `put_item/6` stores only what
+  `String.valid?/1` accepts — a field the engine sent that is not text is
+  nothing to match or show, like a post with no text at all.
+
+  The fold keeps just the newest `@max_hits` in a bounded set rather than
+  collecting every match and sorting it after (measured ~2.6s against
+  ~10s for "the", with the identical top `@max_hits`).
   """
 
   use GenServer
@@ -111,9 +121,12 @@ defmodule HighWire.SearchIndex do
   # no matches rather than crashing the task, which would leave the
   # LiveView waiting on results forever.
   defp query(ql) do
-    qd = String.downcase(ql)
+    # Escaped, so the query is a literal and never a pattern; `:unicode`,
+    # because a plain `:caseless` folds ASCII only. The query goes in raw
+    # — downcasing it first would lose `İstanbul`.
+    re = Regex.compile!(Regex.escape(ql), "iu")
 
-    :dets.foldl(&collect(&1, &2, qd), :gb_sets.empty(), @table)
+    :dets.foldl(&collect(&1, &2, re), :gb_sets.empty(), @table)
     |> :gb_sets.to_list()
     |> Enum.reverse()
     |> Enum.map(fn {ts, key, author, text} ->
@@ -129,13 +142,14 @@ defmodule HighWire.SearchIndex do
       []
   end
 
-  # The table holds one record layout, and it carries the normalised text
-  # and author alongside the original, so the match is a plain byte search.
-  defp collect({key, author, text, ts, text_lc, author_lc}, acc, qd) do
-    t = if is_binary(text_lc), do: text_lc, else: ""
-    a = if is_binary(author_lc), do: author_lc, else: ""
+  # The table holds one record layout: the original text and author, and
+  # nothing else to match against. Both are what `put_item/6` accepted as
+  # valid UTF-8, so `:re` cannot raise on either.
+  defp collect({key, author, text, ts}, acc, re) do
+    t = if is_binary(text), do: text, else: ""
+    a = if is_binary(author), do: author, else: ""
 
-    if :binary.match(t, qd) != :nomatch or :binary.match(a, qd) != :nomatch do
+    if Regex.match?(re, t) or Regex.match?(re, a) do
       cap_hits(:gb_sets.add_element({ts, key, author, text}, acc))
     else
       acc
@@ -144,7 +158,7 @@ defmodule HighWire.SearchIndex do
 
   # Anything else is not a row this index can match; skipping it beats
   # taking the query task down.
-  defp collect(_record, acc, _qd), do: acc
+  defp collect(_record, acc, _re), do: acc
 
   # The fold visits the table in key order, so nothing bounds it: keep
   # only the newest @max_hits. The tuple sorts by ts first (then the
@@ -160,17 +174,15 @@ defmodule HighWire.SearchIndex do
     end
   end
 
-  # Downcasing is not the query's job once the record is written. A
-  # record whose text is not valid UTF-8 (or not a binary at all) must
-  # not take the index down while crawling, so fall back to the raw
-  # bytes rather than raising.
-  defp normalize(s) when is_binary(s) do
-    String.downcase(s)
-  rescue
-    _ -> s
+  # What the query matches with `:re` must be valid UTF-8: PCRE raises on
+  # a subject that is not, and one unreadable post must not take the
+  # matching down. A field that is not text — or not valid text — is
+  # nothing to match or show, the same as a post with no text at all.
+  defp indexable(s) when is_binary(s) do
+    if String.valid?(s), do: s, else: nil
   end
 
-  defp normalize(_), do: ""
+  defp indexable(_), do: nil
 
   @doc "Ingest a list of post maps (for tests/live tail)."
   def ingest(items) when is_list(items) do
@@ -341,7 +353,7 @@ defmodule HighWire.SearchIndex do
     cursor = if ts_int > state.cursor, do: ts_int, else: state.cursor
     shown = if is_number(shown_ts), do: trunc(shown_ts), else: ts_int
 
-    :dets.insert(@table, {key, author, text, shown, normalize(text), normalize(author)})
+    :dets.insert(@table, {key, indexable(author), indexable(text), shown})
     state = %{state | cursor: cursor, indexed: state.indexed + 1}
     maybe_write_cursor(state)
     state
