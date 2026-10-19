@@ -394,10 +394,72 @@ defmodule HighWire.TimelineTest do
       # followed), and the follow/unfollow/unblock stay distinct
       assert Enum.map(rows, &{&1.contact_action, Map.get(&1, &1.contact_action)}) == [
                {:unblocked, ["@hank.ed25519"]},
-               {:blocked, ["@eve.ed25519", "@gina.ed25519"]},
+               {:blocked, ["@gina.ed25519", "@eve.ed25519"]},
                {:unfollowed, ["@frank.ed25519"]},
                {:followed, ["@dave.ed25519"]}
              ]
+    end
+
+    test "a contact row bundles a spate; a cooloff opens the next line" do
+      then = :timer.hours(24) * 365 * 3
+
+      # a block years ago, then two blocks made in one sitting
+      old =
+        msg("@alice", "%b1.sha256", 1_000, %{
+          "type" => "contact",
+          "contact" => "@eve.ed25519",
+          "blocking" => true
+        })
+
+      first =
+        msg("@alice", "%b2.sha256", then, %{
+          "type" => "contact",
+          "contact" => "@frank.ed25519",
+          "blocking" => true
+        })
+
+      later =
+        msg("@alice", "%b3.sha256", then + :timer.minutes(1), %{
+          "type" => "contact",
+          "contact" => "@gina.ed25519",
+          "blocking" => true
+        })
+
+      rows = Timeline.build_feed([old, first, later], "@me", %{})
+
+      # the store-wide drain hands every payload the author's entire
+      # contact history; folding all of it into one row reported a
+      # lifetime count as a single moment. Each spate keeps its own line
+      # instead — newest first, newest edit named first — and the years
+      # between the two spates are the break.
+      assert Enum.map(rows, &{&1.contact_action, Map.get(&1, &1.contact_action)}) == [
+               {:blocked, ["@gina.ed25519", "@frank.ed25519"]},
+               {:blocked, ["@eve.ed25519"]}
+             ]
+    end
+
+    test "a spate chains across the cooloff while the author keeps clicking" do
+      then = :timer.hours(24) * 365 * 3
+      gap = :timer.minutes(15)
+
+      edits =
+        for {key, ts, contact} <- [
+              {"%c1.sha256", then, "@dave.ed25519"},
+              {"%c2.sha256", then + gap, "@eve.ed25519"},
+              {"%c3.sha256", then + gap * 2, "@frank.ed25519"}
+            ] do
+          msg("@alice", key, ts, %{
+            "type" => "contact",
+            "contact" => contact,
+            "following" => true
+          })
+        end
+
+      # the spate spans half an hour — longer than the cooloff — but
+      # every step is inside it, so the session stays one line
+      assert [row] = Timeline.build_feed(edits, "@me", %{})
+      assert row.contact_action == :followed
+      assert Map.get(row, :followed) == ["@frank.ed25519", "@eve.ed25519", "@dave.ed25519"]
     end
   end
 

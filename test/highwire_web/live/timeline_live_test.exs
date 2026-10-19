@@ -323,6 +323,37 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert pos(html, eve) < pos(html, dave)
     end
 
+    test "a cooled-off spate keeps its own line beside the live one", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs = [
+        ssb_msg("%block-old.sha256", "@alice:.ed25519", now - :timer.hours(48), %{
+          "type" => "contact",
+          "contact" => "@eve:.ed25519",
+          "blocking" => true
+        }),
+        ssb_msg("%block-new.sha256", "@alice:.ed25519", now - 1_000, %{
+          "type" => "contact",
+          "contact" => "@frank:.ed25519",
+          "blocking" => true
+        })
+      ]
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      eve = URI.encode_www_form("@eve:.ed25519")
+      frank = URI.encode_www_form("@frank:.ed25519")
+
+      # two lines, not one row re-counting the older spate — the live
+      # spate is anchored at the newest edit and the cooled-off one keeps
+      # its own anchor, so the row dedupe must not collapse them
+      assert count(html, "blocked") == 2
+      assert html =~ eve
+      assert html =~ frank
+      assert pos(html, frank) < pos(html, eve)
+    end
+
     test "a newer follow replaces the loaded follow row for that author", %{conn: conn} do
       now = 1_700_000_000_000
 

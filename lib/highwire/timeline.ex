@@ -84,6 +84,14 @@ defmodule HighWire.Timeline do
   @suggestions_sync_ms 400
   @suggestions_sync_tries 25
 
+  # A spate of contact edits — one client session's worth of follows or
+  # blocks — ends when the author stops for this long. Patchwork-style
+  # clients publish one message per change, so a handful of clicks reads
+  # as one action; the cooloff opens the next line. Spates chain, so a
+  # session that keeps clicking never splits just because it outran the
+  # cooloff.
+  @contact_cooloff_ms :timer.minutes(20)
+
   def topic, do: @topic
 
   @doc "PubSub topic for gossip events — the live connection set changing."
@@ -2369,8 +2377,8 @@ defmodule HighWire.Timeline do
 
   # Patchwork/Poncho Wonky publicFeed.roots semantics: one row per thread
   # positioned at its latest bumping activity; votes never row/bump;
-  # rootless posts are their own rows; contact messages collapse into
-  # one row per author listing who they followed.
+  # rootless posts are their own rows; contact messages collapse into one
+  # row per author per direction per spate listing who they touched.
   @doc false
   def build_feed(acc, self_id, like_counts) do
     # Boxed (encrypted) messages never form public rows — the Private tab
@@ -2479,31 +2487,63 @@ defmodule HighWire.Timeline do
   end
 
   # Contact edits arrive as many messages per author; they collapse into
-  # one row per author *per direction* — who they followed, who they
-  # blocked, who they let go — positioned at the latest edit in that
-  # group. The direction is the group's key, not a detail: a block shown
-  # as a follow would invert the reader's picture of the graph.
+  # one row per author *per direction* *per spate* — who they followed,
+  # who they blocked, who they let go — positioned at the latest edit of
+  # that spate. The direction is the row's key, not a detail: a block
+  # shown as a follow would invert the reader's picture of the graph.
+  #
+  # A spate is one session of edits; the cooloff opens the next line, so
+  # history keeps its own rows instead of being re-counted at the top.
+  # The store-wide drain hands every payload every contact edit the
+  # store holds, and folding all of them into a single row pasted the
+  # author's whole graph beside a block made this year: "blocked … +199
+  # more".
   defp contact_rows(msgs, self_id) do
     msgs
     |> Enum.filter(fn msg ->
       is_binary(msg["value"]["author"]) and is_binary(content(msg)["contact"])
     end)
     |> Enum.group_by(fn msg -> {msg["value"]["author"], contact_action(content(msg))} end)
-    |> Enum.map(fn {{author, action}, group} ->
-      latest = Enum.max_by(group, &bump_ts/1)
+    |> Enum.flat_map(fn {{author, action}, group} ->
+      group
+      |> Enum.map(fn msg -> {bump_ts(msg), msg} end)
+      |> Enum.sort_by(&elem(&1, 0), :desc)
+      |> spates()
+      |> Enum.map(fn [{anchor_ts, anchor} | _] = spate ->
+        contacts =
+          spate
+          |> Enum.map(&content(elem(&1, 1))["contact"])
+          |> Enum.uniq()
 
-      contacts =
-        group
-        |> Enum.map(&content(&1)["contact"])
-        |> Enum.uniq()
-
-      build_entry(:contact, latest, bump_ts(latest), [author], 0, 0, [],
-        self_id: self_id,
-        rooted: true
-      )
-      |> Map.put(action, contacts)
-      |> Map.put(:contact_action, action)
+        build_entry(:contact, anchor, anchor_ts, [author], 0, 0, [],
+          self_id: self_id,
+          rooted: true
+        )
+        |> Map.put(action, contacts)
+        |> Map.put(:contact_action, action)
+      end)
     end)
+  end
+
+  # Split one direction's edits — newest first — into spates: edits no
+  # further apart than the cooloff belong to the same spate, a longer gap
+  # opens the next line. Each spate comes back newest first, so its head
+  # is the row's anchor and its timestamps are the row's activity.
+  defp spates(edits) do
+    {spates, current} =
+      Enum.reduce(edits, {[], []}, fn {ts, _msg} = edit, {spates, current} ->
+        case current do
+          [{oldest, _} | _] when oldest - ts <= @contact_cooloff_ms -> {spates, [edit | current]}
+          [] -> {spates, [edit]}
+          _ -> {[current | spates], [edit]}
+        end
+      end)
+
+    spates = if current == [], do: spates, else: [current | spates]
+
+    spates
+    |> Enum.reverse()
+    |> Enum.map(&Enum.reverse/1)
   end
 
   # Which way a contact edit went. Blocking wins: an edit may carry both

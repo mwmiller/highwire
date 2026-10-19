@@ -699,11 +699,13 @@ defmodule HighWireWeb.TimelineLive do
   defp row_uid(%{root_key: root}) when is_binary(root), do: root
   defp row_uid(%{msg: msg}), do: msg["key"]
 
-  # One row per author per contact direction — a follow and a block by
-  # the same author are two rows; everything else keys by thread
-  # identity.
+  # One row per author per contact direction per spate — a follow and a
+  # block by the same author are two rows, and a spate that cooled off
+  # before the next one is its own line. The anchor message keys it: the
+  # row moves while its spate is live, then freezes when the cooloff ends.
+  # Everything else keys by thread identity.
   defp dedupe_id(%{kind: :contact} = row),
-    do: {:contact, author_of(row.msg), Map.get(row, :contact_action, :followed)}
+    do: {:contact, author_of(row.msg), Map.get(row, :contact_action, :followed), row.msg["key"]}
 
   defp dedupe_id(row), do: {:row, row_uid(row)}
 
