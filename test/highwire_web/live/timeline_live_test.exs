@@ -765,9 +765,6 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ ~s(id="search-results")
     assert html =~ "1 match"
     assert html =~ "in the haystack"
-    # the match is marked up, not just quoted
-    assert html =~ "<mark"
-    assert html =~ ">needle</mark>"
     # and nothing contradicts it or treats it as a side-channel
     refute html =~ "Nothing matches"
     refute html =~ "whole store"

@@ -45,6 +45,28 @@ defmodule HighWire.SearchIndexTest do
     assert_receive {:search_results, "zzz-no-such-post-zzz", []}, 2_000
   end
 
+  test "records are dated by the author's timestamp, not the receive time", %{key: key} do
+    # A bulk import stamps thousands of messages with one received time;
+    # the author's claimed time (value.timestamp) is what a reader sees.
+    SearchIndex.ingest([
+      %{
+        "key" => key,
+        "timestamp" => 1_700_000_000_000,
+        "value" => %{
+          "author" => "@alice.example",
+          "timestamp" => 1_500_000_000_000,
+          "content" => %{"text" => "dated by authorship"}
+        }
+      }
+    ])
+
+    :sys.get_state(SearchIndex)
+
+    SearchIndex.search("dated by authorship", self())
+    assert_receive {:search_results, "dated by authorship", [hit]}, 2_000
+    assert hit.ts == 1_500_000_000_000
+  end
+
   test "status reports the index state the header chip consumes" do
     # The engine is disabled under test, so the index never dials.
     assert SearchIndex.status() == :disabled

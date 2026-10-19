@@ -32,7 +32,7 @@ defmodule HighWire.SearchIndex do
 
   @table :highwire_search
   @status :highwire_search_status
-  @version 1
+  @version 2
   @page 5_000
 
   def start_link(opts \\ []) do
@@ -285,14 +285,29 @@ defmodule HighWire.SearchIndex do
     %{state | client: nil, ref: nil, phase: :idle}
   end
 
-  defp put_item(state, key, author, text, ts) do
-    ts_int = if is_number(ts), do: trunc(ts), else: 0
+  defp put_item(state, key, author, text, shown_ts, received_ts) do
+    ts_int = if is_number(received_ts), do: trunc(received_ts), else: 0
     cursor = if ts_int > state.cursor, do: ts_int, else: state.cursor
+    shown = if is_number(shown_ts), do: trunc(shown_ts), else: ts_int
 
-    :dets.insert(@table, {key, author, text, ts_int})
+    :dets.insert(@table, {key, author, text, shown})
     state = %{state | cursor: cursor, indexed: state.indexed + 1}
     maybe_write_meta(state)
     state
+  end
+
+  # The envelope's timestamp is when the engine *received* the message — a
+  # bulk import stamps thousands with the same instant — so a result list
+  # dated by it reads as one day repeated. What a reader means by "when was
+  # this posted" is the author's claimed time in `value.timestamp`; it only
+  # falls back to the received time when the message carries none. The
+  # cursor still follows the received time: that is the only order the
+  # engine pages in.
+  defp authored_ts(v) do
+    case v do
+      %{"timestamp" => t} when is_number(t) -> t
+      _ -> nil
+    end
   end
 
   # The cursor rides along with every live-tail item (rare — cheap) and
@@ -316,10 +331,10 @@ defmodule HighWire.SearchIndex do
         %{"key" => k, "value" => v, "timestamp" => ts}, st ->
           author = get_in(v, ["author"])
           text = get_in(v, ["content", "text"])
-          put_item(st, k, author, text, ts)
+          put_item(st, k, author, text, authored_ts(v) || ts, ts)
 
         %{"key" => k, "author" => a, "text" => t, "ts" => ts}, st ->
-          put_item(st, k, a, t, ts)
+          put_item(st, k, a, t, ts, ts)
 
         _, st ->
           st
@@ -367,7 +382,7 @@ defmodule HighWire.SearchIndex do
         %{"key" => k, "value" => v, "timestamp" => ts} ->
           author = get_in(v, ["author"])
           text = get_in(v, ["content", "text"])
-          put_item(state, k, author, text, ts)
+          put_item(state, k, author, text, authored_ts(v) || ts, ts)
 
         # A live stream parks a {sync: true} sentinel between its
         # backlog snapshot and the tail; it carries no message.

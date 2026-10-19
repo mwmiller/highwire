@@ -1116,12 +1116,7 @@ defmodule HighWireWeb.TimelineLive do
                       <span class="shrink-0 text-faint">{format_ts(h.ts)}</span>
                     </div>
                     <p class="mt-0.5 whitespace-pre-wrap break-words text-sm text-ink">
-                      <%= for seg <- snippet_segments(h.text, @q) do %>
-                        <mark
-                          :if={seg.hit?}
-                          class="rounded-sm bg-warn/30 px-0.5 text-paper"
-                        >{seg.text}</mark><span :if={not seg.hit?}>{seg.text}</span>
-                      <% end %>
+                      {snippet_hit(h.text)}
                     </p>
                   </div>
                 </article>
@@ -1691,7 +1686,7 @@ defmodule HighWireWeb.TimelineLive do
     do: "Index stream dropped — reconnecting and catching up from the last checkpoint"
 
   defp index_status_title(:live),
-    do: "Search index up to date — covers every message in the store"
+    do: "Search index up to date — every post the engine can serve is indexed"
 
   defp index_status_title({:crawling, n}),
     do:
@@ -1941,25 +1936,10 @@ defmodule HighWireWeb.TimelineLive do
 
   defp format_ts(_), do: ""
 
-  # A hit's text, trimmed for display and split into plain and matching
-  # pieces so the query can be marked up without trusting HTML through a
-  # string. Matching is case-insensitive; the original casing remains.
-  defp snippet_segments(nil, _q), do: []
+  defp snippet_hit(nil), do: ""
 
-  defp snippet_segments(text, q) when is_binary(text) do
+  defp snippet_hit(text) when is_binary(text) do
     t = String.trim(text)
-    t = if String.length(t) > 280, do: String.slice(t, 0, 277) <> "...", else: t
-    ql = q |> to_string() |> String.trim() |> String.downcase()
-
-    parts =
-      if ql == "" do
-        [t]
-      else
-        Regex.split(~r/#{Regex.escape(ql)}/iu, t, include_captures: true, trim: false)
-      end
-
-    parts
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.map(fn part -> %{text: part, hit?: ql != "" and String.downcase(part) == ql} end)
+    if String.length(t) > 280, do: String.slice(t, 0, 277) <> "...", else: t
   end
 end
