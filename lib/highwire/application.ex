@@ -22,6 +22,7 @@ defmodule HighWire.Application do
         end ++
         [
           HighWire.Suggester,
+          HighWire.SearchIndex,
           HighWire.Contacts,
           HighWire.Timeline,
           HighWireWeb.Endpoint
