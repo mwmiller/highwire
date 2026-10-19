@@ -37,6 +37,21 @@ defmodule HighWire.Blob do
 
   def ref_to_hex(_), do: :error
 
+  @doc """
+  The SSB reference (`&<base64>.sha256`) for these bytes — the string a
+  post carries in `![alt](…)`.
+
+  The same string is the id `blobs.add` is opened with, because erlbutt's
+  own `hash_id/1` is `"&" ++ base64(sha256(Blob)) ++ ".sha256"` and the
+  engine verifies the streamed bytes against the id it was given. So a
+  blob the store accepted is exactly the blob the post points at, or the
+  add fails loudly instead.
+  """
+  @spec ref(binary()) :: binary()
+  def ref(bytes) when is_binary(bytes) do
+    "&" <> Base.encode64(:crypto.hash(:sha256, bytes)) <> ".sha256"
+  end
+
   @doc "The engine's blob store root."
   def store_root do
     Application.get_env(

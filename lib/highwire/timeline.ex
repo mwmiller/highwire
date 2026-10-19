@@ -390,6 +390,31 @@ defmodule HighWire.Timeline do
   def publish(text) when is_binary(text), do: publish_content(post_content(text))
 
   @doc """
+  Stores an image in the engine's blob store and returns the SSB
+  reference (`&<base64>.sha256`) a post can carry.
+
+  The bytes travel as a muxrpc *sink* (`blobs.add`) over the same
+  connection publishing uses, and the engine verifies them against that
+  reference before it keeps them — so the returned ref names bytes the
+  engine actually holds. The engine caps one blob at 5 MiB
+  (`?BLOB_MAX_SIZE`); callers keep the upload under that.
+  """
+  @spec add_blob(binary()) :: {:ok, binary()} | {:error, term()}
+  def add_blob(bytes) when is_binary(bytes) do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        {:error, :offline}
+
+      pid ->
+        try do
+          GenServer.call(pid, {:add_blob, bytes}, 30_000)
+        catch
+          :exit, _ -> {:error, :offline}
+        end
+    end
+  end
+
+  @doc """
   Publishes a reply. `root` is the thread's root message key; `branch`
   is the parent message key (a root reply branches from the root
   itself).
@@ -617,6 +642,10 @@ defmodule HighWire.Timeline do
     {:reply, fetch_post(state, key), state}
   end
 
+  def handle_call({:add_blob, bytes}, _from, state) do
+    {:reply, store_blob(state, bytes), state}
+  end
+
   def handle_call({:publish_content, content}, _from, state) do
     with true <- is_pid(state.client),
          true <- Process.alive?(state.client) do
@@ -635,6 +664,31 @@ defmodule HighWire.Timeline do
     end
   catch
     kind, reason -> {:reply, {:error, {kind, reason}}, state}
+  end
+
+  # A blob is no use to anyone until the engine holds it, and the engine
+  # advertises what it holds: the push tells peers that ask for it that we
+  # have it (erlbutt answers it outright, and falls back to wanting the
+  # blob if the store somehow lost it). Its own answer decides nothing, so
+  # the add's success is what this reports.
+  defp store_blob(state, bytes) do
+    with true <- is_pid(state.client),
+         true <- Process.alive?(state.client) do
+      ref = Blob.ref(bytes)
+
+      case Client.sink(state.client, ["blobs", "add"], [ref], bytes) do
+        {:ok, _true} ->
+          _ = Client.call(state.client, ["blobs", "push"], [ref], 5_000)
+          {:ok, ref}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      _ -> {:error, :offline}
+    end
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   # The publish ack beats any reload: fold the message into the window

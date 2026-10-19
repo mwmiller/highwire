@@ -376,3 +376,10 @@ body.zoom-open { overflow: hidden; }
   object-fit: contain;
 }
 #image-zoom:focus { outline: none; }
+
+/* A file dragged over a composer: the whole form answers, because the
+   drop is taken anywhere in it. */
+.attach-over {
+  box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent),
+    inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+}

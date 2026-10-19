@@ -65,4 +65,22 @@ defmodule HighWire.BlobTest do
     {:ok, bytes} = Base.decode16(hex, case: :mixed)
     "&" <> Base.encode64(bytes) <> ".sha256"
   end
+
+  describe "ref/1" do
+    test "is the id the engine hashes back: &<standard base64 sha256>.sha256" do
+      # erlbutt's hash_id/1 is "&" ++ base64:encode(sha256(Blob)) ++
+      # ".sha256", and blobs.add verifies the streamed bytes against the
+      # id its opening frame carried — so this exact string is what the
+      # add must be given, or every blob would come back hash_mismatch.
+      assert Blob.ref("hello") == "&LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=.sha256"
+
+      assert Blob.ref("") ==
+               "&" <> Base.encode64(:crypto.hash(:sha256, "")) <> ".sha256"
+    end
+
+    test "ref_to_hex/1 reads it back as the digest hex the store is keyed by" do
+      hex = :crypto.hash(:sha256, "hello") |> Base.encode16(case: :lower)
+      assert Blob.ref_to_hex(Blob.ref("hello")) == {:ok, hex}
+    end
+  end
 end

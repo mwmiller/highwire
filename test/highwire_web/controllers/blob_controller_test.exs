@@ -197,4 +197,39 @@ defmodule HighWireWeb.BlobControllerTest do
   # The content-type header carries a charset; compare the media type.
   defp media_type(conn),
     do: conn |> Plug.Conn.get_resp_header("content-type") |> hd() |> String.split(";") |> hd()
+
+  describe "POST /blob" do
+    test "refuses anything that is not an image", %{conn: conn} do
+      assert %{"error" => message} =
+               upload(conn, "application/pdf", "a pdf") |> json_response(415)
+
+      assert message =~ "only images"
+    end
+
+    test "refuses an upload past the engine's own 5 MiB blob cap", %{conn: conn} do
+      body = :binary.copy(<<0>>, 5 * 1024 * 1024 + 1)
+
+      assert %{"error" => message} = upload(conn, "image/png", body) |> json_response(413)
+      assert message =~ "5 MB"
+    end
+
+    test "refuses an empty body", %{conn: conn} do
+      assert %{"error" => message} = upload(conn, "image/png", "") |> json_response(422)
+      assert message =~ "empty"
+    end
+
+    test "answers 503 while the engine is not running", %{conn: conn} do
+      # The test home has no sidecar: the bytes are validated, read, and
+      # then there is nothing to hand them to.
+      assert %{"error" => message} = upload(conn, "image/png", @png) |> json_response(503)
+      assert message =~ "engine"
+    end
+
+    defp upload(conn, type, body) do
+      conn
+      |> put_req_header("content-type", type)
+      |> put_req_header("x-csrf-token", Plug.CSRFProtection.get_csrf_token())
+      |> post("/blob", body)
+    end
+  end
 end

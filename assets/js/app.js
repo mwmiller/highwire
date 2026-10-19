@@ -445,6 +445,25 @@ let ClampRows = {
   }
 }
 
+// Replace [start, end) of a composer draft with `text` and tell the
+// server's copy of the draft right away: the textarea's phx-debounce
+// would otherwise leave the server behind whatever the browser just
+// spliced in. Both the mention popup and the image attach go through
+// here, so neither can forget the push.
+function spliceDraft(hook, el, start, end, text) {
+  const value = el.value.slice(0, start) + text + el.value.slice(end)
+  const caret = start + text.length
+
+  el.value = value
+  el.setSelectionRange(caret, caret)
+
+  // The host input picks its own event: the timeline composer drafts
+  // via "compose-draft", the thread reply box via "reply-draft".
+  try {
+    hook.pushEvent(el.dataset.draftEvent || "compose-draft", {body: value}, () => {})
+  } catch (_) {}
+}
+
 // Composer mentions: typing @ or ~ before a word opens the popup the
 // server renders from mention-query. Picking splices the feed id into
 // the draft here in the browser — string indices stay UTF-16-safe
@@ -588,19 +607,9 @@ let Mentions = {
     // [@Name](@id) / [~Name](@id) — so the rendered mention reads
     // @Name or ~Name, wholly linked to the identity view.
     const mention = "[" + t.sigil + this.escapeMd(name) + "](" + id + ") "
-    const value = this.el.value.slice(0, t.start) + mention + this.el.value.slice(t.end)
-    const caret = t.start + mention.length
 
-    this.el.value = value
-    this.el.setSelectionRange(caret, caret)
+    spliceDraft(this, this.el, t.start, t.end, mention)
     this.close()
-
-    // The host input picks its own event: the timeline composer drafts
-    // via "compose-draft", the thread reply box via "reply-draft".
-    try {
-      const draftEvent = this.el.dataset.draftEvent || "compose-draft"
-      this.pushEvent(draftEvent, {body: value}, () => {})
-    } catch (_) {}
   },
 
   // Link text: brackets or backslashes in a display name would break
@@ -609,6 +618,163 @@ let Mentions = {
     return s.replace(/([\\[\]])/g, "\\$1")
   }
 }
+
+// Composer image attach. Paste (a screenshot, an image copied out of a
+// browser), drop (a file from Finder), or the file button — all three end
+// in the same place: the bytes go to POST /blob, which hands them to the
+// engine's blob store and answers with the SSB reference, and the
+// markdown for them is spliced into the draft at the caret. Images only:
+// this is the picture path, and a post the reader can see is the point.
+const attachZones = new Set()
+
+const isImage = file => file.type.startsWith("image/")
+
+const imageFiles = source => Array.from((source && source.files) || []).filter(isImage)
+
+const hasFileDrag = transfer => !!transfer && Array.from(transfer.types || []).includes("Files")
+
+let Attach = {
+  mounted() {
+    attachZones.add(this)
+    this.busy = false
+
+    this.onPaste = e => {
+      const images = imageFiles(e.clipboardData)
+      if (images.length === 0) return
+      e.preventDefault()
+      this.send(images)
+    }
+
+    // The whole composer answers a dragged file rather than just the
+    // textarea, and dragover has to be cancelled for the drop to be
+    // allowed at all.
+    this.onDragOver = e => {
+      if (!hasFileDrag(e.dataTransfer)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = "copy"
+      this.el.classList.add("attach-over")
+    }
+
+    this.onDragLeave = e => {
+      if (e.target === this.el) this.el.classList.remove("attach-over")
+    }
+
+    this.onDrop = e => {
+      if (!hasFileDrag(e.dataTransfer)) return
+      e.preventDefault()
+      // The document keeps its own copy of this for near misses; without
+      // stopping here the file would be added twice.
+      e.stopPropagation()
+      this.el.classList.remove("attach-over")
+      this.send(imageFiles(e.dataTransfer))
+    }
+
+    this.el.addEventListener("paste", this.onPaste)
+    this.el.addEventListener("dragover", this.onDragOver)
+    this.el.addEventListener("dragleave", this.onDragLeave)
+    this.el.addEventListener("drop", this.onDrop)
+
+    // Delegated from the form, not bound to the input: a draft patch
+    // re-renders the form's children, and a listener on the old input
+    // node would go with it.
+    this.onChange = e => {
+      if (!e.target.matches("[data-attach-input]")) return
+      const images = imageFiles(e.target)
+      e.target.value = ""
+      this.send(images)
+    }
+    this.el.addEventListener("change", this.onChange)
+  },
+
+  destroyed() {
+    attachZones.delete(this)
+    this.el.removeEventListener("paste", this.onPaste)
+    this.el.removeEventListener("dragover", this.onDragOver)
+    this.el.removeEventListener("dragleave", this.onDragLeave)
+    this.el.removeEventListener("drop", this.onDrop)
+    this.el.removeEventListener("change", this.onChange)
+  },
+
+  async send(files) {
+    if (!files || files.length === 0) return
+
+    if (this.busy) {
+      this.say("One image at a time, please.", true)
+      return
+    }
+
+    for (const file of files) {
+      this.busy = true
+      this.say("Adding " + file.name + "…")
+      try {
+        this.insert(file, await this.upload(file))
+        this.say("Added " + file.name + ".")
+      } catch (err) {
+        this.say(err.message || "Could not add that image.", true)
+      } finally {
+        this.busy = false
+      }
+    }
+  },
+
+  async upload(file) {
+    const token = document.querySelector("meta[name='csrf-token']")
+    const res = await fetch("/blob", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "content-type": file.type || "application/octet-stream",
+        "x-csrf-token": token ? token.content : ""
+      },
+      body: file
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || "Upload failed (" + res.status + ")")
+    return data.ref
+  },
+
+  insert(file, ref) {
+    const textarea = this.el.querySelector("textarea")
+    if (!textarea || !ref) return
+
+    // The file name is the only thing here that describes the image, so
+    // it becomes the alt text (minus its extension).
+    const alt = file.name.replace(/\.[^.]+$/, "").replace(/([\\[\]])/g, "\\$1")
+    const markdown = "![" + alt + "](" + ref + ")\n"
+
+    // A caret only means something while the composer has focus; a file
+    // picked from the button otherwise lands ahead of everything.
+    const focused = document.activeElement === textarea
+    const caret = focused ? textarea.selectionStart ?? textarea.value.length : textarea.value.length
+
+    spliceDraft(this, textarea, caret, caret, markdown)
+    textarea.focus()
+  },
+
+  // Looked up per call: a draft patch re-renders the form's children, so
+  // a node held from mount can be a detached one by the time it matters.
+  say(message, bad) {
+    const status = this.el.querySelector("[data-attach-status]")
+    if (!status) return
+    status.textContent = message || ""
+    status.className = "mt-1 text-xs " + (bad ? "text-bad" : "text-faint")
+  }
+}
+
+// A file dropped just off the composer would otherwise navigate the tab
+// to the image and strand the draft, so the whole document takes file
+// drops and hands them to the composer. Only file drags: dragging text
+// or a link into the draft keeps the browser's own behaviour.
+document.addEventListener("dragover", e => {
+  if (hasFileDrag(e.dataTransfer)) e.preventDefault()
+})
+
+document.addEventListener("drop", e => {
+  if (!hasFileDrag(e.dataTransfer)) return
+  e.preventDefault()
+  const zone = attachZones.values().next().value
+  if (zone) zone.send(imageFiles(e.dataTransfer))
+})
 
 // Relative-time labels: the server renders the initial text plus the
 // data-ts it came from; this rewrites the text from that stamp so the
@@ -719,7 +885,17 @@ document.addEventListener("auxclick", e => {
 
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: {InfiniteScroll, Prefs, OpenPost, TabActivity, Mentions, SkyScroll, FeedScroll, ClampRows}
+  hooks: {
+    InfiniteScroll,
+    Prefs,
+    OpenPost,
+    TabActivity,
+    Mentions,
+    Attach,
+    SkyScroll,
+    FeedScroll,
+    ClampRows
+  }
 })
 
 // Show progress bar on live navigation and form submits

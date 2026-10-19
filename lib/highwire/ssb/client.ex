@@ -6,6 +6,8 @@ defmodule HighWire.SSB.Client do
   `call/3` performs sync/async requests (one reply). `stream/3` opens a
   source stream; items arrive as `{HighWire.SSB.Client, req, {:item, term}}`
   messages to the subscriber, terminated by `:done` or `{:error, term}`.
+  `sink/4` is the other direction: it pushes a whole body at the engine
+  (`blobs.add`) and answers with the engine's one end frame.
   `req` is unique across connections, not per connection, so a
   subscriber holding streams from more than one of them can tell the
   two apart.
@@ -42,6 +44,22 @@ defmodule HighWire.SSB.Client do
   @spec stream(pid(), [String.t()], term(), pid()) :: {:ok, non_neg_integer()}
   def stream(client, name, args, subscriber \\ self()) do
     GenServer.call(client, {:stream, name, args, subscriber})
+  end
+
+  @doc """
+  Push `body` at the engine as the muxrpc sink `name` and wait for it to
+  finish.
+
+  Nothing comes back until every frame has gone out, so this call blocks
+  for as long as the upload takes — that is what its own timeout is for,
+  not the sync-call default. `{:ok, true}` means the engine stored the
+  body; `{:error, reason}` means it refused it (over its blob cap, or
+  bytes that do not hash to the id the sink was opened with).
+  """
+  @spec sink(pid(), [String.t()], term(), binary(), timeout()) ::
+          {:ok, term()} | {:error, term()}
+  def sink(client, name, args, body, timeout \\ 30_000) do
+    GenServer.call(client, {:sink, name, args, body}, timeout)
   end
 
   @spec stop(pid()) :: :ok
@@ -100,6 +118,20 @@ defmodule HighWire.SSB.Client do
     state = send_packet(state, Muxrpc.encode_request(req, name, args, "source", 1))
     state = Map.put(state, :calls, Map.put(state.calls, req, {:stream, subscriber}))
     {:reply, {:ok, req}, state}
+  end
+
+  # Every frame of the sink goes out now, each as its own boxed packet —
+  # the same shape as any other request, and the only way the box layer's
+  # 4 KiB plaintext frame can carry 5 MiB without a separate buffer.
+  def handle_call({:sink, name, args, body}, from, state) do
+    req = next_req_id()
+
+    state =
+      Enum.reduce(Muxrpc.encode_sink(req, name, args, body), state, fn frame, acc ->
+        send_packet(acc, frame)
+      end)
+
+    {:noreply, Map.put(state, :calls, Map.put(state.calls, req, {:sink, from}))}
   end
 
   @impl true
@@ -169,6 +201,16 @@ defmodule HighWire.SSB.Client do
         deliver(subscriber, req, meta, decode_reply(body))
 
         if meta.end == 1 do
+          %{state | calls: Map.delete(state.calls, req)}
+        else
+          state
+        end
+
+      {:ok, {:sink, from}} ->
+        # A sink answers exactly once, on its end frame: JSON `true` when
+        # the engine took the bytes, an error body when it refused them.
+        if meta.end == 1 do
+          GenServer.reply(from, decode_reply(body))
           %{state | calls: Map.delete(state.calls, req)}
         else
           state
@@ -246,6 +288,10 @@ defmodule HighWire.SSB.Client do
 
       {req, {:stream, sub}} ->
         send(sub, {__MODULE__, req, {:error, reason}})
+
+      {req, {:sink, from}} ->
+        _ = req
+        GenServer.reply(from, {:error, reason})
     end)
 
     %{state | calls: %{}}

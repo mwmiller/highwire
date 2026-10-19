@@ -550,7 +550,13 @@ defmodule HighWireWeb.PostLive do
               No replies in the local store.
             </p>
 
-            <form phx-submit="reply" class="mt-6 border-t border-edge pt-4">
+            <form
+              id="reply-form"
+              phx-submit="reply"
+              phx-hook="Attach"
+              data-attach-zone
+              class="mt-6 border-t border-edge pt-4"
+            >
               <label for="reply-body" class="sr-only">Reply</label>
               <div class="relative">
                 <textarea
@@ -594,10 +600,24 @@ defmodule HighWireWeb.PostLive do
               <p :if={@reply_error} role="alert" class="mt-1 text-xs text-bad">
                 {@reply_error}
               </p>
+              <p
+                id="reply-attach-status"
+                phx-update="ignore"
+                data-attach-status
+                role="status"
+                class="mt-1 text-xs text-faint"
+              >
+              </p>
               <div class="mt-2 flex items-center justify-end gap-3">
                 <span :if={@self_id} class="mr-auto min-w-0 truncate text-xs text-faint">
                   Replying as {Ident.display_name(@self_id, @profiles)}
                 </span>
+                <label
+                  class="btn cursor-pointer"
+                  title="Attach an image — or paste, or drop one here"
+                >
+                  Attach <input type="file" accept="image/*" data-attach-input class="hidden" />
+                </label>
                 <button type="submit" class="btn btn-primary" phx-disable-with="Replying…">
                   Reply
                 </button>

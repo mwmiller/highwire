@@ -28,6 +28,7 @@ defmodule HighWireWeb.BlobController do
   use HighWireWeb, :controller
 
   alias HighWire.Blob
+  alias HighWire.Timeline
 
   # Excon picks its four-color palette from four bits of the id's hash;
   # these are its gold/olive/orange (brown-reading) palettes. Salt the
@@ -41,6 +42,65 @@ defmodule HighWireWeb.BlobController do
       {:error, _} -> send_resp(conn, 404, "not found")
     end
   end
+
+  # The engine's own cap on one blob (`?BLOB_MAX_SIZE` in erlbutt is
+  # 5 MiB), and the length read_body stops at, so an oversized upload is
+  # refused before its bytes are read rather than after they are buffered.
+  @max_blob_size 5 * 1024 * 1024
+
+  @doc """
+  `POST /blob` — store an attached image and answer with its SSB
+  reference.
+
+  The browser sends the file itself as the request body, under the file's
+  own content type, which the endpoint's parsers pass over
+  (`pass: ["*/*"]`), so the bytes are read here. Only images are taken:
+  this is the picture path a composer turns into `![alt](&…)`, and a
+  non-image would come out the other end as a broken one.
+  """
+  def create(conn, _params) do
+    if image_type?(upload_type(conn)) do
+      store(conn)
+    else
+      refuse(conn, 415, "only images can be attached")
+    end
+  end
+
+  defp store(conn) do
+    case Plug.Conn.read_body(conn, length: @max_blob_size, read_timeout: 15_000) do
+      {:ok, "", conn} ->
+        refuse(conn, 422, "that file is empty")
+
+      {:ok, bytes, conn} ->
+        case Timeline.add_blob(bytes) do
+          {:ok, ref} -> json(conn, %{ref: ref, url: Blob.url(ref)})
+          {:error, :offline} -> refuse(conn, 503, "the SSB engine is not running")
+          {:error, reason} -> refuse(conn, 422, describe(reason))
+        end
+
+      {:more, _partial, conn} ->
+        refuse(conn, 413, "image is larger than 5 MB")
+
+      {:error, _reason} ->
+        refuse(conn, 400, "could not read that upload")
+    end
+  end
+
+  defp upload_type(conn) do
+    case Plug.Conn.get_req_header(conn, "content-type") do
+      [type | _] -> type |> String.split(";") |> hd() |> String.trim()
+      [] -> nil
+    end
+  end
+
+  defp image_type?(type), do: is_binary(type) and String.starts_with?(type, "image/")
+
+  defp refuse(conn, status, message) do
+    conn |> put_status(status) |> json(%{error: message})
+  end
+
+  defp describe(reason) when is_binary(reason), do: reason
+  defp describe(reason), do: inspect(reason)
 
   defp serve(conn, {:file, path}) do
     case content_type(path) do

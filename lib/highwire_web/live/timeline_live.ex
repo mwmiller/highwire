@@ -1033,6 +1033,8 @@ defmodule HighWireWeb.TimelineLive do
             <form
               :if={@view == :public and @q == ""}
               id="compose"
+              phx-hook="Attach"
+              data-attach-zone
               phx-submit="publish"
               phx-change="compose-draft"
               class="border-b border-edge px-4 py-3"
@@ -1087,10 +1089,24 @@ defmodule HighWireWeb.TimelineLive do
                   <p :if={@compose_error} role="alert" class="mt-1 text-xs text-bad">
                     {@compose_error}
                   </p>
+                  <p
+                    id="compose-attach-status"
+                    phx-update="ignore"
+                    data-attach-status
+                    role="status"
+                    class="mt-1 text-xs text-faint"
+                  >
+                  </p>
                   <div class="mt-2 flex items-center justify-end gap-3">
                     <span :if={@self_id} class="mr-auto min-w-0 truncate text-xs text-faint">
                       Posting as {Ident.display_name(@self_id, @profiles)}
                     </span>
+                    <label
+                      class="btn cursor-pointer"
+                      title="Attach an image — or paste, or drop one here"
+                    >
+                      Attach <input type="file" accept="image/*" data-attach-input class="hidden" />
+                    </label>
                     <button type="submit" class="btn btn-primary" phx-disable-with="Publishing…">
                       Publish
                     </button>

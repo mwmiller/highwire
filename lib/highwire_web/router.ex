@@ -33,6 +33,12 @@ defmodule HighWireWeb.Router do
     end
 
     live("/import", ImportLive)
+
+    # Attaching an image *writes* to the engine's blob store, so unlike
+    # the read-only blob GETs below this one runs in the browser pipeline:
+    # that is what makes the layout's csrf-token meta the price of a POST,
+    # and what keeps a page on some other origin from filling the store.
+    post "/blob", BlobController, :create
   end
 
   # Blobs are static bytes: no session, CSRF or format negotiation.

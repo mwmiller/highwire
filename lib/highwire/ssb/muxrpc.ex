@@ -7,6 +7,10 @@ defmodule HighWire.SSB.Muxrpc do
   `type 0` is JSON (what this client sends; erlbutt decodes request
   bodies as JSON regardless of the type bits). All replies arrive on the
   negated request number.
+
+  A *sink* (`blobs.add`) is the one request whose body this client
+  streams: `encode_sink/5` builds the opening, data and end frames, and
+  the reply is a single end frame once the engine has the whole body.
   """
 
   @rpc_end <<0::72>>
@@ -26,6 +30,31 @@ defmodule HighWire.SSB.Muxrpc do
   def encode_request(req, name, args, type, stream) do
     body = Jason.encode!(%{name: name, args: args, type: type})
     encode(%{stream: stream, end: 0, req: req}, body)
+  end
+
+  @doc """
+  The frames of a muxrpc *sink* (`blobs.add`): the request frame with
+  stream type `sink`, the body as binary frames of at most `chunk` bytes,
+  and an end frame carrying JSON `true`.
+
+  The engine ends the sink on the end flag, and reads that frame's body as
+  the sink's own error channel — a body that is not `true` aborts the
+  blob, so an error must never ride on it.
+  """
+  @spec encode_sink(integer(), [String.t()], term(), binary(), pos_integer()) :: [binary()]
+  def encode_sink(req, name, args, body, chunk \\ 64 * 1024) do
+    data = Enum.map(chunks(body, chunk), &encode(%{stream: 1, end: 0, req: req}, &1))
+
+    [encode_request(req, name, args, "sink", 1)] ++
+      data ++ [encode(%{stream: 1, end: 1, req: req}, "true")]
+  end
+
+  defp chunks(<<>>, _chunk), do: []
+  defp chunks(body, chunk) when byte_size(body) <= chunk, do: [body]
+
+  defp chunks(body, chunk) do
+    size = byte_size(body)
+    for pos <- 0..(size - 1)//chunk, do: binary_part(body, pos, min(chunk, size - pos))
   end
 
   @spec decode(binary()) ::

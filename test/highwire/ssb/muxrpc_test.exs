@@ -41,4 +41,36 @@ defmodule HighWire.SSB.MuxrpcTest do
     assert {:packet, %{req: -1}, "1", rest} = Muxrpc.decode(p1 <> p2)
     assert {:packet, %{req: -2}, "2", <<>>} = Muxrpc.decode(rest)
   end
+
+  test "a sink opens as sink, streams the body in chunks, and ends with true" do
+    frames = Muxrpc.encode_sink(9, ["blobs", "add"], ["&x=.sha256"], :binary.copy(<<7>>, 10), 4)
+
+    assert [open, first, second, third, last] = frames
+    assert {:packet, %{stream: 1, end: 0, req: 9}, body, <<>>} = Muxrpc.decode(open)
+
+    assert Jason.decode!(body) == %{
+             "name" => ["blobs", "add"],
+             "args" => ["&x=.sha256"],
+             "type" => "sink"
+           }
+
+    # The bytes the engine appends come through in order and complete —
+    # the frame split is invisible to it.
+    data = Enum.map([first, second, third], &Muxrpc.decode/1)
+
+    assert Enum.map(data, fn {:packet, %{stream: 1, end: 0, req: 9}, b, <<>>} -> b end)
+           |> IO.iodata_to_binary() == :binary.copy(<<7>>, 10)
+
+    assert Enum.map(data, fn {:packet, _, b, _} -> byte_size(b) end) == [4, 4, 2]
+    assert {:packet, %{stream: 1, end: 1, req: 9}, "true", <<>>} = Muxrpc.decode(last)
+  end
+
+  test "a sink's small body is one frame, and an empty body is none" do
+    assert [_open, data, _end] = Muxrpc.encode_sink(1, ["blobs", "add"], [nil], "abc", 4)
+    assert {:packet, %{stream: 1, end: 0, req: 1}, "abc", <<>>} = Muxrpc.decode(data)
+
+    # An empty blob opens and ends with nothing between: no zero-length
+    # frame for the engine to append.
+    assert [_open, _end] = Muxrpc.encode_sink(2, ["blobs", "add"], [nil], "", 4)
+  end
 end
