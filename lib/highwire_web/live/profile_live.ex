@@ -251,7 +251,6 @@ defmodule HighWireWeb.ProfileLive do
               here read as a personal status ("alanz — Ok"), and the
               rail already carries the Follow control. --%>
               <div class="mt-3 flex gap-4 text-xs text-dim">
-                <span>{length(@messages)} posts</span>
                 <span :if={@id == @self_id}>you</span>
                 <span :if={@id != @self_id and @id in @follows}>Following</span>
               </div>
