@@ -25,7 +25,6 @@ defmodule HighWire.SSB.Client do
     :enc_nonce,
     :dec_key,
     :dec_nonce,
-    :next_req,
     box_buf: <<>>,
     rpc_buf: <<>>,
     calls: %{}
@@ -85,30 +84,22 @@ defmodule HighWire.SSB.Client do
        enc_key: ek,
        enc_nonce: en,
        dec_key: dk,
-       dec_nonce: dn,
-       # Req ids come from a VM-wide unique source rather than a counter
-       # starting at one. One subscriber listens on several connections
-       # at once (the Timeline runs the contact drain on a dedicated
-       # connection beside the main one) and dispatches these messages
-       # on req alone: two connections counting from the same first
-       # number hand the same handle to both streams, and the wrong
-       # handler swallows the other's items and `:done`.
-       next_req: System.unique_integer([:positive, :monotonic])
+       dec_nonce: dn
      }}
   end
 
   @impl true
   def handle_call({:call, name, args}, from, state) do
-    req = state.next_req
+    req = next_req_id()
     state = send_packet(state, Muxrpc.encode_request(req, name, args, "sync", 0))
-    {:noreply, state |> Map.put(:calls, Map.put(state.calls, req, {:call, from})) |> bump()}
+    {:noreply, Map.put(state, :calls, Map.put(state.calls, req, {:call, from}))}
   end
 
   def handle_call({:stream, name, args, subscriber}, _from, state) do
-    req = state.next_req
+    req = next_req_id()
     state = send_packet(state, Muxrpc.encode_request(req, name, args, "source", 1))
     state = Map.put(state, :calls, Map.put(state.calls, req, {:stream, subscriber}))
-    {:reply, {:ok, req}, bump(state)}
+    {:reply, {:ok, req}, state}
   end
 
   @impl true
@@ -237,7 +228,15 @@ defmodule HighWire.SSB.Client do
     %{state | enc_nonce: nonce}
   end
 
-  defp bump(%{next_req: n} = state), do: %{state | next_req: n + 1}
+  # Every req id is drawn fresh from the VM's unique source — never a
+  # per-process counter. One subscriber listens on several connections at
+  # once (the Timeline runs the contact and about drains on a dedicated
+  # connection beside the main one) and dispatches on req alone: two
+  # connections that count from their own starting number hand the same
+  # handle to both streams, and the wrong handler swallows the other's
+  # items and `:done` — which is how the about pass was starved into
+  # never landing and the rail stayed blank.
+  defp next_req_id, do: System.unique_integer([:positive, :monotonic])
 
   defp fail_all(state, reason) do
     Enum.each(state.calls, fn
