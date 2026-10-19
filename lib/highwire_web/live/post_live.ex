@@ -216,6 +216,53 @@ defmodule HighWireWeb.PostLive do
 
   defp liked?(assigns, key), do: key in assigns.my_likes
 
+  attr :msg, :map, required: true
+  attr :profiles, :map, required: true
+  attr :rev, :any, default: nil
+  attr :class, :string, default: "mt-1.5"
+
+  # A message that says nothing in words still said something — a block,
+  # a follow, a like — and reads as a sentence here instead of leaving a
+  # blank body under the byline. When the sentence names a feed (a contact
+  # edit), that feed rides along as a chip with its own avatar, linking
+  # through to the profile — where the reader can look them over and block
+  # them for themselves.
+  #
+  # A div, not a p: the chip carries the avatar component's own div, and a
+  # div inside a p makes the HTML parser close the p — which drops the
+  # chip (avatar and name) out of the sentence entirely. The timeline's
+  # contact row learned the same lesson.
+  defp message_line(assigns) do
+    ~H"""
+    <div class={["text-sm italic text-sub", @class]}>
+      <%= case MessageText.contact_edit(@msg) do %>
+        <% nil -> %>
+          {MessageText.describe(@msg, %{profiles: @profiles})}
+        <% {verb, id, name} -> %>
+          {verb}
+          <span class="ml-1 inline-flex items-center gap-1.5 align-middle">
+            <.link
+              :if={href = profile_href(id)}
+              navigate={href}
+              class="inline-flex items-center gap-1.5 not-italic text-ink hover:underline"
+            >
+              <Avatar.avatar
+                id={id}
+                size={16}
+                image={image_of(id, @profiles)}
+                rev={@rev}
+              />
+              <span>{name || Ident.display_name(id, @profiles)}</span>
+            </.link>
+            <span :if={profile_href(id) == nil} class="not-italic text-ink">
+              {name || Ident.display_name(id, @profiles)}
+            </span>
+          </span>
+      <% end %>
+    </div>
+    """
+  end
+
   # -- message helpers (the timeline's, kept local as on the profile page) --
 
   defp content(msg) do
@@ -376,13 +423,15 @@ defmodule HighWireWeb.PostLive do
                     {raw(Markdown.to_html(text(@root), blob_rev: @blob_rev))}
                   </div>
 
-                  <%!-- A message that says nothing in words still said
-                  something — a block, a follow, a like — and reads as a
-                  sentence here instead of leaving a blank body under the
-                  byline. --%>
-                  <p :if={text(@root) == ""} class="mt-3 text-sm italic text-sub">
-                    {MessageText.describe(@root, %{profiles: @profiles})}
-                  </p>
+                  <%!-- A root with no body of its own still says what it
+                  did — see message_line/1. --%>
+                  <.message_line
+                    :if={text(@root) == ""}
+                    msg={@root}
+                    profiles={@profiles}
+                    rev={@blob_rev}
+                    class="mt-3"
+                  />
 
                   <div class="mt-3 flex gap-4 text-xs text-dim">
                     <span :if={length(@replies) > 0}>
@@ -456,9 +505,12 @@ defmodule HighWireWeb.PostLive do
                   {raw(Markdown.to_html(text(reply), blob_rev: @blob_rev))}
                 </div>
 
-                <p :if={text(reply) == ""} class="mt-1.5 text-sm italic text-sub">
-                  {MessageText.describe(reply, %{profiles: @profiles})}
-                </p>
+                <.message_line
+                  :if={text(reply) == ""}
+                  msg={reply}
+                  profiles={@profiles}
+                  rev={@blob_rev}
+                />
 
                 <div class="mt-1.5 flex items-center gap-1.5">
                   <Heart.pill key={reply["key"]} liked={reply["key"] in @my_likes} />

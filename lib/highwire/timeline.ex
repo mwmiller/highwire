@@ -35,6 +35,7 @@ defmodule HighWire.Timeline do
                         voters per target, most recent voter first
     * `:index`        — `%{message_key => author_id}` for the full pass
     * `:follows`      — the account's follow list (includes self)
+    * `:blocked`      — the feeds the account blocks (never self)
     * `:self_id`      — the account's own feed id
     * `:profiles`     — `%{feed_id => %{name, image}}` for every feed on
                         screen (participants + follows), resolved through
@@ -398,6 +399,22 @@ defmodule HighWire.Timeline do
   @spec unfollow(binary()) :: {:ok, binary() | nil} | {:error, term()}
   def unfollow(id) when is_binary(id), do: publish_content(contact_content(id, false))
 
+  @doc """
+  Blocks (`block/1`) or unblocks (`unblock/1`) an identity by publishing
+  a contact message; the engine's social graph turns it into a
+  contacts-stateStream delta.
+
+  Blocking also retracts a follow in the same message: the block is the
+  relationship the reader asked for, and a blocked feed has no business
+  still being pulled into the timeline. Unblocking does not re-follow —
+  the reader can decide that separately.
+  """
+  @spec block(binary()) :: {:ok, binary() | nil} | {:error, term()}
+  def block(id) when is_binary(id), do: publish_content(block_content(id, true))
+
+  @spec unblock(binary()) :: {:ok, binary() | nil} | {:error, term()}
+  def unblock(id) when is_binary(id), do: publish_content(block_content(id, false))
+
   # -- publish content (pure; the RPC only serializes these maps) -------
 
   @doc false
@@ -416,6 +433,17 @@ defmodule HighWire.Timeline do
   @doc false
   def contact_content(id, following) do
     %{"type" => "contact", "contact" => id, "following" => following}
+  end
+
+  @doc false
+  def block_content(id, true) do
+    # One message carries both edges: the engine applies `following` and
+    # `blocking` independently, so blocking is also the unfollow.
+    %{"type" => "contact", "contact" => id, "following" => false, "blocking" => true}
+  end
+
+  def block_content(id, false) do
+    %{"type" => "contact", "contact" => id, "blocking" => false}
   end
 
   # Single chokepoint for every outbound message (posts, replies, votes,
@@ -445,6 +473,7 @@ defmodule HighWire.Timeline do
       my_likes: [],
       index: %{},
       follows: [],
+      blocked: [],
       self_id: nil,
       profiles: %{},
       blob_rev: 0,
@@ -481,6 +510,7 @@ defmodule HighWire.Timeline do
       drain_client: nil,
       last_drain_at: nil,
       follows: [],
+      blocked: [],
       pending: %{},
       acc: [],
       messages: empty_payload(),
@@ -1401,24 +1431,25 @@ defmodule HighWire.Timeline do
   # sends the snapshot and ends, and follow/unfollow never reach the
   # UI). The first item therefore replaces the list wholesale and
   # continues the boot sequence where stream :done used to; later items
-  # merge — true adds the edge, false or null drops it (unfollow or
-  # block). A delta means a follow changed, so reload to re-broadcast
-  # the payload promptly.
+  # merge. true is a follow, false is a block and null is neither — the
+  # engine's legacy friend terms, where block wins over follow. A delta
+  # means a follow changed, so reload to re-broadcast the payload
+  # promptly.
   def handle_info({Client, ref, {:item, graph}}, %{contacts_ref: ref} = state)
       when is_map(graph) do
     first? = not state.contacts_primed?
 
-    others =
-      Enum.reduce(graph, if(first?, do: [], else: state.follows), fn
-        {id, true}, acc when is_binary(id) -> [id | acc]
-        {id, _state}, acc when is_binary(id) -> List.delete(acc, id)
-        _other, acc -> acc
-      end)
+    follows0 = if first?, do: [], else: state.follows
+    blocked0 = if first?, do: [], else: blocked_ids(state)
+    {others, blocked} = merge_contacts(graph, follows0, blocked0)
 
     # Your own feed is not in the contacts graph — pin it so your own
-    # published messages always show up in the timeline.
+    # published messages always show up in the timeline. (It cannot be
+    # blocked, either: a block of yourself is not a relationship.)
     follows = if is_binary(state.self_id), do: Enum.uniq([state.self_id | others]), else: others
-    state = %{state | follows: follows, contacts_primed?: true}
+
+    blocked = blocked |> Enum.uniq() |> Enum.reject(&(&1 == state.self_id))
+    state = %{state | follows: follows, blocked: blocked, contacts_primed?: true}
 
     # A changed follow list is a new ranking input (and the moment that
     # matters most: following a suggested feed should regenerate the
@@ -1585,7 +1616,7 @@ defmodule HighWire.Timeline do
     # (HighWire.Contacts), and a payload built before the draw lands
     # would otherwise wait for a finalize that may never come.
     old = Map.get(state, :suggestions, [])
-    fresh = Suggester.get_suggestions()
+    fresh = suggestions(state)
     old_contacts = Map.get(state.messages, :contacts, [])
     fresh_contacts = Contacts.get_contacts()
     moved? = fresh != old or fresh_contacts != old_contacts
@@ -1612,7 +1643,7 @@ defmodule HighWire.Timeline do
   # network poll's suggestion read, polled briefly until the fresh rows
   # land (or the window closes and the poll takes over).
   def handle_info({:suggestions_sync, tries}, state) do
-    fresh = Suggester.get_suggestions()
+    fresh = suggestions(state)
 
     cond do
       fresh != Map.get(state, :suggestions, []) and state.status == :ok ->
@@ -1704,6 +1735,31 @@ defmodule HighWire.Timeline do
   end
 
   def handle_info(_other, state), do: {:noreply, state}
+
+  # Fold one contacts item into the follow/block lists. The first item is
+  # the whole graph (caller passes empty lists); later items are
+  # single-edge deltas. Following and blocking are independent edges
+  # between the same pair, so each keeps its own list: a block must not
+  # read as a follow, and unblocking must not mint one.
+  defp merge_contacts(graph, follows, blocked) do
+    Enum.reduce(graph, {follows, blocked}, fn
+      {id, true}, {f, b} when is_binary(id) -> {[id | f], List.delete(b, id)}
+      {id, false}, {f, b} when is_binary(id) -> {List.delete(f, id), [id | b]}
+      {id, _neither}, {f, b} when is_binary(id) -> {List.delete(f, id), List.delete(b, id)}
+      _other, acc -> acc
+    end)
+  end
+
+  # The rail's "Whom to follow" rows, with the feeds this account blocks
+  # taken out. The ranking process (HighWire.Suggester) ranks the raw
+  # contact graph and has no notion of blocks, so the filter lives at the
+  # display edge — a refresh can never offer back the feed the reader
+  # just blocked.
+  defp suggestions(state), do: reject_blocked(Suggester.get_suggestions(), blocked_ids(state))
+
+  defp reject_blocked(rows, blocked), do: Enum.reject(rows, &(&1["id"] in blocked))
+
+  defp blocked_ids(state), do: Map.get(state, :blocked, [])
 
   defp connections_of(%{"connections" => connections}) when is_list(connections), do: connections
   defp connections_of(_), do: []
@@ -2120,7 +2176,7 @@ defmodule HighWire.Timeline do
     # Suggestion rows need names/avatars too, or the sidebar shows bare
     # short ids for strangers — profile fetch covers them on top of the
     # usual participants + follows.
-    suggestions = Map.get(state, :suggestions, [])
+    suggestions = state |> Map.get(:suggestions, []) |> reject_blocked(blocked_ids(state))
     sugg_ids = for s <- suggestions, is_binary(s["id"]), do: s["id"]
 
     # Parked ensure_profiles ids ride along, so every finalize also
@@ -2142,6 +2198,7 @@ defmodule HighWire.Timeline do
       my_likes: my_likes(likes, state.self_id),
       index: index,
       follows: state.follows,
+      blocked: blocked_ids(state),
       self_id: state.self_id,
       profiles: base,
       blob_rev: state.blob_rev,

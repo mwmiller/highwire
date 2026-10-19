@@ -33,6 +33,7 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:messages, [])
      |> assign(:resume, nil)
      |> assign(:follows, [])
+     |> assign(:blocked, [])
      |> assign(:self_id, nil)
      |> assign(:more, false)}
   end
@@ -57,6 +58,7 @@ defmodule HighWireWeb.ProfileLive do
      assign(socket,
        blob_rev: Map.get(payload, :blob_rev, 0),
        follows: Map.get(payload, :follows, socket.assigns.follows),
+       blocked: Map.get(payload, :blocked, socket.assigns.blocked),
        self_id: Map.get(payload, :self_id, socket.assigns.self_id)
      )}
   end
@@ -98,6 +100,20 @@ defmodule HighWireWeb.ProfileLive do
     {:noreply, socket}
   end
 
+  # Blocking publishes one contact message that carries both edges — the
+  # block and the retracted follow — so a blocked feed also stops feeding
+  # the timeline. Unblocking clears only the block.
+  def handle_event("toggle-block", %{"id" => id}, socket) do
+    result = if id in socket.assigns.blocked, do: Timeline.unblock(id), else: Timeline.block(id)
+
+    case result do
+      {:error, reason} -> Logger.warning("profile: block publish failed: #{inspect(reason)}")
+      _ok -> :ok
+    end
+
+    {:noreply, socket}
+  end
+
   # Clicking a post opens its thread — the same journey as the timeline
   # row: PostLive carries the reply composer and the like toggle.
   def handle_event("open-post", %{"key" => key}, socket) when is_binary(key) do
@@ -120,6 +136,7 @@ defmodule HighWireWeb.ProfileLive do
           resume: resume,
           more: more,
           follows: Map.get(payload, :follows, []),
+          blocked: Map.get(payload, :blocked, []),
           self_id: Map.get(payload, :self_id),
           blob_rev: Map.get(payload, :blob_rev, 0)
         )
@@ -136,6 +153,7 @@ defmodule HighWireWeb.ProfileLive do
           resume: nil,
           more: false,
           follows: Map.get(payload, :follows, []),
+          blocked: Map.get(payload, :blocked, []),
           self_id: Map.get(payload, :self_id),
           blob_rev: Map.get(payload, :blob_rev, 0)
         )
@@ -205,14 +223,28 @@ defmodule HighWireWeb.ProfileLive do
           </p>
           <p class="mt-0.5 break-all font-mono text-[10px] text-dim">{@id}</p>
 
+          <%!-- A blocked feed is not offered the follow control: the two
+          edges are independent in the protocol, but "following" a feed
+          you block is a contradiction the reader should not have to
+          resolve. Unblock first, then decide. --%>
           <button
-            :if={@id != @self_id and @status != :disabled}
+            :if={@id != @self_id and @status != :disabled and @id not in @blocked}
             type="button"
             phx-click="toggle-follow"
             phx-value-id={@id}
             class={["btn mt-3 w-full", @id in @follows and "btn-primary"]}
           >
             {if @id in @follows, do: "Following", else: "Follow"}
+          </button>
+
+          <button
+            :if={@id != @self_id and @status != :disabled}
+            type="button"
+            phx-click="toggle-block"
+            phx-value-id={@id}
+            class={["btn mt-2 w-full", @id not in @blocked and "text-bad"]}
+          >
+            {if @id in @blocked, do: "Unblock", else: "Block"}
           </button>
         </div>
 
@@ -253,6 +285,7 @@ defmodule HighWireWeb.ProfileLive do
               <div class="mt-3 flex gap-4 text-xs text-dim">
                 <span :if={@id == @self_id}>you</span>
                 <span :if={@id != @self_id and @id in @follows}>Following</span>
+                <span :if={@id != @self_id and @id in @blocked} class="text-bad">Blocked</span>
               </div>
             </div>
           </div>

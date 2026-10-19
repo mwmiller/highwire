@@ -103,4 +103,56 @@ defmodule HighWireWeb.ProfileLiveTest do
     render_hook(view, "open-post", %{"key" => key})
     assert_redirect(view, "/post/" <> Base.url_encode64(key, padding: false))
   end
+
+  test "the rail offers Follow and Block, and reflects the relationship", %{conn: conn} do
+    me = "@me=.ed25519"
+    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+    seed(view, status: :ok, self_id: me, follows: [me], blocked: [])
+    html = render(view)
+
+    assert html =~ "toggle-follow"
+    assert html =~ "toggle-block"
+    assert html =~ "Follow"
+    # the label is exactly "Block" — no block is in force
+    refute html =~ "Unblock"
+    refute html =~ "Blocked"
+
+    # a click publishes through the same chokepoint as follow (the engine
+    # is off, so the publish refuses — the view must not come down with it)
+    assert render_click(view, "toggle-block", %{"id" => peer}) =~ "toggle-block"
+
+    seed(view, blocked: [peer])
+    html = render(view)
+
+    assert html =~ "Unblock"
+    assert html =~ "Blocked"
+    # a blocked feed is not offered the follow control at all
+    refute html =~ "toggle-follow"
+  end
+
+  # Engine off under test, so relationship state is seeded straight into
+  # the assigns; __changed__ records the old values so the next render
+  # computes a diff instead of serving the cached tree.
+  defp seed(view, overrides) do
+    :sys.replace_state(view.pid, fn state ->
+      socket = state.socket
+      assigns = socket.assigns
+
+      changed =
+        Enum.reduce(overrides, assigns.__changed__, fn {key, _new}, acc ->
+          Map.put(acc, key, Map.get(assigns, key))
+        end)
+
+      assigns =
+        Enum.reduce(overrides, assigns, fn {key, value}, acc -> Map.put(acc, key, value) end)
+        |> Map.put(:__changed__, changed)
+
+      %{state | socket: %{socket | assigns: assigns}}
+    end)
+
+    send(view.pid, :nudge)
+    view
+  end
 end

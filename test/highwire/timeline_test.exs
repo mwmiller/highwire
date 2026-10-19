@@ -93,6 +93,23 @@ defmodule HighWire.TimelineTest do
 
       assert Timeline.contact_content("@peer.ed25519", false)["following"] == false
     end
+
+    test "block content blocks and unfollows in one message; unblock only unblocks" do
+      assert Timeline.block_content("@peer.ed25519", true) == %{
+               "type" => "contact",
+               "contact" => "@peer.ed25519",
+               "following" => false,
+               "blocking" => true
+             }
+
+      # unblocking clears the block and mints nothing: the reader decides
+      # about following separately
+      assert Timeline.block_content("@peer.ed25519", false) == %{
+               "type" => "contact",
+               "contact" => "@peer.ed25519",
+               "blocking" => false
+             }
+    end
   end
 
   describe "vote_link/1" do
@@ -389,6 +406,7 @@ defmodule HighWire.TimelineTest do
           drain_client: nil,
           last_drain_at: nil,
           follows: [],
+          blocked: [],
           self_id: "@me.ed25519",
           status: :connecting,
           acc: [],
@@ -411,6 +429,7 @@ defmodule HighWire.TimelineTest do
         Timeline.handle_info(item(%{"@a.ed25519" => true, "@b.ed25519" => true}), st)
 
       assert Enum.sort(st.follows) == ["@a.ed25519", "@b.ed25519", "@me.ed25519"]
+      assert st.blocked == []
       assert st.contacts_primed?
 
       # a live delta — must merge, not replace
@@ -421,9 +440,40 @@ defmodule HighWire.TimelineTest do
       {:noreply, st} = Timeline.handle_info(item(%{"@a.ed25519" => nil}), st)
       assert Enum.sort(st.follows) == ["@b.ed25519", "@c.ed25519", "@me.ed25519"]
 
-      # false (block) drops the edge too
+      # false (block) drops the edge too, and is remembered as a block
       {:noreply, st} = Timeline.handle_info(item(%{"@c.ed25519" => false}), st)
       assert Enum.sort(st.follows) == ["@b.ed25519", "@me.ed25519"]
+      assert st.blocked == ["@c.ed25519"]
+    end
+
+    test "a block and a follow are independent edges" do
+      st = contacts_state()
+
+      # blocking retracts the follow in the same message, so the id is
+      # blocked and not followed
+      {:noreply, st} =
+        Timeline.handle_info(item(%{"@b.ed25519" => false, "@a.ed25519" => true}), st)
+
+      assert Enum.sort(st.follows) == ["@a.ed25519", "@me.ed25519"]
+      assert st.blocked == ["@b.ed25519"]
+
+      # unblocking (null) mints no follow back
+      {:noreply, st} = Timeline.handle_info(item(%{"@b.ed25519" => nil}), st)
+      assert Enum.sort(st.follows) == ["@a.ed25519", "@me.ed25519"]
+      assert st.blocked == []
+
+      # and blocking someone we follow takes the follow away
+      {:noreply, st} = Timeline.handle_info(item(%{"@a.ed25519" => false}), st)
+      assert Enum.sort(st.follows) == ["@me.ed25519"]
+      assert st.blocked == ["@a.ed25519"]
+    end
+
+    test "self is never blocked" do
+      st = contacts_state()
+
+      {:noreply, st} = Timeline.handle_info(item(%{"@me.ed25519" => false}), st)
+      assert st.follows == ["@me.ed25519"]
+      assert st.blocked == []
     end
 
     test "self is always pinned, even when the graph mentions it" do

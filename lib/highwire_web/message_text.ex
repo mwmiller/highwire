@@ -30,6 +30,28 @@ defmodule HighWireWeb.MessageText do
     end
   end
 
+  @doc """
+  A contact edit split into its parts — `{verb, feed_id, name}` — or nil
+  when the message is not one.
+
+  `verb` is the direction word ("blocked", "followed", "unfollowed"),
+  `feed_id` is the feed the edit names, and `name` is the name the edit
+  itself carried (patchwork's about-name), or nil. Views that can link a
+  feed render the target as a chip through this, so a reader can look the
+  feed over and block or follow it for themselves; `describe/2` builds its
+  sentence from the very same parts.
+  """
+  @spec contact_edit(map()) :: {binary(), binary(), binary() | nil} | nil
+  def contact_edit(msg) do
+    case content(msg) do
+      %{"type" => "contact", "contact" => id} = c when is_binary(id) ->
+        {contact_verb(c), id, carried_name(c)}
+
+      _ ->
+        nil
+    end
+  end
+
   # Every type carries its own payload, so name the specific thing
   # rather than echoing the raw protocol type at the reader.
   defp typed_label("contact", c, _msg, ctx), do: contact_label(c, ctx)
@@ -47,23 +69,29 @@ defmodule HighWireWeb.MessageText do
   # the target feed (patchwork's about-name), shown verbatim — the
   # profile store may never have seen that feed at all.
   defp contact_label(c, ctx) do
-    who = contact_target(c, ctx)
+    verb = contact_verb(c)
 
+    case c["contact"] do
+      id when is_binary(id) -> "#{verb} #{carried_name(c) || Ident.display_name(id, ctx)}"
+      _ -> "#{verb} someone"
+    end
+  end
+
+  defp contact_verb(c) do
     cond do
-      c["blocking"] == true -> "blocked #{who}"
-      c["following"] == true -> "followed #{who}"
-      c["following"] == false -> "unfollowed #{who}"
-      true -> "edited their contact list for #{who}"
+      c["blocking"] == true -> "blocked"
+      c["following"] == true -> "followed"
+      c["following"] == false -> "unfollowed"
+      true -> "edited their contact list for"
     end
   end
 
-  defp contact_target(c, ctx) do
-    case c do
-      %{"about" => %{"name" => name}} when is_binary(name) and name != "" -> name
-      %{"contact" => id} when is_binary(id) -> Ident.display_name(id, ctx)
-      _ -> "someone"
-    end
-  end
+  # The name a contact edit carries for its target — shown verbatim,
+  # since the profile store may never have seen that feed.
+  defp carried_name(%{"about" => %{"name" => name}}) when is_binary(name) and name != "",
+    do: name
+
+  defp carried_name(_c), do: nil
 
   # An about message sets a name/description for the feed it points at.
   # Resolve that feed to a display name when we can; fall back to the

@@ -242,8 +242,20 @@ defmodule HighWireWeb.PostLiveTest do
     html = render(view)
 
     # the name rides the contact edit itself, so it shows even though no
-    # profile for the target was ever fetched
-    assert html =~ "blocked Szilvia"
+    # profile for the target was ever fetched — on a chip that links to
+    # that feed's profile, with its own avatar, so the reader can look
+    # them over and block them for themselves
+    assert html =~ "blocked"
+    assert html =~ "Szilvia"
+    assert html =~ "/profile?id=" <> URI.encode_www_form(silvia)
+    assert html =~ "/identicon/" <> Base.encode16(silvia, case: :lower)
+
+    # the chip carries the avatar component's own div, so the sentence
+    # must not be a <p>: the HTML parser closes a p at the div and the
+    # avatar and name fall out of the sentence in the browser
+    refute html =~ ~s(<p class="text-sm italic text-sub)
+
+    # the reply is a textless post, so it describes itself too
     assert html =~ "posted in #drama"
   end
 end
