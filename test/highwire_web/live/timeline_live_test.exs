@@ -290,6 +290,11 @@ defmodule HighWireWeb.TimelineLiveTest do
           "type" => "contact",
           "contact" => "@frank:.ed25519",
           "following" => false
+        }),
+        ssb_msg("%unblock-hank.sha256", "@alice:.ed25519", now - 250, %{
+          "type" => "contact",
+          "contact" => "@hank:.ed25519",
+          "blocking" => false
         })
       ]
 
@@ -300,16 +305,20 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ "followed"
       assert html =~ "blocked"
       assert html =~ "unfollowed"
+      assert html =~ "unblocked"
 
       dave = URI.encode_www_form("@dave:.ed25519")
       eve = URI.encode_www_form("@eve:.ed25519")
       frank = URI.encode_www_form("@frank:.ed25519")
+      hank = URI.encode_www_form("@hank:.ed25519")
 
       assert html =~ dave
       assert html =~ eve
       assert html =~ frank
+      assert html =~ hank
 
       # one row per direction, newest activity first
+      assert pos(html, hank) < pos(html, frank)
       assert pos(html, frank) < pos(html, eve)
       assert pos(html, eve) < pos(html, dave)
     end

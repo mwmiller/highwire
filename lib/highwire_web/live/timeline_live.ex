@@ -569,11 +569,12 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   # Everyone a contact row is about — the lists are the row's action
-  # (:followed, :blocked, :unfollowed), so all three must be collected
-  # for profiles and search alike.
+  # (:followed, :blocked, :unfollowed, :unblocked), so all of them must
+  # be collected for profiles and search alike.
   defp contact_people(row) do
     Map.get(row, :followed, []) ++
-      Map.get(row, :blocked, []) ++ Map.get(row, :unfollowed, [])
+      Map.get(row, :blocked, []) ++
+      Map.get(row, :unfollowed, []) ++ Map.get(row, :unblocked, [])
   end
 
   # Private rows come from the decrypted feed; the public window never
@@ -1370,6 +1371,7 @@ defmodule HighWireWeb.TimelineLive do
   # The direction word between the author and the chips.
   defp contact_verb(:blocked), do: "blocked"
   defp contact_verb(:unfollowed), do: "unfollowed"
+  defp contact_verb(:unblocked), do: "unblocked"
   defp contact_verb(_), do: "followed"
 
   attr :row, :map, required: true

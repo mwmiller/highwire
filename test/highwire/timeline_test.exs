@@ -378,12 +378,22 @@ defmodule HighWire.TimelineTest do
           "following" => false
         })
 
-      rows = Timeline.build_feed([follow, block, unfollow, both], "@me", %{})
+      # clearing a block is its own direction — it must never read as a
+      # follow, which would claim a relationship the edit just refused
+      unblock =
+        msg("@alice", "%ub1.sha256", 5_000, %{
+          "type" => "contact",
+          "contact" => "@hank.ed25519",
+          "blocking" => false
+        })
+
+      rows = Timeline.build_feed([follow, block, unfollow, both, unblock], "@me", %{})
 
       # one row per author per direction, newest edit first: both blocks
       # collapse into one row (which never claims those feeds were
-      # followed), and the follow/unfollow stay distinct
+      # followed), and the follow/unfollow/unblock stay distinct
       assert Enum.map(rows, &{&1.contact_action, Map.get(&1, &1.contact_action)}) == [
+               {:unblocked, ["@hank.ed25519"]},
                {:blocked, ["@eve.ed25519", "@gina.ed25519"]},
                {:unfollowed, ["@frank.ed25519"]},
                {:followed, ["@dave.ed25519"]}

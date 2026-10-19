@@ -34,9 +34,9 @@ defmodule HighWireWeb.MessageText do
   A contact edit split into its parts — `{verb, feed_id, name}` — or nil
   when the message is not one.
 
-  `verb` is the direction word ("blocked", "followed", "unfollowed"),
-  `feed_id` is the feed the edit names, and `name` is the name the edit
-  itself carried (patchwork's about-name), or nil. Views that can link a
+  `verb` is the direction word ("blocked", "followed", "unfollowed",
+  "unblocked"), `feed_id` is the feed the edit names, and `name` is the
+  name the edit itself carried (patchwork's about-name), or nil. Views that can link a
   feed render the target as a chip through this, so a reader can look the
   feed over and block or follow it for themselves; `describe/2` builds its
   sentence from the very same parts.
@@ -82,6 +82,7 @@ defmodule HighWireWeb.MessageText do
       c["blocking"] == true -> "blocked"
       c["following"] == true -> "followed"
       c["following"] == false -> "unfollowed"
+      c["blocking"] == false -> "unblocked"
       true -> "edited their contact list for"
     end
   end

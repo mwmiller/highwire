@@ -2507,10 +2507,13 @@ defmodule HighWire.Timeline do
   end
 
   # Which way a contact edit went. Blocking wins: an edit may carry both
-  # flags, and the block is the relationship that matters.
+  # flags, and the block is the relationship that matters. An edit that
+  # clears a block is its own direction too — reading it as a follow
+  # would claim a relationship the reader just refused.
   defp contact_action(%{"blocking" => true}), do: :blocked
   defp contact_action(%{"following" => true}), do: :followed
   defp contact_action(%{"following" => false}), do: :unfollowed
+  defp contact_action(%{"blocking" => false}), do: :unblocked
   defp contact_action(_), do: :followed
 
   defp build_entry(kind, msg, activity, participants, replies, likes, recent, opts) do
