@@ -108,6 +108,8 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(seen_keys: top_keys(Map.get(payload, :feed, [])))
       |> assign(:transfer, Timeline.transfer_status())
       |> assign(transfer_timer: nil)
+      |> assign(:search_hits, [])
+      |> assign(:search_q_kicked, "")
       |> maybe_load_page()
       |> merge_paged()
 
@@ -227,6 +229,17 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
+  @impl true
+  def handle_info({:search_results, q, hits}, socket) do
+    qd = socket.assigns.q
+
+    if q != "" and String.downcase(q) == qd do
+      {:noreply, assign(socket, search_hits: hits || [])}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   defp schedule_page_retry(socket, view, resume) do
@@ -239,7 +252,21 @@ defmodule HighWireWeb.TimelineLive do
 
   @impl true
   def handle_event("search", %{"q" => q}, socket) do
-    {:noreply, assign(socket, q: String.downcase(q))}
+    qtrim = q |> to_string() |> String.trim()
+    qd = String.downcase(qtrim)
+    socket = assign(socket, q: qd)
+
+    if qd != "" and qd != socket.assigns.search_q_kicked do
+      HighWire.SearchIndex.search(qtrim, self())
+      socket = assign(socket, search_q_kicked: qd, search_hits: socket.assigns.search_hits)
+      {:noreply, socket}
+    else
+      if qd == "" do
+        {:noreply, assign(socket, search_hits: [], search_q_kicked: "")}
+      else
+        {:noreply, socket}
+      end
+    end
   end
 
   # Composer drafts debounce into the assign; publish trims, validates
@@ -855,8 +882,8 @@ defmodule HighWireWeb.TimelineLive do
               name="q"
               value={@q}
               phx-debounce="300"
-              placeholder="Search…"
-              class="w-full rounded border border-edge bg-input px-2 py-1 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
+              placeholder="Search"
+              class="h-9 w-full rounded-full border border-gray-300 bg-white px-3 text-sm shadow-sm transition focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-400"
             />
           </form>
           <nav class="flex shrink-0 items-center gap-1" aria-label="Mentions and profile">
@@ -993,6 +1020,31 @@ defmodule HighWireWeb.TimelineLive do
             >
               No messages yet.
             </p>
+
+            <%= if @q != "" and @search_hits != [] do %>
+              <div class="space-y-2 px-4 py-3">
+                <div class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                  Matches from the whole store ({length(@search_hits)})
+                </div>
+                <%= for h <- @search_hits do %>
+                  <article
+                    phx-click="open-post"
+                    phx-value-key={h.key}
+                    class="cursor-pointer rounded-lg border border-gray-200 bg-white p-3 shadow-sm transition hover:border-indigo-300 hover:shadow dark:border-gray-700 dark:bg-gray-900 dark:hover:border-indigo-500"
+                  >
+                    <header class="mb-1 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                      <span class="truncate font-medium text-gray-700 dark:text-gray-200">
+                        {Ident.display_name(h.author, @profiles)}
+                      </span>
+                      <time>{format_ts(h.ts)}</time>
+                    </header>
+                    <div class="prose prose-sm max-w-none whitespace-pre-wrap break-words text-gray-900 dark:prose-invert dark:text-gray-100">
+                      {snippet_hit(h.text)}
+                    </div>
+                  </article>
+                <% end %>
+              </div>
+            <% end %>
 
             <div :for={row <- @rows} id={dom_id("row-", row)} class="border-b border-edge-soft">
               <.post_row
@@ -1727,4 +1779,18 @@ defmodule HighWireWeb.TimelineLive do
 
   defp channel_verb(true), do: "subscribed to"
   defp channel_verb(false), do: "unsubscribed from"
+
+  defp format_ts(ts) when is_integer(ts) do
+    {:ok, dt} = DateTime.from_unix(ts, :millisecond)
+    Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
+  end
+
+  defp format_ts(_), do: ""
+
+  defp snippet_hit(nil), do: ""
+
+  defp snippet_hit(text) when is_binary(text) do
+    t = String.trim(text)
+    if String.length(t) > 280, do: String.slice(t, 0, 277) <> "...", else: t
+  end
 end
