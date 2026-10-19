@@ -2,6 +2,26 @@ defmodule HighWire.SearchIndex do
   @moduledoc """
   Durable background index of post content + metadata (author, text).
   Uses DETS for inter-session durability and lower RAM pressure.
+
+  The backlog is crawled with `messagesByType "post"` paged on `gt` +
+  `limit`, keyed on the engine's *received* time (the envelope's
+  top-level `timestamp`). One request serves at most `@page` rows and
+  `gt` compares strictly (`ts > gt`), so:
+
+    * a full page re-opens from the cursor until a short page proves the
+      backlog is exhausted;
+    * `gt` resumes one *below* the cursor — received timestamps are not
+      unique, and a strict `>` at the boundary would silently skip the
+      message's same-millisecond siblings (the primary key absorbs the
+      overlap);
+    * only then does the live tail open. The live stream's backlog
+      snapshot is limit-capped too, so paging must finish before the
+      tail opens or rows beyond the cap are lost forever.
+
+  Queries run in a task under the app's TaskSupervisor and read DETS
+  directly (`:dets.foldl`), so a search never queues behind crawl items
+  in this process's mailbox. Records are inserted into DETS as they
+  arrive — no staging batch — so a query task always sees them.
   """
 
   use GenServer
@@ -12,7 +32,6 @@ defmodule HighWire.SearchIndex do
   @table :highwire_search
   @version 1
   @page 5_000
-  @batch 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -36,13 +55,19 @@ defmodule HighWire.SearchIndex do
 
   # Runs in a query task, never in the GenServer — a DETS fold over the
   # whole table is seconds of disk I/O and must not queue behind crawl
-  # items in the index's mailbox.
+  # items in the index's mailbox. A closed table (open failed) answers
+  # no matches rather than crashing the task, which would leave the
+  # LiveView waiting on results forever.
   defp query(ql) do
     qd = String.downcase(ql)
 
     :dets.foldl(&collect(&1, &2, qd), [], @table)
     |> Enum.sort_by(& &1.ts, :desc)
     |> Enum.take(200)
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
   end
 
   defp collect({key, author, text, ts}, acc, qd)
@@ -97,8 +122,24 @@ defmodule HighWire.SearchIndex do
 
   @impl true
   def init(opts) do
+    # A dead engine must surface as a reconnect, not as a supervisor
+    # restart of the index: the client is linked to us.
+    Process.flag(:trap_exit, true)
+
     path = Keyword.get(opts, :path, dets_path())
     enabled? = Keyword.get(opts, :enabled?, Sidecar.enabled?())
+
+    base = %{
+      path: path,
+      enabled?: enabled?,
+      cursor: 0,
+      indexed: 0,
+      client: nil,
+      ref: nil,
+      phase: :idle,
+      page_count: 0,
+      page_start_cursor: 0
+    }
 
     case open_dets(path) do
       :ok ->
@@ -108,17 +149,14 @@ defmodule HighWire.SearchIndex do
           Logger.info("[search_index] version mismatch (#{v}!=#{@version}), clearing")
           :dets.delete_all_objects(@table)
           write_meta(0)
-
-          {:ok, %{path: path, cursor: 0, enabled?: enabled?, batching: [], count: 0},
-           {:continue, :maybe_connect}}
+          {:ok, %{base | cursor: 0}, {:continue, :maybe_connect}}
         else
-          {:ok, %{path: path, cursor: cursor, enabled?: enabled?, batching: [], count: 0},
-           {:continue, :maybe_connect}}
+          {:ok, %{base | cursor: cursor}, {:continue, :maybe_connect}}
         end
 
       {:error, reason} ->
         Logger.error("[search_index] failed to open dets #{inspect(path)}: #{inspect(reason)}")
-        {:ok, %{path: path, cursor: 0, enabled?: false, batching: [], count: 0}}
+        {:ok, %{base | enabled?: false}}
     end
   end
 
@@ -144,48 +182,65 @@ defmodule HighWire.SearchIndex do
     _ -> nil
   end
 
+  # `gt` in the engine is strict (`ts > gt`): resuming at the cursor
+  # itself would skip any rows sharing the last message's millisecond.
+  # Resume one behind and let the primary key absorb the overlap.
+  defp resume_gt(cursor), do: cursor - 1
+
   defp open_backlog(client, gt) do
-    Client.stream(
-      client,
-      ["messagesByType", "post"],
-      %{"limit" => @page, "gt" => gt}
-    )
+    case Client.stream(client, ["messagesByType"], [
+           %{"type" => "post", "limit" => @page, "gt" => gt}
+         ]) do
+      {:ok, ref} -> ref
+      {:error, _} -> nil
+    end
+  catch
+    _, _ -> nil
   end
 
   defp open_live(client, gt) do
-    Client.stream(
-      client,
-      ["messagesByType", "post"],
-      %{"limit" => @page, "gt" => gt, "live" => true}
-    )
+    case Client.stream(client, ["messagesByType"], [
+           %{"type" => "post", "limit" => @page, "gt" => gt, "live" => true}
+         ]) do
+      {:ok, ref} -> ref
+      {:error, _} -> nil
+    end
+  catch
+    _, _ -> nil
   end
 
-  defp flush_batch(state) do
-    if state.batching != [] do
-      :dets.insert(@table, Enum.reverse(state.batching))
+  defp stop_client(%{client: nil} = state), do: %{state | ref: nil, phase: :idle}
+
+  defp stop_client(%{client: pid} = state) do
+    try do
+      Client.stop(pid)
+    catch
+      _, _ -> :ok
     end
 
-    %{state | batching: [], count: 0}
+    %{state | client: nil, ref: nil, phase: :idle}
   end
 
   defp put_item(state, key, author, text, ts) do
-    ts_int = if is_integer(ts), do: ts, else: 0
+    ts_int = if is_number(ts), do: trunc(ts), else: 0
     cursor = if ts_int > state.cursor, do: ts_int, else: state.cursor
-    rec = {key, author, text, ts_int}
-    batching = [rec | state.batching]
-    count = state.count + 1
 
-    state =
-      if count >= @batch do
-        :dets.insert(@table, Enum.reverse(batching))
-        %{state | batching: [], count: 0, cursor: cursor}
-      else
-        %{state | batching: batching, count: count, cursor: cursor}
-      end
-
-    write_meta(state.cursor)
+    :dets.insert(@table, {key, author, text, ts_int})
+    state = %{state | cursor: cursor, indexed: state.indexed + 1}
+    maybe_write_meta(state)
     state
   end
+
+  # The cursor rides along with every live-tail item (rare — cheap) and
+  # every 1000th backlog item. A crash re-pages at most that far, and
+  # re-paging is idempotent thanks to the primary key.
+  defp maybe_write_meta(%{phase: :live, cursor: cursor}), do: write_meta(cursor)
+
+  defp maybe_write_meta(%{indexed: n, cursor: cursor})
+       when is_integer(n) and rem(n, 1000) == 0,
+       do: write_meta(cursor)
+
+  defp maybe_write_meta(_state), do: :ok
 
   @impl true
   def handle_cast({:ingest, items}, state) do
@@ -203,11 +258,14 @@ defmodule HighWire.SearchIndex do
           st
       end)
 
+    write_meta(state.cursor)
     {:noreply, state}
   end
 
   @impl true
   def handle_info(:connect, %{enabled?: true} = state) do
+    state = stop_client(state)
+
     case start_client() do
       nil ->
         Logger.warning("[search_index] could not start SSB client; retrying in 2s")
@@ -215,8 +273,15 @@ defmodule HighWire.SearchIndex do
         {:noreply, state}
 
       client ->
-        ref = open_backlog(client, state.cursor)
-        {:noreply, %{state | client: client, ref: ref, phase: :backlog}}
+        case open_backlog(client, resume_gt(state.cursor)) do
+          nil ->
+            Logger.warning("[search_index] could not open backlog stream; retrying in 2s")
+            Process.send_after(self(), :connect, 2_000)
+            {:noreply, stop_client(%{state | client: client})}
+
+          ref ->
+            {:noreply, begin_stream(%{state | client: client}, ref, :backlog)}
+        end
     end
   end
 
@@ -225,7 +290,9 @@ defmodule HighWire.SearchIndex do
   end
 
   @impl true
-  def handle_info({:ssb, ref, {:item, item}}, %{ref: ref} = state) do
+  def handle_info({Client, ref, {:item, item}}, %{ref: ref} = state) do
+    state = %{state | page_count: state.page_count + 1}
+
     state =
       case item do
         %{"key" => k, "value" => v, "timestamp" => ts} ->
@@ -233,6 +300,8 @@ defmodule HighWire.SearchIndex do
           text = get_in(v, ["content", "text"])
           put_item(state, k, author, text, ts)
 
+        # A live stream parks a {sync: true} sentinel between its
+        # backlog snapshot and the tail; it carries no message.
         _ ->
           state
       end
@@ -240,24 +309,76 @@ defmodule HighWire.SearchIndex do
     {:noreply, state}
   end
 
-  def handle_info({:ssb, ref, :done}, %{ref: ref, phase: :backlog, client: client} = state) do
-    state = flush_batch(state)
-    write_meta(state.cursor)
-    ref2 = open_live(client, state.cursor)
-    {:noreply, %{state | ref: ref2, phase: :live}}
+  def handle_info({Client, ref, :done}, %{ref: ref, phase: :backlog, client: client} = state) do
+    full? = state.page_count >= @page
+    advanced? = state.cursor > state.page_start_cursor
+
+    cond do
+      full? and advanced? ->
+        # More backlog behind this page: re-open from the cursor.
+        case open_backlog(client, resume_gt(state.cursor)) do
+          nil -> reconnect_soon(state, 5_000)
+          ref2 -> {:noreply, begin_stream(state, ref2, :backlog)}
+        end
+
+      full? ->
+        # A full page that moved nothing means every row was already
+        # indexed (one absurd same-millisecond burst). Stop paging
+        # rather than loop forever; live will pick up from here.
+        Logger.warning(
+          "[search_index] backlog stalled at cursor #{state.cursor} (full page made no progress); going live"
+        )
+
+        open_live_stream(state)
+
+      true ->
+        # Short page: the backlog is exhausted. Checkpoint, then tail.
+        write_meta(state.cursor)
+        open_live_stream(state)
+    end
   end
 
-  def handle_info({:ssb, ref, :done}, %{ref: ref, phase: :live} = state) do
-    state = flush_batch(state)
+  # The live tail ends with the stream (engine restart, socket loss).
+  # Caught up is not forever — re-dial on a slow cadence; the reconnect
+  # pages from the stored cursor, so nothing between then and now is
+  # lost.
+  def handle_info({Client, ref, :done}, %{ref: ref} = state) do
     write_meta(state.cursor)
-    {:noreply, %{state | ref: nil, phase: :caught_up}}
+    reconnect_soon(stop_client(state), 60_000)
   end
 
-  def handle_info({:ssb, ref, {:error, e}}, %{ref: ref} = state) do
+  def handle_info({Client, ref, {:error, e}}, %{ref: ref} = state) do
     Logger.warning("[search_index] stream error: #{inspect(e)}; retrying backlog in 5s")
-    state = flush_batch(state)
+    write_meta(state.cursor)
+    reconnect_soon(stop_client(state), 5_000)
+  end
+
+  # The client is linked to us; with trap_exit on, a dead engine lands
+  # here instead of taking the index down with it.
+  def handle_info({:EXIT, pid, reason}, %{client: pid} = state) do
+    Logger.warning("[search_index] client exited: #{inspect(reason)}; reconnecting in 5s")
     Process.send_after(self(), :connect, 5_000)
-    {:noreply, %{state | ref: nil, client: nil}}
+    {:noreply, %{state | client: nil, ref: nil, phase: :idle}}
+  end
+
+  # Stale messages from a stream we have already swapped out (or any
+  # other stray send): the ref no longer matches, so they are dropped.
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  defp begin_stream(state, ref, phase) do
+    %{state | ref: ref, phase: phase, page_count: 0, page_start_cursor: state.cursor}
+  end
+
+  defp open_live_stream(%{client: client} = state) do
+    case open_live(client, resume_gt(state.cursor)) do
+      nil -> reconnect_soon(state, 5_000)
+      ref -> {:noreply, begin_stream(state, ref, :live)}
+    end
+  end
+
+  defp reconnect_soon(state, ms) do
+    Process.send_after(self(), :connect, ms)
+    {:noreply, %{state | ref: nil, phase: :idle}}
   end
 
   @impl true
@@ -270,8 +391,11 @@ defmodule HighWire.SearchIndex do
 
   @impl true
   def terminate(_reason, state) do
-    flush_batch(state)
     write_meta(state.cursor)
+    stop_client(state)
+    :dets.close(@table)
     :ok
+  rescue
+    _ -> :ok
   end
 end
