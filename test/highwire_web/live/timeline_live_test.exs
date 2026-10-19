@@ -42,9 +42,11 @@ defmodule HighWireWeb.TimelineLiveTest do
     {:ok, _view, html} = live(conn, "/")
 
     # engine disabled under test — same contract as the network chip:
-    # the indicator renders its state rather than hiding
+    # the indicator renders its state rather than hiding. It is a dot
+    # beside the search box, so the state rides on data-status (and the
+    # tooltip), not on label text.
     assert html =~ ~s(id="search-index-status")
-    assert html =~ "search off"
+    assert html =~ ~s(data-status="disabled")
   end
 
   test "the contacts rail never sits empty", %{conn: conn} do
@@ -736,6 +738,50 @@ defmodule HighWireWeb.TimelineLiveTest do
     html = render_change(view, "search", %{"q" => "zzznope"})
     assert html =~ "Nothing matches"
     refute html =~ "the main topic"
+  end
+
+  test "store hits are the results — no separate framing, no contradiction", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    render_change(view, "search", %{"q" => "needle"})
+
+    # The index's own (empty) answer lands first; stand in the hits after.
+    Process.sleep(50)
+
+    send(
+      view.pid,
+      {:search_results, "needle",
+       [
+         %{
+           key: "%needle-hit.sha256",
+           author: "@alice.ed25519",
+           text: "a needle in the haystack",
+           ts: 1_700_000_000_000
+         }
+       ]}
+    )
+
+    html = render(view)
+
+    assert html =~ ~s(id="search-results")
+    assert html =~ "1 match"
+    assert html =~ "in the haystack"
+    # the match is marked up, not just quoted
+    assert html =~ "<mark"
+    assert html =~ ">needle</mark>"
+    # and nothing contradicts it or treats it as a side-channel
+    refute html =~ "Nothing matches"
+    refute html =~ "whole store"
+  end
+
+  test "the composer steps aside while search results are up", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    assert render(view) =~ ~s(id="compose")
+
+    html = render_change(view, "search", %{"q" => "ugly"})
+    refute html =~ ~s(id="compose")
+
+    html = render_change(view, "search", %{"q" => ""})
+    assert html =~ ~s(id="compose")
   end
 
   describe "feed coherence" do

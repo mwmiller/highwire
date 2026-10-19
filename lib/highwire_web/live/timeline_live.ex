@@ -779,24 +779,50 @@ defmodule HighWireWeb.TimelineLive do
   defp publish_error(%{"message" => msg}) when is_binary(msg), do: msg
   defp publish_error(_reason), do: "Publish failed — the engine refused the message."
 
+  # The tail of the feed reads three ways: a page on its way back, more
+  # rows still to ask for, or the true end. A reader used to have to
+  # guess between them — an invisible load and the end of history looked
+  # identical. Both lines require rows on screen, so an empty feed keeps
+  # its own message and a feed that has not landed a page yet claims
+  # nothing about how far back it goes.
+  #
+  # Search adds a second question: whose hits are the results? When the
+  # index is caught up it is the whole truth, so its hits stand alone.
+  # While it is still building (or absent), the loaded-row filter runs
+  # alongside, so a search never comes up emptier than the feed on
+  # screen.
+  defp ui_state(assigns, page, rows) do
+    store_results? = assigns.q != "" and assigns.index_status == :live
+    local_rows? = not store_results?
+
+    %{
+      loading?: loading_rows?(assigns, rows),
+      finished?: finished_rows?(assigns, page, rows),
+      local_rows?: local_rows?,
+      empty_search?: empty_search?(assigns, rows, local_rows?)
+    }
+  end
+
+  defp loading_rows?(assigns, rows) do
+    rows != [] and assigns.q == "" and
+      (pending_page?(assigns.page_inflight, assigns.view) or
+         pending_page?(assigns.page_retries, assigns.view))
+  end
+
+  defp finished_rows?(assigns, page, rows) do
+    rows != [] and not page.more and Map.get(page, :loaded?, false) and assigns.q == ""
+  end
+
+  defp empty_search?(assigns, rows, local_rows?) do
+    assigns.status == :ok and assigns.q != "" and assigns.search_hits == [] and
+      (not local_rows? or rows == [])
+  end
+
   @impl true
   def render(assigns) do
     page = Map.get(assigns.paged, assigns.view, %{rows: [], more: false})
     rows = search_rows(assigns, page.rows)
-
-    # The tail of the feed reads three ways: a page on its way back, more
-    # rows still to ask for, or the true end. A reader used to have to
-    # guess between them — an invisible load and the end of history looked
-    # identical. Both lines require rows on screen, so an empty feed keeps
-    # its own message and a feed that has not landed a page yet claims
-    # nothing about how far back it goes.
-    loading? =
-      rows != [] and
-        (pending_page?(assigns.page_inflight, assigns.view) or
-           pending_page?(assigns.page_retries, assigns.view))
-
-    finished? =
-      rows != [] and not page.more and Map.get(page, :loaded?, false) and assigns.q == ""
+    ui = ui_state(assigns, page, rows)
 
     assigns =
       assign(assigns,
@@ -805,8 +831,10 @@ defmodule HighWireWeb.TimelineLive do
         left_views: Enum.filter(@views, fn {v, _} -> v in @left_views end),
         right_views: Enum.filter(@views, fn {v, _} -> v in @right_views end),
         more: page.more,
-        loading?: loading?,
-        finished?: finished?,
+        loading?: ui.loading?,
+        finished?: ui.finished?,
+        local_rows?: ui.local_rows?,
+        empty_search?: ui.empty_search?,
         as: %{
           expanded: assigns.expanded,
           index: assigns.index,
@@ -897,23 +925,36 @@ defmodule HighWireWeb.TimelineLive do
           <%!-- The search takes whatever width the row can spare and
           caps at 18rem, so narrow windows shrink the box instead of
           clipping the Profile link, the Mentions tab, and the peer
-          chip. --%>
-          <form
-            id="feed-search"
-            phx-change="search"
-            phx-submit="search"
-            class="min-w-0 max-w-72 flex-1"
-            role="search"
-          >
-            <input
-              type="search"
-              name="q"
-              value={@q}
-              phx-debounce="300"
-              placeholder="Search"
-              class="h-9 w-full rounded-full border border-gray-300 bg-white px-3 text-sm shadow-sm transition focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-400"
-            />
-          </form>
+          chip. The index light rides beside the box it qualifies. --%>
+          <div class="flex min-w-0 max-w-72 flex-1 items-center gap-2">
+            <form
+              id="feed-search"
+              phx-change="search"
+              phx-submit="search"
+              class="min-w-0 flex-1"
+              role="search"
+            >
+              <input
+                type="search"
+                name="q"
+                value={@q}
+                phx-debounce="300"
+                placeholder="Search"
+                class="h-9 w-full rounded-full border border-gray-300 bg-white px-3 text-sm shadow-sm transition focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-400"
+              />
+            </form>
+            <span
+              id="search-index-status"
+              data-status={index_status_key(@index_status)}
+              title={index_status_title(@index_status)}
+              class={["flex shrink-0 items-center", index_status_tone(@index_status)]}
+            >
+              <span class={[
+                "h-2 w-2 rounded-full bg-current transition-shadow",
+                index_status_glow(@index_status)
+              ]}></span>
+            </span>
+          </div>
           <nav class="flex shrink-0 items-center gap-1" aria-label="Mentions and profile">
             <.link
               :if={@self_id}
@@ -925,17 +966,6 @@ defmodule HighWireWeb.TimelineLive do
             </.link>
             <.feed_tab :for={{v, label} <- @right_views} v={v} label={label} current={@view} />
           </nav>
-          <span
-            id="search-index-status"
-            title={index_status_title(@index_status)}
-            class={[
-              "flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs transition",
-              index_status_tone(@index_status)
-            ]}
-          >
-            <span class={["h-1.5 w-1.5 rounded-full", index_status_dot(@index_status)]}></span>
-            {index_status_label(@index_status)}
-          </span>
           <span
             :if={@transfer.active?}
             id="transfer-activity"
@@ -964,7 +994,7 @@ defmodule HighWireWeb.TimelineLive do
           next one, and this feed was running to 160. --%>
           <div id="feed-column" phx-hook="ClampRows" class="mx-auto w-full max-w-2xl">
             <form
-              :if={@view == :public}
+              :if={@view == :public and @q == ""}
               id="compose"
               phx-submit="publish"
               phx-change="compose-draft"
@@ -1041,11 +1071,8 @@ defmodule HighWireWeb.TimelineLive do
             <p :if={@status == :disabled} class="px-4 py-3 text-sm text-dim">
               SSB engine disabled in this configuration.
             </p>
-            <p
-              :if={@status == :ok and @rows == [] and @q != ""}
-              class="px-4 py-3 text-sm text-dim"
-            >
-              Nothing matches “{@q}”.
+            <p :if={@empty_search?} class="px-4 py-3 text-sm text-dim">
+              {search_empty_message(@index_status, @q)}
             </p>
             <p
               :if={@status == :ok and @rows == [] and @view == :private and @q == ""}
@@ -1061,31 +1088,52 @@ defmodule HighWireWeb.TimelineLive do
             </p>
 
             <%= if @q != "" and @search_hits != [] do %>
-              <div class="space-y-2 px-4 py-3">
-                <div class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                  Matches from the whole store ({length(@search_hits)})
-                </div>
-                <%= for h <- @search_hits do %>
-                  <article
-                    phx-click="open-post"
-                    phx-value-key={h.key}
-                    class="cursor-pointer rounded-lg border border-gray-200 bg-white p-3 shadow-sm transition hover:border-indigo-300 hover:shadow dark:border-gray-700 dark:bg-gray-900 dark:hover:border-indigo-500"
-                  >
-                    <header class="mb-1 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-                      <span class="truncate font-medium text-gray-700 dark:text-gray-200">
+              <section id="search-results" class="border-b border-edge">
+                <p class="px-4 pb-1 pt-3 text-[11px] uppercase tracking-wider text-faint">
+                  {match_count(@search_hits)} {if length(@search_hits) == 1,
+                    do: "match",
+                    else: "matches"}
+                </p>
+                <article
+                  :for={h <- @search_hits}
+                  phx-click="open-post"
+                  phx-value-key={h.key}
+                  class="flex cursor-pointer gap-3 border-b border-edge-soft px-4 py-3 transition last:border-b-0 hover:bg-raised"
+                >
+                  <Avatar.avatar
+                    :if={is_binary(h.author)}
+                    id={h.author}
+                    size={30}
+                    image={image_of(h.author, @profiles)}
+                    rev={@blob_rev}
+                    class="mt-0.5 shrink-0"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-baseline gap-2 text-xs">
+                      <span class="truncate font-medium text-paper">
                         {Ident.display_name(h.author, @profiles)}
                       </span>
-                      <time>{format_ts(h.ts)}</time>
-                    </header>
-                    <div class="prose prose-sm max-w-none whitespace-pre-wrap break-words text-gray-900 dark:prose-invert dark:text-gray-100">
-                      {snippet_hit(h.text)}
+                      <span class="shrink-0 text-faint">{format_ts(h.ts)}</span>
                     </div>
-                  </article>
-                <% end %>
-              </div>
+                    <p class="mt-0.5 whitespace-pre-wrap break-words text-sm text-ink">
+                      <%= for seg <- snippet_segments(h.text, @q) do %>
+                        <mark
+                          :if={seg.hit?}
+                          class="rounded-sm bg-warn/30 px-0.5 text-paper"
+                        >{seg.text}</mark><span :if={not seg.hit?}>{seg.text}</span>
+                      <% end %>
+                    </p>
+                  </div>
+                </article>
+              </section>
             <% end %>
 
-            <div :for={row <- @rows} id={dom_id("row-", row)} class="border-b border-edge-soft">
+            <div
+              :for={row <- @rows}
+              :if={@local_rows?}
+              id={dom_id("row-", row)}
+              class="border-b border-edge-soft"
+            >
               <.post_row
                 :if={row.kind in [:thread, :post]}
                 row={row}
@@ -1106,7 +1154,8 @@ defmodule HighWireWeb.TimelineLive do
               Loading more…
             </p>
 
-            <div :if={@more} id="feed-sentinel" phx-hook="InfiniteScroll" class="h-px"></div>
+            <div :if={@more and @q == ""} id="feed-sentinel" phx-hook="InfiniteScroll" class="h-px">
+            </div>
 
             <p :if={@finished?} id="feed-end" class="px-4 py-3 text-sm text-dim">
               End of feed.
@@ -1602,23 +1651,26 @@ defmodule HighWireWeb.TimelineLive do
     if peer_count(peers) > 0, do: "text-ok", else: "text-dim"
   end
 
-  # -- search index status chip ------------------------------------------
-  # The counterpart to the peer chip: SearchIndex.status/0 (an ETS read)
-  # rendered as dot + label + tooltip. The middle of the store's crawl
-  # is the interesting state — it is the only one with a number in it.
+  # -- search index status light -----------------------------------------
+  # SearchIndex.status/0 (an ETS read) as a one-dot answer to "can I
+  # trust the search box right now?" — it sits beside the box itself.
+  # The light carries the state; the tooltip carries the detail:
+  # filled and steady once caught up, pulsing while work is in flight,
+  # dark where there is no index to trust.
 
-  defp index_status_label(:disabled), do: "search off"
-  defp index_status_label(:unavailable), do: "search unavailable"
-  defp index_status_label(:connecting), do: "search connecting"
-  defp index_status_label(:reconnecting), do: "search resuming"
-  defp index_status_label(:live), do: "search ready"
-  defp index_status_label({:crawling, n}), do: "indexing #{format_count(n)}"
+  defp index_status_key(:live), do: "live"
+  defp index_status_key(:reconnecting), do: "reconnecting"
+  defp index_status_key(:unavailable), do: "unavailable"
+  defp index_status_key(:disabled), do: "disabled"
+  defp index_status_key(:connecting), do: "connecting"
+  defp index_status_key({:crawling, _}), do: "crawling"
 
-  defp index_status_dot(:live), do: "bg-dot-ok"
-  defp index_status_dot(:reconnecting), do: "bg-warn animate-pulse"
-  defp index_status_dot(:unavailable), do: "bg-dot-bad"
-  defp index_status_dot(:disabled), do: "bg-dot"
-  defp index_status_dot(_connecting_or_crawling), do: "bg-dot-info animate-pulse"
+  # The dot fills from the tone's colour and haloes itself with
+  # currentColor, so one class list drives both fill and glow.
+  defp index_status_glow(:live), do: "shadow-[0_0_6px_currentColor]"
+  defp index_status_glow(:unavailable), do: "shadow-[0_0_6px_currentColor]"
+  defp index_status_glow(:disabled), do: ""
+  defp index_status_glow(_working), do: "animate-pulse shadow-[0_0_6px_currentColor]"
 
   defp index_status_tone(:live), do: "text-ok"
   defp index_status_tone(:reconnecting), do: "text-warn"
@@ -1644,6 +1696,22 @@ defmodule HighWireWeb.TimelineLive do
   defp index_status_title({:crawling, n}),
     do:
       "Building the store-wide index — #{format_count(n)} messages indexed so far; search is usable but incomplete"
+
+  # The query takes at most 200 hits; at the cap the true total is
+  # unknown, so say so rather than pass the last page off as the end.
+  defp match_count(hits),
+    do: if(length(hits) >= 200, do: "200+", else: Integer.to_string(length(hits)))
+
+  defp search_empty_message({:crawling, _}, q),
+    do: "Nothing in the index matches “#{q}” yet — the store index is still building."
+
+  defp search_empty_message(:connecting, q),
+    do: "Nothing in the index matches “#{q}” yet — still connecting to the engine."
+
+  defp search_empty_message(:reconnecting, q),
+    do: "Nothing in the index matches “#{q}” yet — the index is catching up."
+
+  defp search_empty_message(_status, q), do: "Nothing matches “#{q}”."
 
   # 412553 -> 412,553. The header's only big number, and not a library.
   defp format_count(n) when is_integer(n),
@@ -1873,10 +1941,25 @@ defmodule HighWireWeb.TimelineLive do
 
   defp format_ts(_), do: ""
 
-  defp snippet_hit(nil), do: ""
+  # A hit's text, trimmed for display and split into plain and matching
+  # pieces so the query can be marked up without trusting HTML through a
+  # string. Matching is case-insensitive; the original casing remains.
+  defp snippet_segments(nil, _q), do: []
 
-  defp snippet_hit(text) when is_binary(text) do
+  defp snippet_segments(text, q) when is_binary(text) do
     t = String.trim(text)
-    if String.length(t) > 280, do: String.slice(t, 0, 277) <> "...", else: t
+    t = if String.length(t) > 280, do: String.slice(t, 0, 277) <> "...", else: t
+    ql = q |> to_string() |> String.trim() |> String.downcase()
+
+    parts =
+      if ql == "" do
+        [t]
+      else
+        Regex.split(~r/#{Regex.escape(ql)}/iu, t, include_captures: true, trim: false)
+      end
+
+    parts
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(fn part -> %{text: part, hit?: ql != "" and String.downcase(part) == ql} end)
   end
 end
