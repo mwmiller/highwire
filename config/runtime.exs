@@ -16,6 +16,8 @@ if config_env() == :prod do
       dir -> Path.join(to_string(dir), "erlbutt")
     end
 
+  home = Path.expand(System.get_env("HIGHWIRE_HOME", "~/.highwire"))
+
   config :highwire, :ssb,
     enabled: engine != "" and File.dir?(engine),
     port: 8899,
@@ -28,4 +30,9 @@ if config_env() == :prod do
     # 11-16). 20 seats them while keeping first paint light; deeper
     # history rides the cursor pages.
     messages_per_feed: 20
+
+  # The signing key for the UI's cookies and CSRF tokens: minted per
+  # install on first boot and kept in the app home, never in the
+  # repository or the binary.
+  config :highwire, HighWireWeb.Endpoint, secret_key_base: HighWire.WebSecret.fetch!(home)
 end
