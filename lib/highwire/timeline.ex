@@ -1364,8 +1364,8 @@ defmodule HighWire.Timeline do
       probes: [
         stream_probe,
         get_shape_probe(alive?, client, sample_key),
-        roots_count_probe(alive?, client, "publicFeed", %{}, false),
-        roots_count_probe(alive?, client, "participatingFeed", %{}, false)
+        roots_count_probe(alive?, client, :publicFeed, %{}, false),
+        roots_count_probe(alive?, client, :participatingFeed, %{}, false)
       ]
     }
   end
@@ -1425,13 +1425,14 @@ defmodule HighWire.Timeline do
   defp roots_count_probe(false, _client, _feed, _extra, _private?),
     do: probe(:feed, :fail, "no engine client")
 
-  defp roots_count_probe(true, client, feed, extra, private?) do
+  defp roots_count_probe(true, client, feed, extra, private?) when is_atom(feed) do
     props = Map.merge(%{"limit" => 1, "reverse" => true}, extra)
+    view = ["patchwork", Atom.to_string(feed), "roots"]
 
-    case count_stream(client, ["patchwork", feed, "roots"], [props], private?) do
-      {:ok, {n, _key}} when n > 0 -> probe(String.to_atom(feed), :ok, "#{n} roots")
-      {:ok, {0, _key}} -> probe(String.to_atom(feed), :fail, "0 roots")
-      {:error, reason} -> probe(String.to_atom(feed), :fail, error_note(reason))
+    case count_stream(client, view, [props], private?) do
+      {:ok, {n, _key}} when n > 0 -> probe(feed, :ok, "#{n} roots")
+      {:ok, {0, _key}} -> probe(feed, :fail, "0 roots")
+      {:error, reason} -> probe(feed, :fail, error_note(reason))
     end
   end
 
