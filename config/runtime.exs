@@ -1,8 +1,9 @@
 import Config
 
+home = System.get_env("HIGHWIRE_HOME", "~/.highwire")
+
 if config_env() != :test do
-  config :highwire,
-    application_dir: System.get_env("HIGHWIRE_HOME", "~/.highwire")
+  config :highwire, application_dir: home
 end
 
 # The packaged app: the release workflow builds erlbutt's prod profile
@@ -15,8 +16,6 @@ if config_env() == :prod do
       {:error, _} -> ""
       dir -> Path.join(to_string(dir), "erlbutt")
     end
-
-  home = Path.expand(System.get_env("HIGHWIRE_HOME", "~/.highwire"))
 
   config :highwire, :ssb,
     enabled: engine != "" and File.dir?(engine),
@@ -34,5 +33,6 @@ if config_env() == :prod do
   # The signing key for the UI's cookies and CSRF tokens: minted per
   # install on first boot and kept in the app home, never in the
   # repository or the binary.
-  config :highwire, HighWireWeb.Endpoint, secret_key_base: HighWire.WebSecret.fetch!(home)
+  config :highwire, HighWireWeb.Endpoint,
+    secret_key_base: HighWire.WebSecret.fetch(Path.expand(home))
 end

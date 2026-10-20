@@ -11,8 +11,10 @@ defmodule HighWire.WebSecret do
   continuity across restarts — the local UI has no login to lose.
   """
 
-  # Phoenix refuses a shorter base at boot; minting past the floor
-  # means a stored key is either ours or an edit that is not one.
+  # Plug's cookie store signs sessions with this base and refuses
+  # one under 64 bytes the first time a request touches the session,
+  # so a stored key shorter than that was never one we minted —
+  # mint over it.
   @min_bytes 64
 
   @doc """
@@ -20,8 +22,8 @@ defmodule HighWire.WebSecret do
   persisting a fresh one when the file is absent or too short to sign
   with.
   """
-  @spec fetch!(Path.t()) :: String.t()
-  def fetch!(home) do
+  @spec fetch(Path.t()) :: String.t()
+  def fetch(home) do
     path = Path.join(home, "web_secret")
 
     case stored(path) do
