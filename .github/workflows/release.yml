@@ -335,7 +335,12 @@ jobs:
 
       - run: npm install -g @tauri-apps/cli@2
 
-      # Tauri notarizes (staples) the dmg/app when these are present.
+      # Tauri signs the .app, notarizes it, and staples the ticket onto the
+      # bundle — but it never notarizes the .dmg wrapper it then packs that
+      # .app into (tauri-apps/tauri#7533, still open). A signed-but-
+      # unnotarized dmg is rejected outright by Gatekeeper on macOS 15 and
+      # later ("Unnotarized Developer ID"), so the next step submits and
+      # staples the dmg itself.
       - name: Tauri build (macOS)
         if: runner.os == 'macOS'
         working-directory: src-tauri
@@ -345,6 +350,31 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: tauri build
+
+      # The .app inside is already notarized and stapled by the build above;
+      # the dmg is only signed. Submit the dmg to notarytool (its accepted
+      # ticket covers the whole image) and staple it before upload, so the
+      # asset published to the release opens without a Gatekeeper override.
+      # --wait blocks until Apple answers; the round-trip is a few minutes.
+      - name: Notarize and staple the dmg (macOS)
+        if: runner.os == 'macOS'
+        working-directory: src-tauri
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          dmg=$(ls target/release/bundle/dmg/*.dmg)
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$dmg"
+          # Fail the build rather than ship an unnotarized dmg: on 15+ this
+          # is the difference between an installer that opens and one that
+          # bounces with a Gatekeeper warning.
+          spctl -a -t open --context context:primary-signature -vv "$dmg"
 
       - name: Tauri build (Linux)
         if: runner.os == 'Linux'

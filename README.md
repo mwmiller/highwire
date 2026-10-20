@@ -22,8 +22,10 @@ Grab an installer from the
 | Linux ARM64 | `_arm64.deb` / `.aarch64.rpm` / `_aarch64.AppImage` |
 | Windows | `HighWire_<v>_x64-setup.exe` |
 
-The macOS builds are notarized. All artifacts are produced by the
-tag-triggered release workflow (`.github/workflows/release.yml`).
+The macOS app bundle is signed with a Developer ID and notarized; the
+`.dmg` wrapper is notarized and stapled too, so it opens without a
+Gatekeeper override. All artifacts are produced by the tag-triggered
+release workflow (`.github/workflows/release.yml`).
 
 ## Status
 
@@ -33,8 +35,13 @@ tag-triggered release workflow (`.github/workflows/release.yml`).
   and blobs, full-text search, channels, and pub invites work against
   the engine.
 - Profile activity renders newest-first (ordering is done in the UI).
-- One identity per `HIGHWIRE_HOME`; there is no in-app account
-  switching.
+- An install can hold several identities — every feed it can sign as —
+  kept in a local registry with the active one mirrored into the
+  engine's secret. The identity page switches between them (restarting
+  the engine underneath), creates new ones, disables and re-enables
+  them, exports a private key, and permanently deletes only from the
+  disabled list. The store itself is shared: switching identity never
+  moves feeds, blobs, or history.
 - The Network page (`/network`) is the general place to manage
   dialing: the network profile switcher, the dialer's enable/disable
   and dial-now controls, the live connections, the `conn.json`
