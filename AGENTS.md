@@ -14,3 +14,13 @@
   approval covers exactly what was described in the question and nothing
   beyond it. Local work — code, commits, drafts handed over for review — is
   fine without asking; publication is not.
+
+- **Write for the reader, in the present tense.** Text an end user will
+  see — release bodies, in-app copy, docs, download pages, error and
+  status messages — describes the product as it stands, never the work
+  that produced it. No changelog-of-churn ("fixed the thing that was
+  broken in…", "now also handles…", "no longer…"), no diff narration, no
+  internal vocabulary. Say what the feature is or does, so it reads the
+  same tomorrow as today. Keep it concise, and keep every line both
+  relevant and useful to the person reading it; cut anything that is
+  neither.
