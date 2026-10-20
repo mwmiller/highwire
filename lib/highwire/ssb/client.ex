@@ -108,13 +108,13 @@ defmodule HighWire.SSB.Client do
 
   @impl true
   def handle_call({:call, name, args}, from, state) do
-    req = next_req_id()
+    req = next_req_id(state.calls)
     state = send_packet(state, Muxrpc.encode_request(req, name, args, "sync", 0))
     {:noreply, Map.put(state, :calls, Map.put(state.calls, req, {:call, from}))}
   end
 
   def handle_call({:stream, name, args, subscriber}, _from, state) do
-    req = next_req_id()
+    req = next_req_id(state.calls)
     state = send_packet(state, Muxrpc.encode_request(req, name, args, "source", 1))
     state = Map.put(state, :calls, Map.put(state.calls, req, {:stream, subscriber}))
     {:reply, {:ok, req}, state}
@@ -124,7 +124,7 @@ defmodule HighWire.SSB.Client do
   # the same shape as any other request, and the only way the box layer's
   # 4 KiB plaintext frame can carry 5 MiB without a separate buffer.
   def handle_call({:sink, name, args, body}, from, state) do
-    req = next_req_id()
+    req = next_req_id(state.calls)
 
     state =
       Enum.reduce(Muxrpc.encode_sink(req, name, args, body), state, fn frame, acc ->
@@ -270,6 +270,11 @@ defmodule HighWire.SSB.Client do
     %{state | enc_nonce: nonce}
   end
 
+  @req_id_space 0x7FFFFFFF
+
+  @doc false
+  def req_id_space, do: @req_id_space
+
   # Every req id is drawn fresh from the VM's unique source — never a
   # per-process counter. One subscriber listens on several connections at
   # once (the Timeline runs the contact and about drains on a dedicated
@@ -278,7 +283,34 @@ defmodule HighWire.SSB.Client do
   # handle to both streams, and the wrong handler swallows the other's
   # items and `:done` — which is how the about pass was starved into
   # never landing and the rail stayed blank.
-  defp next_req_id, do: System.unique_integer([:positive, :monotonic])
+  #
+  # The wire carries req as a signed 32-bit field, so the VM's unbounded
+  # counter is folded into 1..2^31-1 — the positive half, since replies
+  # arrive on the negation. Folding rather than truncating keeps ids off
+  # zero (whose negation is itself) and away from the sign bit; an id
+  # that would collide with one still in flight moves on, so a live
+  # stream is never reused. At ~2^31 requests between repeats this is a
+  # formality, but it makes the field bounds true rather than nearly so.
+  defp next_req_id(in_flight) do
+    System.unique_integer([:positive, :monotonic])
+    |> wrapped_req_id()
+    |> first_free(in_flight)
+  end
+
+  # Fold the VM's unbounded counter into the positive 32-bit half the
+  # wire can carry — never zero (whose negation is itself) and never the
+  # sign bit. `raw` is monotonic, so the folded sequence walks the whole
+  # space in order and only ever repeats after 2^31 - 1 draws.
+  @doc false
+  def wrapped_req_id(raw), do: rem(raw - 1, @req_id_space) + 1
+
+  # Skip ids still open on this connection. The fold makes a repeat
+  # vanishingly rare, but "the field has room" should be a fact, not a
+  # probability, so an id that would collide with one in flight moves on.
+  @doc false
+  def first_free(req, in_flight) do
+    if Map.has_key?(in_flight, req), do: first_free(wrapped_req_id(req + 1), in_flight), else: req
+  end
 
   defp fail_all(state, reason) do
     Enum.each(state.calls, fn

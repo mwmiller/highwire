@@ -15,13 +15,34 @@ defmodule HighWire.SSB.Muxrpc do
 
   @rpc_end <<0::72>>
 
+  # The header's length field is 32 bits, and a body that overflowed it
+  # would be silently truncated by the bitstring rather than refused —
+  # the engine would then see a short frame and stall. Nothing this
+  # client sends as a single frame comes close (the sink streams in 64 KiB
+  # chunks); a body at the cap is a programming error at the call site,
+  # so it raises there with the size in the message.
+  @max_body 4_294_967_295
+
   @type meta :: %{stream: 0 | 1, end: 0 | 1, req: integer()}
+
+  @typedoc "The largest body `encode/2` will frame."
+  @type max_body :: 4_294_967_295
 
   @spec rpc_end() :: binary()
   def rpc_end, do: @rpc_end
 
+  @doc "The largest body `encode/2` will frame — the 32-bit length field's ceiling."
+  @spec max_body() :: max_body()
+  def max_body, do: @max_body
+
   @spec encode(meta(), binary()) :: binary()
   def encode(%{stream: stream, end: endf, req: req}, body) when is_binary(body) do
+    if byte_size(body) > @max_body do
+      raise ArgumentError,
+            "muxrpc body of #{byte_size(body)} bytes exceeds the 32-bit frame cap " <>
+              "(#{@max_body}); stream it as a sink instead"
+    end
+
     <<0::4, stream::1, endf::1, 0::2, byte_size(body)::32-big-unsigned, req::32-big-signed,
       body::binary>>
   end

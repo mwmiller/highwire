@@ -52,6 +52,40 @@ defmodule HighWire.SSB.ClientTest do
 
       refute req1 == req2
     end
+
+    test "a drawn id stays in the positive 32-bit half the wire can carry" do
+      assert {:reply, {:ok, req}, _state} = open_stream(stream_state())
+
+      assert req > 0
+      assert req <= Client.req_id_space()
+    end
+
+    test "the fold keeps every raw counter in 1..2^31-1, never zero or the sign bit" do
+      space = Client.req_id_space()
+
+      # Around the wrap and far past it, the folded id is always in band.
+      for raw <- [1, 2, space, space + 1, space + 2, 2 * space, 2 * space + 1, 10 * space] do
+        folded = Client.wrapped_req_id(raw)
+
+        assert folded >= 1
+        assert folded <= space
+        assert folded != 0
+      end
+
+      # The sequence wraps in order: the space-th draw folds back to 1.
+      assert Client.wrapped_req_id(space) == space
+      assert Client.wrapped_req_id(space + 1) == 1
+    end
+
+    test "an id still open on the connection is skipped, not reused" do
+      space = Client.req_id_space()
+
+      # The fold lands on `space`; that id is in flight, so the next free
+      # id must be the one after it — the open stream is never collided
+      # with, and the walk wraps rather than running past the field.
+      assert Client.first_free(space, %{space => {:stream, self()}}) == 1
+      assert Client.first_free(1, %{1 => {:call, self()}, 2 => {:call, self()}}) == 3
+    end
   end
 
   defp open_stream(state) do

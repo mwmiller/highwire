@@ -73,4 +73,19 @@ defmodule HighWire.SSB.MuxrpcTest do
     # frame for the engine to append.
     assert [_open, _end] = Muxrpc.encode_sink(2, ["blobs", "add"], [nil], "", 4)
   end
+
+  test "the frame cap is the 32-bit length field's ceiling" do
+    # A body that overflowed the header's length field would be silently
+    # shortened by the bitstring and reach the engine as a short frame.
+    # encode/2 refuses sizes past this; the test pins the ceiling itself
+    # (allocating a 4 GiB body to trip the guard is not worth doing).
+    assert Muxrpc.max_body() == :erlang.bsl(1, 32) - 1
+
+    # A body at the top of the safe range frames with the length field
+    # holding its true size.
+    body = :binary.copy(<<7>>, 1024)
+
+    assert {:packet, _, ^body, <<>>} =
+             Muxrpc.decode(Muxrpc.encode(%{stream: 0, end: 0, req: 1}, body))
+  end
 end
