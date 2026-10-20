@@ -69,6 +69,14 @@ defmodule HighWire.Timeline do
   # what has arrived instead of waiting for every stream (up to 400).
   @first_paint_feeds 40
 
+  # How many hops up the `content.root` chain the thread-root walk will
+  # take before giving up and seating what it has. A reply's root normally
+  # IS the thread head, and a fork's root is its parent reply — one or two
+  # hops. Anything this deep is either a malformed chain or a hostile one
+  # built to fan out remote `get`s on every open, so the walk stops here
+  # and the deepest message reached heads the row instead.
+  @thread_root_depth 32
+
   # Store-wide contact drain: a completed pass is not repeated on the
   # next reload — only after this long (the per-feed window already
   # carries recent follows; the drain back-fills old follow rows).
@@ -1159,21 +1167,26 @@ defmodule HighWire.Timeline do
   defp resolve_root(state, window, key) do
     case fetch_msg(state, window, key) do
       nil -> nil
-      msg -> resolve_thread_root(state, window, key, msg, MapSet.new([key]))
+      msg -> resolve_thread_root(state, window, key, msg, MapSet.new([key]), @thread_root_depth)
     end
   end
 
   # Walk up to the thread's first message: a plain reply's root IS that
   # message, but a fork's root is the parent reply, so one hop lands on
   # the middle of the thread. The seen set keeps a malformed cycle from
-  # walking forever.
-  defp resolve_thread_root(state, window, key, msg, seen) do
+  # walking forever, and the depth budget keeps an acyclic chain from
+  # doing it either — each step can be a remote `get`, so an unbounded
+  # chain is an unbounded fan-out of remote calls on every open.
+  defp resolve_thread_root(state, window, key, msg, seen, depth) do
     root = content(msg)["root"]
 
-    if is_binary(root) and root != key and not MapSet.member?(seen, root) do
+    if depth > 0 and is_binary(root) and root != key and not MapSet.member?(seen, root) do
       case fetch_msg(state, window, root) do
-        nil -> msg
-        parent -> resolve_thread_root(state, window, root, parent, MapSet.put(seen, root))
+        nil ->
+          msg
+
+        parent ->
+          resolve_thread_root(state, window, root, parent, MapSet.put(seen, root), depth - 1)
       end
     else
       msg
@@ -2879,6 +2892,11 @@ defmodule HighWire.Timeline do
       if n > 0, do: Map.put(counts, link, n), else: counts
     end)
   end
+
+  # Bound on the `content.root` walk in resolve_thread_root/6 — exposed so
+  # a test can pin it without hardcoding the number twice.
+  @doc false
+  def thread_root_depth, do: @thread_root_depth
 
   # The same votes as like_counts/1, but as the liker ids themselves,
   # newest voter first — the feed shows who liked, not how many.

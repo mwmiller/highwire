@@ -1098,6 +1098,32 @@ defmodule HighWire.TimelineTest do
 
       assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
     end
+
+    test "the root walk stops at the depth cap instead of walking a huge chain" do
+      # A reply's root is the thread head and a fork's root is its parent
+      # — one or two hops. A chain far deeper than that is malformed or
+      # hostile, and every hop can be a remote get, so the walk must give
+      # up at the cap and seat what it has reached rather than fanning out.
+      cap = Timeline.thread_root_depth()
+      length = cap + 40
+
+      chain =
+        for n <- 1..length do
+          root = if n == 1, do: nil, else: "%c#{n - 1}=.sha256"
+          content = %{"type" => "post", "text" => "link #{n}"}
+          content = if root, do: Map.put(content, "root", root), else: content
+          msg("@a=.ed25519", "%c#{n}=.sha256", n, content)
+        end
+
+      st = %{client: nil, messages: %{messages: chain}}
+
+      {:reply, post, _st} =
+        Timeline.handle_call({:post, "%c#{length}=.sha256"}, {self(), make_ref()}, st)
+
+      # The walk climbed the full budget then stopped, landing on the
+      # message `cap` hops up — not the true head at %c1.
+      assert post.root["key"] == "%c#{length - cap}=.sha256"
+    end
   end
 
   describe "publish ack injects into the window" do
