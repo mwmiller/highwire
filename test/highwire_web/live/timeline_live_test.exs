@@ -867,7 +867,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "Nothing matches"
   end
 
-  test "hits from an earlier query come down when a new one is asked", %{conn: conn} do
+  test "hits from an earlier query stay up while a new one is asked", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
     notify(view, feed_payload([]))
     render_change(view, "search", %{"q" => "needle"})
@@ -881,10 +881,65 @@ defmodule HighWireWeb.TimelineLiveTest do
 
     assert render(view) =~ "1 match"
 
-    # The hits belong to the query they answered, not to this one.
+    # While the new query is out, its predecessor's hits stay on screen
+    # — still the best answer the view has — under the searching line.
     html = render_change(view, "search", %{"q" => "haystack"})
-    refute html =~ ~s(id="search-results")
+    assert html =~ ~s(id="search-results")
+    assert html =~ "1 match"
     assert html =~ "Searching the store"
+
+    # The new query's answer replaces them, so stale hits never outlive
+    # the query that superseded them.
+    send(view.pid, {:search_results, "haystack", []})
+    html = render(view)
+    refute html =~ ~s(id="search-results")
+    assert html =~ "Nothing matches"
+  end
+
+  test "one query runs at a time — a typed-over query waits for the answer", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    notify(view, feed_payload([]))
+
+    # Stand in the state a kicked query leaves behind: one query out,
+    # nothing answered. No real query has been asked in this test, so
+    # only the messages sent below can answer anything.
+    :sys.replace_state(view.pid, fn state ->
+      socket = state.socket
+      assigns = socket.assigns
+
+      changed =
+        Map.merge(assigns.__changed__, %{q: true, search_q_kicked: true, search_state: true})
+
+      assigns = %{
+        assigns
+        | q: "two",
+          search_q_kicked: "one",
+          search_state: :pending,
+          __changed__: changed
+      }
+
+      %{state | socket: %{socket | assigns: assigns}}
+    end)
+
+    # Typed while the first query is out: registered, but not asked —
+    # the kick belongs to the answer still in flight.
+    render_change(view, "search", %{"q" => "three"})
+    assert kicked_query(view) == "one"
+
+    # The answer to the first query is stale for what is on screen, and
+    # asks for that instead — once.
+    send(view.pid, {:search_results, "one", []})
+    assert kicked_query(view) == "three"
+
+    # A straggling answer for the old query asks nothing a second time.
+    send(view.pid, {:search_results, "one", []})
+    assert kicked_query(view) == "three"
+
+    # And the answer for what is on screen lands it.
+    send(view.pid, {:search_results, "three", []})
+    html = render(view)
+    refute html =~ "Searching the store"
+    assert html =~ "Nothing matches"
   end
 
   test "a search the index cannot answer does not claim there are no matches", %{conn: conn} do
@@ -1328,6 +1383,12 @@ defmodule HighWireWeb.TimelineLiveTest do
     else
       html
     end
+  end
+
+  # The query last handed to the index — the coalescing invariant reads
+  # straight off it: while an answer is out, the marker does not move.
+  defp kicked_query(view) do
+    :sys.get_state(view.pid).socket.assigns.search_q_kicked
   end
 
   # Mirrors the payload's search projection: only key, author and the

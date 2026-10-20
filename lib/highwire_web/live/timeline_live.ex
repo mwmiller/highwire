@@ -258,11 +258,39 @@ defmodule HighWireWeb.TimelineLive do
     if q != "" and String.downcase(q) == qd do
       {:noreply, assign(socket, search_hits: hits || [], search_state: :idle)}
     else
-      {:noreply, socket}
+      if qd != "" and qd != socket.assigns.search_q_kicked do
+        # What is on screen moved on while this answer was in flight, so
+        # the answer belongs to an older query and nothing here may use
+        # it. Ask for what is typed now — the kicked marker holds the
+        # count to one query in flight, and the answer to this newer ask
+        # either lands it or repeats the walk forward.
+        {:noreply, kick_search(socket, qd, qd)}
+      else
+        {:noreply, socket}
+      end
     end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # A query goes out with the view marked pending: a fold of the store is
+  # not instant, and until the answer lands the view knows nothing yet,
+  # so it says it is searching rather than reading as an answer — while
+  # the previous query's hits stay up, still the best answer on screen.
+  defp kick_search(socket, qtrim, qd) do
+    socket = assign(socket, search_q_kicked: qd, search_state: :pending)
+
+    case SearchIndex.search(qtrim, self()) do
+      :ok ->
+        socket
+
+      {:error, reason} ->
+        # No answer is coming; do not leave the reader waiting on one.
+        Logger.warning("timeline: search for #{inspect(qtrim)} did not start: #{inspect(reason)}")
+
+        assign(socket, search_state: :stalled)
+    end
+  end
 
   defp schedule_page_retry(socket, view, resume) do
     key = {view, resume}
@@ -278,32 +306,19 @@ defmodule HighWireWeb.TimelineLive do
     qd = String.downcase(qtrim)
     socket = assign(socket, q: qd)
 
-    if qd != "" and qd != socket.assigns.search_q_kicked do
-      # The answer comes back from a query task, and a fold of the store
-      # is not instant. Until it lands the view knows nothing either way,
-      # so it says that instead of reading as an answer — and the hits on
-      # screen belong to the previous query, so they come down with it.
-      socket =
-        assign(socket, search_q_kicked: qd, search_hits: [], search_state: :pending)
-
-      case SearchIndex.search(qtrim, self()) do
-        :ok ->
-          {:noreply, socket}
-
-        {:error, reason} ->
-          # No answer is coming; do not leave the reader waiting on one.
-          Logger.warning(
-            "timeline: search for #{inspect(qtrim)} did not start: #{inspect(reason)}"
-          )
-
-          {:noreply, assign(socket, search_state: :stalled)}
-      end
-    else
-      if qd == "" do
+    cond do
+      qd == "" ->
         {:noreply, assign(socket, search_hits: [], search_q_kicked: "", search_state: :idle)}
-      else
+
+      socket.assigns.search_state == :pending or qd == socket.assigns.search_q_kicked ->
+        # One query at a time: while an answer is out it holds the kick,
+        # and what was typed over it in the meantime is asked for when it
+        # lands — an answer for a superseded query asks forward itself.
+        # Re-asking the query that was just asked has nothing to add.
         {:noreply, socket}
-      end
+
+      true ->
+        {:noreply, kick_search(socket, qtrim, qd)}
     end
   end
 
@@ -975,7 +990,7 @@ defmodule HighWireWeb.TimelineLive do
                 type="search"
                 name="q"
                 value={@q}
-                phx-debounce="300"
+                phx-debounce="600"
                 placeholder="Search"
                 class="h-9 w-full rounded-full border border-gray-300 bg-white px-3 text-sm shadow-sm transition focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-400"
               />
