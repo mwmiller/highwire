@@ -23,7 +23,9 @@ defmodule HighWire.SSB.Identities do
   Reads never write: the rail's avatar path (`active_id/0`) is a pure
   lookup. Mutations — `create/1`, `activate/1`, `disable/1`,
   `enable/1`, `destroy/1` — persist atomically (temp file + rename,
-  0600, since the private keys live here).
+  0600, since the private keys live here), and each load → change →
+  persist sequence runs under a lock so two overlapping edits cannot
+  lose one another's change.
   """
 
   alias HighWire.SSB.Keys
@@ -33,6 +35,17 @@ defmodule HighWire.SSB.Identities do
 
   defp registry_path, do: Path.join(HighWire.home_dir(), @registry)
   defp secret_path, do: Path.join(HighWire.home_dir(), @secret)
+
+  # Every mutation is a load → change → persist read-modify-write, and two
+  # of them racing would each write back a file that never saw the other's
+  # change — the loser's edit vanishes. The lock makes the whole sequence
+  # one critical section. It is local to this node (a second HighWire
+  # process on the same home is a fork in the first place, not a case the
+  # file layer can arbitrate), keyed on the registry path so two homes
+  # never contend. Reads stay lock-free: they only ever see a whole file.
+  defp with_registry_lock(fun) do
+    :global.trans({{__MODULE__, registry_path()}, self()}, fun)
+  end
 
   @doc """
   Public metadata for every identity in the registry — id, label,
@@ -87,6 +100,10 @@ defmodule HighWire.SSB.Identities do
   """
   @spec ensure_boot() :: :ok | {:error, term()}
   def ensure_boot do
+    with_registry_lock(fn -> do_ensure_boot() end)
+  end
+
+  defp do_ensure_boot do
     reg = load()
 
     case secret_keys() do
@@ -121,6 +138,12 @@ defmodule HighWire.SSB.Identities do
       "private" => Base.encode64(private) <> ".ed25519"
     }
 
+    with_registry_lock(fn -> create_row(row, id) end)
+  end
+
+  def create(_label), do: {:error, :bad_label}
+
+  defp create_row(row, id) do
     reg = load()
 
     if registry_row(reg, id) do
@@ -139,8 +162,6 @@ defmodule HighWire.SSB.Identities do
       end
     end
   end
-
-  def create(_label), do: {:error, :bad_label}
 
   defp first_identity(reg, row, id) do
     case write_secret(row) do
@@ -180,10 +201,12 @@ defmodule HighWire.SSB.Identities do
   """
   @spec activate(String.t()) :: :ok | {:error, term()}
   def activate(id) when is_binary(id) do
-    case ensure_switchable(id) do
-      :ok -> do_activate(id)
-      error -> error
-    end
+    with_registry_lock(fn ->
+      case ensure_switchable(id) do
+        :ok -> do_activate(id)
+        error -> error
+      end
+    end)
   end
 
   def activate(_id), do: {:error, :unknown_identity}
@@ -195,6 +218,12 @@ defmodule HighWire.SSB.Identities do
   """
   @spec disable(String.t()) :: :ok | {:error, term()}
   def disable(id) when is_binary(id) do
+    with_registry_lock(fn -> do_disable(id) end)
+  end
+
+  def disable(_id), do: {:error, :unknown_identity}
+
+  defp do_disable(id) do
     reg = load()
 
     case registry_row(reg, id) do
@@ -210,11 +239,15 @@ defmodule HighWire.SSB.Identities do
     end
   end
 
-  def disable(_id), do: {:error, :unknown_identity}
-
   @doc "Put a disabled identity back on the switch list."
   @spec enable(String.t()) :: :ok | {:error, term()}
   def enable(id) when is_binary(id) do
+    with_registry_lock(fn -> do_enable(id) end)
+  end
+
+  def enable(_id), do: {:error, :unknown_identity}
+
+  defp do_enable(id) do
     reg = load()
 
     case registry_row(reg, id) do
@@ -223,8 +256,6 @@ defmodule HighWire.SSB.Identities do
     end
   end
 
-  def enable(_id), do: {:error, :unknown_identity}
-
   @doc """
   Permanently drop an identity's keypair from the registry. Only a
   disabled identity qualifies (disable first), and never the active
@@ -232,6 +263,12 @@ defmodule HighWire.SSB.Identities do
   """
   @spec destroy(String.t()) :: :ok | {:error, term()}
   def destroy(id) when is_binary(id) do
+    with_registry_lock(fn -> do_destroy(id) end)
+  end
+
+  def destroy(_id), do: {:error, :unknown_identity}
+
+  defp do_destroy(id) do
     reg = load()
 
     case registry_row(reg, id) do
@@ -246,8 +283,6 @@ defmodule HighWire.SSB.Identities do
         end
     end
   end
-
-  def destroy(_id), do: {:error, :unknown_identity}
 
   @doc """
   The identity's keypair as an ssb-keys `secret` file — the escape
