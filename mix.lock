@@ -8,7 +8,7 @@
   "credo": {:hex, :credo, "1.7.19", "cc52129665fc7c15143d47838fda0f9cd6dac9ceced7bf4da6f85fcbfe64b12a", [:mix], [{:bunt, "~> 0.2.1 or ~> 1.0", [hex: :bunt, repo: "hexpm", optional: false]}, {:file_system, "~> 0.2 or ~> 1.0", [hex: :file_system, repo: "hexpm", optional: false]}, {:jason, "~> 1.0", [hex: :jason, repo: "hexpm", optional: false]}], "hexpm", "2d8bc95d5a7bb99dd2613621d4f08c6a3575c3fd4b62e6a2b48a100352a557b8"},
   "elixir_make": {:hex, :elixir_make, "0.10.0", "16577e2583a79bb79237bbff349619ef5d80afffc07eac6e4faf0d00e2ddaf7d", [:mix], [], "hexpm", "dc1f09fb7fa68866b886abd5f0f3c83553b1a19a52359a899e92af1bb3b31982"},
   "enacl": {:git, "https://github.com/cmoid/enacl", "3be2ed2e4ee1fdfbd73c04207c0b572fcde49720", [branch: "moid-v1.1.1"]},
-  "erlbutt": {:git, "https://github.com/cmoid/erlbutt", "56bccecdfa5cb435e111b2a8ccd0d415acb92c74", [branch: "main"]},
+  "erlbutt": {:git, "https://github.com/cmoid/erlbutt", "6c3c29cb227e645c002a5d963dce981f2c2a7c28", [branch: "main"]},
   "esbuild": {:hex, :esbuild, "0.10.0", "b0aa3388a1c23e727c5a3e7427c932d89ee791746b0081bbe56103e9ef3d291f", [:mix], [{:jason, "~> 1.4", [hex: :jason, repo: "hexpm", optional: false]}], "hexpm", "468489cda427b974a7cc9f03ace55368a83e1a7be12fba7e30969af78e5f8c70"},
   "esqlite": {:git, "https://github.com/cmoid/esqlite", "b3adc97accc1efb8d6dba2166f1011b3abe52fb6", [tag: "moid-v0.9.1"]},
   "excon": {:hex, :excon, "4.1.0", "58abec586aae8c3490e8fbb4b1ac1a15a1ec0754d1d195f58cb901c4a0e2aa1e", [:mix], [{:blake2, "~> 1.0", [hex: :blake2, repo: "hexpm", optional: false]}, {:png, "~> 0.2", [hex: :png, repo: "hexpm", optional: false]}], "hexpm", "7f778e9dc224e9bf999ff5016c4e0bb928375611ac1855c6790be51ec5eff019"},
