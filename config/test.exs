@@ -1,13 +1,19 @@
 import Config
 
 # Tests must be hermetic: never read or write the user's real ~/.highwire.
+# Each run gets its own store directory — test_helper.exs mints one under
+# the system temp dir and points HIGHWIRE_TEST_HOME here — so a stale run
+# or two suites at once cannot read each other's files. The default stays
+# the shared ~/.highwire-test for anyone invoking ExUnit some other way.
+test_home = System.get_env("HIGHWIRE_TEST_HOME") || Path.expand("~/.highwire-test")
+
 config :highwire,
-  application_dir: Path.expand("~/.highwire-test"),
-  blob_store: Path.expand("~/.highwire-test/.ssberl/blobs")
+  application_dir: test_home,
+  blob_store: Path.join(test_home, ".ssberl/blobs")
 
 # …and never the real ~/.ssb either: detection would otherwise offer a
 # first-run import (and read a real store) on any machine that has one.
-config :highwire, :ssb, js_home: Path.expand("~/.highwire-test/no-js-store")
+config :highwire, :ssb, js_home: Path.join(test_home, "no-js-store")
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
