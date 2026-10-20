@@ -17,7 +17,8 @@ name: Release
 # copy's own erts over any system Erlang.
 #
 # Also runnable by hand (workflow_dispatch) as a build-only dry run:
-# all matrix legs build and upload artifacts, publish is tag-only.
+# all matrix legs build and upload artifacts; the separate, tag-only
+# publish job then bundles them into one release.
 
 on:
   push:
@@ -412,6 +413,19 @@ jobs:
             echo "Version mismatch: tag=v$TAG mix=$MIX tauri=$CONF cargo=$CARGOT" >&2
             exit 1
           fi
+
+  # Publishing is one job, not one per build leg. It used to sit at the
+  # tail of every matrix leg, so each leg that reached it re-created the
+  # release and appended its own copy of the generated notes — v1.4.0's
+  # body came out as three identical "Full Changelog" lines. With needs:
+  # build it waits for all four legs, downloads every installer at once,
+  # and writes the release exactly once. Tag-only, as the header says:
+  # a workflow_dispatch dry run builds and uploads artifacts, nothing else.
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
