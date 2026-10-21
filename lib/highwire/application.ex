@@ -23,6 +23,7 @@ defmodule HighWire.Application do
         [
           HighWire.Suggester,
           HighWire.SearchIndex,
+          HighWire.SSB.MessageIndex,
           HighWire.Contacts,
           HighWire.Timeline,
           HighWireWeb.Endpoint

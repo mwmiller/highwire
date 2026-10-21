@@ -691,6 +691,12 @@ defmodule HighWire.TimelineTest do
           contact_msgs: [],
           about_ref: nil,
           about_ids: MapSet.new(),
+          tombstone_ref: nil,
+          tombstone_buf: [],
+          tombstone_snapshot?: true,
+          edit_ref: nil,
+          edit_buf: [],
+          edit_snapshot?: true,
           drain_client: nil,
           last_drain_at: nil,
           contacts_ref: nil,
@@ -817,6 +823,9 @@ defmodule HighWire.TimelineTest do
       assert is_reference(st.contact_ref)
       # The about pass opens on the same reload, in its own slot.
       assert is_reference(st.about_ref)
+      # So do the tombstone and edit passes.
+      assert is_reference(st.tombstone_ref)
+      assert is_reference(st.edit_ref)
       assert map_size(st.pending) >= 1
       assert st.acc == []
     end
@@ -836,7 +845,9 @@ defmodule HighWire.TimelineTest do
 
       assert FakeClient.streams(dedicated) == [
                {["messagesByType"], [%{"type" => "contact"}]},
-               {["messagesByType"], [%{"type" => "about"}]}
+               {["messagesByType"], [%{"type" => "about"}]},
+               {["messagesByType"], [%{"type" => "delete", "live" => true, "old" => true}]},
+               {["messagesByType"], [%{"type" => "post-edit", "live" => true, "old" => true}]}
              ]
 
       # the shared connection carries only the per-feed windows

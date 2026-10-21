@@ -59,7 +59,7 @@ defmodule HighWire.Timeline do
 
   alias HighWire.Blob
   alias HighWire.Contacts
-  alias HighWire.SSB.{Client, Keys, PrivateBox, Profile, Sidecar}
+  alias HighWire.SSB.{Client, Keys, MessageIndex, PrivateBox, Profile, Sidecar}
   alias HighWire.Suggester
 
   @topic "timeline"
@@ -647,6 +647,18 @@ defmodule HighWire.Timeline do
       # the first pass: the about drain fills it, and once it has read
       # the store at least once the candidate list is narrowed for good.
       about_ids: MapSet.new(),
+      # Tombstones and edits arrive outside the per-feed windows, so they
+      # get their own live store-wide tail and land in the local index the
+      # render path consults. The `*_snapshot?` flag is true while the
+      # stream's backlog is still arriving: those items buffer and fold
+      # together when the `{sync: true}` sentinel closes them, while every
+      # item after it folds on its own as it lands.
+      tombstone_ref: nil,
+      tombstone_buf: [],
+      tombstone_snapshot?: true,
+      edit_ref: nil,
+      edit_buf: [],
+      edit_snapshot?: true,
       drain_client: nil,
       last_drain_at: nil,
       follows: [],
@@ -1750,6 +1762,63 @@ defmodule HighWire.Timeline do
     {:noreply, %{state | about_ref: nil}}
   end
 
+  # messagesByType("delete"): the store-wide tombstone stream. A delete
+  # is its author asking readers to drop a message, and it never rides
+  # the per-feed windows the timeline renders from, so without it a
+  # tombstone is invisible. Opened live and kept open: the snapshot
+  # carries only what arrived since the index's last cursor, and the tail
+  # pushes each new tombstone as it lands.
+  def handle_info({Client, ref, {:item, msg}}, %{tombstone_ref: ref} = state) do
+    cond do
+      MessageIndex.sentinel?(msg) ->
+        tombstone_drained(%{state | tombstone_snapshot?: false})
+
+      state.tombstone_snapshot? ->
+        {:noreply, %{state | tombstone_buf: [msg | state.tombstone_buf]}}
+
+      true ->
+        tombstone_drained(%{state | tombstone_buf: [msg]})
+    end
+  end
+
+  # A live source has no end of its own (the sentinel closed the backlog
+  # already); this is the finite fallback (no owning peer) and a dropped
+  # backlog, both of which mean the buffered pass is complete. The live
+  # tails reconnect on their own after an error.
+  def handle_info({Client, ref, :done}, %{tombstone_ref: ref} = state) do
+    tombstone_drained(%{state | tombstone_ref: nil})
+  end
+
+  def handle_info({Client, ref, {:error, reason}}, %{tombstone_ref: ref} = state) do
+    Logger.debug("timeline: tombstone stream failed: #{inspect(reason)}")
+    {:noreply, %{state | tombstone_ref: nil, tombstone_snapshot?: true}}
+  end
+
+  # messagesByType("post-edit"): the store-wide edit stream, so an edit
+  # of a post that has aged out of the window still threads where it
+  # belongs. Same live shape as the tombstone stream.
+  def handle_info({Client, ref, {:item, msg}}, %{edit_ref: ref} = state) do
+    cond do
+      MessageIndex.sentinel?(msg) ->
+        edit_drained(%{state | edit_snapshot?: false})
+
+      state.edit_snapshot? ->
+        {:noreply, %{state | edit_buf: [msg | state.edit_buf]}}
+
+      true ->
+        edit_drained(%{state | edit_buf: [msg]})
+    end
+  end
+
+  def handle_info({Client, ref, :done}, %{edit_ref: ref} = state) do
+    edit_drained(%{state | edit_ref: nil})
+  end
+
+  def handle_info({Client, ref, {:error, reason}}, %{edit_ref: ref} = state) do
+    Logger.debug("timeline: edit stream failed: #{inspect(reason)}")
+    {:noreply, %{state | edit_ref: nil, edit_snapshot?: true}}
+  end
+
   def handle_info(:rebroadcast, state) do
     # One activity broadcast per debounce window, alongside the revision
     # bump — not one per blob (see the blobs.ls tail above).
@@ -2115,8 +2184,26 @@ defmodule HighWire.Timeline do
     # The about pass rides the same cycle but keeps its own slot: a
     # stalled or failed pass must never hold up the contact drain, and
     # the contact drain must never hold one up either.
-    if state.about_ref == nil and drain_due?(state) do
-      open_about_drain(state)
+    state =
+      if state.about_ref == nil and drain_due?(state) do
+        open_about_drain(state)
+      else
+        state
+      end
+
+    # Tombstones and edits are live tails, opened once and kept open:
+    # the snapshot carries only what arrived since the index's cursor,
+    # so there is nothing to re-walk on a heartbeat. A `nil` ref means
+    # one is not open yet (boot, or a drop to reconnect).
+    state =
+      if state.tombstone_ref == nil do
+        open_tombstone_drain(state)
+      else
+        state
+      end
+
+    if state.edit_ref == nil do
+      open_edit_drain(state)
     else
       state
     end
@@ -2152,6 +2239,51 @@ defmodule HighWire.Timeline do
     end
   catch
     _, _ -> state
+  end
+
+  # messagesByType("delete"): the honoured tombstones. Opened as a live
+  # tail — the snapshot is bounded by the index's cursor, so a restart
+  # carries only what arrived while the timeline was not running, and
+  # the tail then pushes each new tombstone as it lands.
+  defp open_tombstone_drain(state) do
+    {client, state} = drain_endpoint(state)
+    args = live_by_type("delete", MessageIndex.cursor("delete"))
+
+    with true <- is_pid(client),
+         {:ok, ref} <- Client.stream(client, ["messagesByType"], args, self()) do
+      %{state | tombstone_ref: ref, tombstone_buf: [], tombstone_snapshot?: true}
+    else
+      _ -> state
+    end
+  catch
+    _, _ -> state
+  end
+
+  # messagesByType("post-edit"): the store-wide edits. Same live shape;
+  # an edit's target may long since have left the window.
+  defp open_edit_drain(state) do
+    {client, state} = drain_endpoint(state)
+    args = live_by_type("post-edit", MessageIndex.cursor("post-edit"))
+
+    with true <- is_pid(client),
+         {:ok, ref} <- Client.stream(client, ["messagesByType"], args, self()) do
+      %{state | edit_ref: ref, edit_buf: [], edit_snapshot?: true}
+    else
+      _ -> state
+    end
+  catch
+    _, _ -> state
+  end
+
+  # A live type stream: keep the tail open so later items arrive without
+  # a re-open, and bound the snapshot to `gt` when there is a cursor.
+  # With no cursor the first pass carries the whole backlog — the one
+  # time the store is walked — and every pass after it carries only what
+  # arrived since. `old` stays true so a restart still catches up on the
+  # window it missed; the cursor is what keeps that catch-up small.
+  defp live_by_type(type, cursor) do
+    base = %{"type" => type, "live" => true, "old" => true}
+    [if(cursor, do: Map.put(base, "gt", cursor), else: base)]
   end
 
   defp drain_due?(%{last_drain_at: nil}), do: true
@@ -2264,9 +2396,20 @@ defmodule HighWire.Timeline do
   defp finalize(state) do
     {payload, missing, base, post_refs} = build_payload(state)
 
-    broadcast_updated(payload)
+    # The 13s heartbeat re-fetches the window and lands here every time.
+    # A rebuild that produced the same payload as the last one is not
+    # news: skip the broadcast and the profile writes, so a quiet feed
+    # stays quiet. The comparison is structural — the same window, the
+    # same store facts, the same rows.
+    state =
+      if payload == state.messages do
+        state
+      else
+        broadcast_updated(payload)
+        %{state | messages: payload}
+      end
 
-    state = %{state | status: :ok, messages: payload, pending: %{}, done_count: 0}
+    state = %{state | status: :ok, pending: %{}, done_count: 0}
     kick_profile_fetch(state, missing, base, post_refs)
   end
 
@@ -2321,6 +2464,76 @@ defmodule HighWire.Timeline do
     end
 
     {:noreply, state}
+  end
+
+  # A tombstone pass — the snapshot's close sentinel or the finite
+  # fallback's `:done`. Each delete names the message it asks readers to
+  # drop; the index keeps that key with the deleter's id, and the render
+  # path honours it only when the deleter is the author. A completed pass
+  # re-renders, so a message that just became tombstoned leaves the feed
+  # without waiting for the next cycle. The ref is not cleared: the live
+  # tail stays open, and later items fold through this same path.
+  defp tombstone_drained(state) do
+    entries = state.tombstone_buf |> Enum.flat_map(&List.wrap(MessageIndex.tombstone(&1)))
+    if entries != [], do: MessageIndex.record_deletes(entries)
+    advance_cursor("delete", state.tombstone_buf)
+
+    state = %{state | tombstone_buf: []}
+
+    if entries != [] and state.status == :ok and map_size(state.pending) == 0 do
+      {:noreply, finalize(state)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  # An edit pass — the snapshot's close sentinel or the finite fallback's
+  # `:done`. Each edit names the post it revises; the index keeps the
+  # target's thread root so an edit threads under a post that has aged out
+  # of the window. Roots resolve against the window in hand — the target's
+  # own root pointer when it is here, the target itself when it heads its
+  # own conversation, and the index's last answer when the target is not
+  # in view at all. The ref is not cleared: the live tail stays open.
+  defp edit_drained(state) do
+    by_key = Map.new(state.acc, fn msg -> {msg["key"], msg} end)
+
+    entries =
+      for msg <- state.edit_buf, {edit_key, target} <- List.wrap(MessageIndex.edit(msg)) do
+        {edit_key, target, edit_root(target, by_key) || MessageIndex.edit_thread_root(target)}
+      end
+
+    if entries != [], do: MessageIndex.record_edits(entries)
+    advance_cursor("post-edit", state.edit_buf)
+
+    state = %{state | edit_buf: []}
+
+    if entries != [] and state.status == :ok and map_size(state.pending) == 0 do
+      {:noreply, finalize(state)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  # The cursor is the highest received time among the items just folded —
+  # the envelope's top-level `timestamp`, the same field the engine's `gt`
+  # compares against. An item with no usable time leaves the cursor alone.
+  defp advance_cursor(_type, []), do: :ok
+
+  defp advance_cursor(type, msgs) do
+    case msgs |> Enum.map(&received_ts/1) |> Enum.reject(&is_nil/1) |> Enum.max(fn -> nil end) do
+      nil -> :ok
+      ts -> MessageIndex.advance_cursor(type, ts)
+    end
+  end
+
+  defp received_ts(%{"timestamp" => ts}) when is_integer(ts), do: ts
+  defp received_ts(_), do: nil
+
+  defp edit_root(target, by_key) do
+    case Map.get(by_key, target) do
+      nil -> nil
+      parent -> thread_root(parent, by_key) || target
+    end
   end
 
   # The feed an about message speaks for: the `about` field when it
@@ -2582,6 +2795,11 @@ defmodule HighWire.Timeline do
     # Boxed (encrypted) messages never form public rows — the Private tab
     # shows them decrypted, straight from privateFeed.
     acc = Enum.reject(acc, &boxed?/1)
+
+    # A message its own author has tombstoned is gone: it leaves the feed
+    # the same way a boxed message never joins it. The index holds the
+    # deleter's id, so a delete from anyone else is ignored here.
+    acc = Enum.reject(acc, &tombstoned?/1)
 
     by_key = Map.new(acc, fn msg -> {msg["key"], msg} end)
     # An edit revises the post named by revisionRoot/revisionBranch/root.
@@ -2899,15 +3117,29 @@ defmodule HighWire.Timeline do
   # The thread an edit belongs to. Revisions point at the post they
   # revise, so resolve that post the same way a reply resolves its root:
   # an edit of a rootless post heads that post's row, an edit of a reply
-  # joins the reply's thread. An edit whose target never made it into the
-  # window is unanchorable — it stands alone rather than guessing.
+  # joins the reply's thread. A target outside the window resolves to the
+  # thread root the edit drain recorded for it, so a late edit still lands
+  # in its conversation.
   defp edit_thread(msg, by_key, edit_index) do
     with true <- edit?(msg),
-         target when is_binary(target) <- Map.get(edit_index, msg["key"]),
-         parent when not is_nil(parent) <- Map.get(by_key, target) do
-      thread_root(parent, by_key) || target
+         target when is_binary(target) <- Map.get(edit_index, msg["key"]) do
+      case Map.get(by_key, target) do
+        nil -> MessageIndex.edit_thread_root(target)
+        parent -> thread_root(parent, by_key) || target
+      end
     else
       _ -> nil
+    end
+  end
+
+  # A message its own author has asked readers to drop. The index answers
+  # who wrote the tombstone; when that is not the message's author the
+  # delete is not honoured, so anyone can delete their own and no one
+  # else's.
+  defp tombstoned?(msg) do
+    case MessageIndex.deleted_by(msg["key"]) do
+      nil -> false
+      deleter -> deleter == value_of(msg)["author"]
     end
   end
 
