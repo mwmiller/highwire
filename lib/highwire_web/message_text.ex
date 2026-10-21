@@ -31,6 +31,50 @@ defmodule HighWireWeb.MessageText do
   end
 
   @doc """
+  Every message key `describe/2` may look up through the ctx's `:index`
+  for `msg` — the targets its sentence can name.
+
+  One definition, so the payload's index and the sentences it feeds
+  cannot drift: the index is built over these keys, and these are
+  exactly the keys the labels read. A new label that resolves a key
+  adds its field here, or the two sides diverge silently and the
+  sentence degrades to its general phrase.
+  """
+  @spec target_keys(map()) :: [binary()]
+  def target_keys(msg) do
+    case content(msg) do
+      %{"type" => "vote"} = c -> keep_key(HighWire.Timeline.vote_link(c))
+      %{"type" => "about"} = c -> keep_key(c["about"])
+      %{"type" => "post-edit"} = c -> keep_key(edit_target(c))
+      _ -> []
+    end
+  end
+
+  @doc """
+  The content fields a message of `type` must keep for its sentence to
+  resolve its target — the fields `target_keys/1` reads, grouped by the
+  shapes the wire carries.
+
+  The payload's search projection trims each event message to a handful
+  of fields; this is the list that keeps a projected message resolvable.
+  Deriving it from the same place the sentences read means a projection
+  can never strip a key the index was built to answer.
+  """
+  @spec target_fields(binary()) :: [binary()]
+  def target_fields("vote"), do: ~w(link vote)
+  def target_fields("about"), do: ~w(about)
+  def target_fields("post-edit"), do: ~w(revisionRoot revisionBranch root)
+  def target_fields(_type), do: []
+
+  # The post an edit revises. Both label and index read the same fields in
+  # the same order, so an edit the sentence can name is an edit the index
+  # was built for.
+  defp edit_target(c), do: c["revisionRoot"] || c["revisionBranch"] || c["root"]
+
+  defp keep_key(key) when is_binary(key), do: [key]
+  defp keep_key(_), do: []
+
+  @doc """
   A contact edit split into its parts — `{verb, feed_id, name}` — or nil
   when the message is not one.
 
@@ -118,14 +162,15 @@ defmodule HighWireWeb.MessageText do
   # A like carries its target as a link. The row ctx maps message keys to
   # authors, so name the liker's target where it is known and keep the
   # protocol's own general phrase where it has scrolled past.
-  defp vote_label(%{"link" => link}, ctx) when is_binary(link) do
-    case Map.get(index(ctx), link) do
+  defp vote_label(c, ctx) do
+    case HighWire.Timeline.vote_link(c) do
       nil -> "liked a message"
-      author -> "liked #{Ident.display_name(author, ctx)}'s message"
+      link -> vote_target_label(Map.get(index(ctx), link), ctx)
     end
   end
 
-  defp vote_label(_c, _ctx), do: "liked a message"
+  defp vote_target_label(nil, _ctx), do: "liked a message"
+  defp vote_target_label(author, ctx), do: "liked #{Ident.display_name(author, ctx)}'s message"
 
   defp pub_label(%{"address" => %{"host" => host}}) when is_binary(host),
     do: "announced the pub #{host}"
@@ -158,11 +203,13 @@ defmodule HighWireWeb.MessageText do
   defp channel_verb(false), do: "unsubscribed from"
 
   # A post-edit points at the post it revises via
-  # revisionRoot/revisionBranch. Resolve that key to a name through the
-  # index so the sentence reads as "edited their post" or "edited
-  # <name>'s post" instead of naming the protocol type.
+  # revisionRoot/revisionBranch/root. Resolve that key to a name through
+  # the index so the sentence reads as "edited their post" or "edited
+  # <name>'s post" instead of naming the protocol type. `edit_target/1`
+  # is the same read `target_keys/1` collects, so the index was built for
+  # exactly the key this sentence resolves.
   defp edit_label(c, msg, ctx) do
-    root = c["revisionRoot"] || c["revisionBranch"] || c["root"]
+    root = edit_target(c)
     author = author_of(msg)
 
     cond do

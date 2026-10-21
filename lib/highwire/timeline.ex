@@ -61,6 +61,7 @@ defmodule HighWire.Timeline do
   alias HighWire.Contacts
   alias HighWire.SSB.{Client, Keys, MessageIndex, PrivateBox, Profile, Sidecar}
   alias HighWire.Suggester
+  alias HighWireWeb.MessageText
 
   @topic "timeline"
   @gossip "gossip"
@@ -2579,7 +2580,6 @@ defmodule HighWire.Timeline do
     reply_counts = reply_counts(acc)
     likes = likes_state(acc)
     like_counts = like_counts(likes)
-    index = author_index(acc)
 
     # Flat list (order-of-arrival view). The LiveView's search reads only
     # author, text, type/root and key (for rootless posts), so each message
@@ -2593,6 +2593,15 @@ defmodule HighWire.Timeline do
       |> Enum.map(&search_projection/1)
 
     feed = build_feed(acc, state.self_id, like_counts, contacts)
+
+    # key → author, but only for the keys the rows about to go out can
+    # ask about: each row's own message, its previewed replies, and the
+    # targets its sentences name (`about`, `link`, `revisionRoot` and
+    # friends). Building it over the whole pass instead shipped a
+    # store-sized map — 228k entries and ~90% of the payload — to every
+    # view on every mount and reload, to answer lookups the window never
+    # makes. The map is now bounded by what is on screen.
+    index = author_index(acc, feed, messages)
 
     # Suggestion rows need names/avatars too, or the sidebar shows bare
     # short ids for strangers — profile fetch covers them on top of the
@@ -3378,8 +3387,67 @@ defmodule HighWire.Timeline do
     end
   end
 
-  # key → author for the whole pass, so vote rows can name their target.
-  defp author_index(acc) do
+  # key → author for the rows going out, so a vote/about/edit row can
+  # name its target. Scoped to the keys those rows can ask about: the
+  # rendered messages, their previewed replies, and the message keys
+  # their content names. The full pass merges the store-wide contact
+  # drain into `acc` — 200k+ messages — so a map over all of it was a
+  # store-sized payload that grew with the store and slowed every mount;
+  # the window only ever looks its own keys up.
+  defp author_index(acc, feed, messages) do
+    by_key = author_by_key(acc)
+    wanted = referenced_keys(feed, messages)
+
+    wanted
+    |> Enum.reduce(%{}, fn key, idx ->
+      case Map.fetch(by_key, key) do
+        {:ok, author} -> Map.put(idx, key, author)
+        :error -> idx
+      end
+    end)
+  end
+
+  # The rendered messages and their previewed replies, plus every message
+  # key their content can reach for. The target set comes from
+  # `MessageText.target_keys/1` — the same definition the sentences use
+  # to read the index, so the payload is built for exactly the keys the
+  # render resolves. A hand-written field list here would drift from the
+  # labels silently, and the sentence would fall back to its general
+  # phrase with no test failing.
+  #
+  # Targets are taken from every message the render describes: each row's
+  # own message, its previewed replies, and the flat list's rows. A reply
+  # preview is described exactly like a row (a block, a like, an edit all
+  # describe themselves), so its target needs a seat in the index too.
+  defp referenced_keys(feed, messages) do
+    rendered = Enum.map(messages, & &1["key"])
+
+    row_msgs =
+      Enum.flat_map(feed, fn row ->
+        [row[:msg] | Map.get(row, :recent, [])]
+      end)
+
+    described = row_msgs ++ messages
+
+    keys =
+      Enum.flat_map(feed, fn row ->
+        msg = row[:msg] || %{}
+        recent = Map.get(row, :recent, [])
+        [msg["key"], row[:root_key] | Enum.map(recent, & &1["key"])]
+      end)
+
+    targets =
+      described
+      |> Enum.flat_map(&MessageText.target_keys/1)
+      |> Enum.filter(&msg_key?/1)
+
+    Enum.uniq(rendered ++ keys ++ targets)
+  end
+
+  defp msg_key?(<<"%", _::binary>> = id), do: String.ends_with?(id, ".sha256")
+  defp msg_key?(_), do: false
+
+  defp author_by_key(acc) do
     Enum.reduce(acc, %{}, fn msg, idx ->
       case {msg["key"], msg["value"]["author"]} do
         {k, a} when is_binary(k) and is_binary(a) -> Map.put_new(idx, k, a)
@@ -3427,12 +3495,27 @@ defmodule HighWire.Timeline do
   # "set Alice's display name", "edited their post" — instead of
   # echoing the protocol type at the reader. Posts carry no extra cost:
   # this branch only fires for the event types below.
-  @event_projection_fields %{
-    "about" => ["about", "name", "description"],
+  #
+  # The target-carrying fields (`about`, `link`, the edit's root fields)
+  # come from `MessageText.target_fields/1` — the same definition the
+  # sentences read and the index is built from — so a projection can
+  # never strip a key the index was built to answer. Only the
+  # non-target extras a sentence names are listed here.
+  @event_sentence_fields %{
+    "about" => ["name", "description"],
     "pub" => ["address"],
-    "room/alias" => ["alias", "aliasURL", "room", "action"],
-    "post-edit" => ["revisionRoot", "revisionBranch", "root"]
+    "room/alias" => ["alias", "aliasURL", "room", "action"]
   }
+
+  @event_projection_types ~w(about pub room/alias post-edit)
+
+  @event_projection_fields Map.new(@event_projection_types, fn type ->
+                             {type,
+                              Enum.uniq(
+                                MessageText.target_fields(type) ++
+                                  Map.get(@event_sentence_fields, type, [])
+                              )}
+                           end)
 
   @doc false
   def event_projection_fields, do: @event_projection_fields
