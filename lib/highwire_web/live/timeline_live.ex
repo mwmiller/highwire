@@ -1940,7 +1940,7 @@ defmodule HighWireWeb.TimelineLive do
   # hottest frame in the VM.
   defmemop snippet_of(source, rev), expires_in: @snippet_ttl_ms do
     source
-    |> String.replace(@image_re, "[image]")
+    |> media_markers()
     |> Markdown.to_html(blob_rev: rev)
     |> String.replace(~r/<[^>]*>/, " ")
     |> String.replace("&lt;", "<")
@@ -1951,6 +1951,14 @@ defmodule HighWireWeb.TimelineLive do
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
     |> String.slice(0, 120)
+  end
+
+  # A preview names the media a reply carries: what the bytes are, not
+  # always a picture.
+  defp media_markers(source) do
+    Regex.replace(@image_re, source, fn _whole, _alt, target ->
+      if String.starts_with?(target, "&"), do: Markdown.marker(target), else: "[image]"
+    end)
   end
 
   # Author names open that feed's neutral identity view.

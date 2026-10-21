@@ -20,6 +20,9 @@ defmodule HighWireWeb.BlobController do
   cached for a year. The placeholder is the exception, on a minute-long
   window so the real blob takes over its URL as soon as it lands.
 
+  The content type comes from the bytes: a blob carries no name, so the
+  signature is what tells the browser what it is holding.
+
   Also serves `GET /identicon/<feed-id-hex>`: the Excon `:framed`
   identicon for feeds without an avatar image (deterministic per id, so
   it is cached immutably).
@@ -77,7 +80,7 @@ defmodule HighWireWeb.BlobController do
       {:ok, bytes, conn} ->
         case Timeline.add_blob(bytes) do
           {:ok, ref} -> json(conn, %{ref: ref, url: Blob.url(ref)})
-          {:error, :offline} -> refuse(conn, 503, "the SSB engine is not running")
+          {:error, :offline} -> refuse(conn, 503, "HighWire is not connected")
           {:error, reason} -> refuse(conn, 422, describe(reason))
         end
 
@@ -112,13 +115,13 @@ defmodule HighWireWeb.BlobController do
   # stayed open. The `?v=<blob_rev>` query an avatar URL carries is what
   # re-fetches a URL whose bytes upgraded from placeholder to real blob.
   defp serve(conn, {:file, path}) do
-    case content_type(path) do
+    case Blob.content_type(path) do
       {:ok, type} ->
         conn
         |> put_resp_content_type(type)
         |> put_resp_header("cache-control", "public, max-age=31536000, immutable")
         |> put_blob_headers(type)
-        |> send_file(200, path)
+        |> send_blob(path)
 
       {:error, _} ->
         send_resp(conn, 404, "not found")
@@ -133,6 +136,60 @@ defmodule HighWireWeb.BlobController do
     |> put_resp_content_type("image/svg+xml")
     |> put_resp_header("cache-control", "public, max-age=60")
     |> send_resp(200, data)
+  end
+
+  # A player asks for the bytes it wants: the browser opens with
+  # `Range: bytes=0-` and narrows the window as the listener seeks.
+  # Answering with the whole file every time leaves the seek guessing,
+  # so one range is honoured and answered 206.
+  defp send_blob(conn, path) do
+    case File.stat(path) do
+      {:ok, %File.Stat{size: size}} ->
+        conn = put_resp_header(conn, "accept-ranges", "bytes")
+
+        case requested_range(conn, size) do
+          {:ok, offset, length} ->
+            conn
+            |> put_resp_header(
+              "content-range",
+              "bytes #{offset}-#{offset + length - 1}/#{size}"
+            )
+            |> send_file(206, path, offset, length)
+
+          :error ->
+            send_file(conn, 200, path)
+        end
+
+      {:error, _} ->
+        send_resp(conn, 404, "not found")
+    end
+  end
+
+  defp requested_range(conn, size) do
+    with [value] <- get_req_header(conn, "range"),
+         "bytes=" <> spec <- value,
+         [first, last] <- String.split(spec, "-", parts: 2) do
+      bounds(first, last, size)
+    else
+      _ -> :error
+    end
+  end
+
+  defp bounds(first, last, size) do
+    case {Integer.parse(first), Integer.parse(last)} do
+      {{start, ""}, {stop, ""}} when start <= stop and stop < size ->
+        {:ok, start, stop - start + 1}
+
+      {{start, ""}, :error} when start < size ->
+        {:ok, start, size - start}
+
+      {:error, {length, ""}} when length > 0 ->
+        length = min(length, size)
+        {:ok, size - length, length}
+
+      _ ->
+        :error
+    end
   end
 
   # These bytes are a peer's, not ours. `nosniff` stops a browser from
@@ -266,17 +323,4 @@ defmodule HighWireWeb.BlobController do
   end
 
   defp cool_salt(_salted, _hash), do: nil
-
-  defp content_type(path) do
-    case File.open(path, [:read], &IO.binread(&1, 16)) do
-      {:ok, <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, _::binary>>} -> {:ok, "image/png"}
-      {:ok, <<0xFF, 0xD8, 0xFF, _::binary>>} -> {:ok, "image/jpeg"}
-      {:ok, <<"GIF87a", _::binary>>} -> {:ok, "image/gif"}
-      {:ok, <<"GIF89a", _::binary>>} -> {:ok, "image/gif"}
-      {:ok, <<"RIFF", _::binary-size(4), "WEBP", _::binary>>} -> {:ok, "image/webp"}
-      {:ok, <<"<svg", _::binary>>} -> {:ok, "image/svg+xml"}
-      {:ok, _} -> {:ok, "application/octet-stream"}
-      {:error, _} -> {:error, :unreadable}
-    end
-  end
 end

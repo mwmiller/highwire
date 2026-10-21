@@ -8,6 +8,10 @@ defmodule HighWire.Blob do
   then the `images/` cache, then a generated placeholder. The old
   JS-client store (`~/.ssb`) is not consulted: everything on screen
   was imported or replicated into HighWire's directories.
+
+  A blob carries no name, so what it is comes from its bytes: the
+  signature says whether it is a picture, a recording, a film or
+  something else, and both the route and the renderer ask.
   """
 
   @doc """
@@ -94,6 +98,38 @@ defmodule HighWire.Blob do
     end
   end
 
+  @doc """
+  What kind of media a blob holds, from its first bytes.
+
+  A blob carries no name and no extension: the bytes are the only thing
+  that says what it is. The renderer asks here, so a post carrying an
+  audio file can be a player rather than a picture that cannot load.
+  `:missing` when the bytes have not arrived yet.
+  """
+  @spec media_type(binary()) :: :image | :audio | :video | :file | :missing
+  def media_type(ref) when is_binary(ref) do
+    case ref_to_hex(ref) do
+      {:ok, hex} -> kind_of(hex)
+      :error -> :missing
+    end
+  end
+
+  def media_type(_), do: :missing
+
+  @doc """
+  The MIME type of a blob file, from its first bytes.
+
+  Blobs have no extension to go by, and a browser will not sniff for
+  itself, so the type that goes out is the type the signature gives.
+  """
+  @spec content_type(Path.t()) :: {:ok, binary()} | {:error, :unreadable}
+  def content_type(path) do
+    case File.open(path, [:read], &IO.binread(&1, 16)) do
+      {:ok, head} -> {:ok, mime(head)}
+      {:error, _} -> {:error, :unreadable}
+    end
+  end
+
   @doc false
   def store_file?(hex) do
     case store_path(hex) do
@@ -118,4 +154,60 @@ defmodule HighWire.Blob do
       hex -> {:ok, hex}
     end
   end
+
+  # The same order the blob route serves: HighWire's own cache first,
+  # then the engine's blob store.
+  defp local_path(hex) do
+    cache = Path.join(cache_root(), hex)
+
+    cond do
+      File.regular?(cache) ->
+        cache
+
+      is_binary(store = store_path(hex)) and stored?(store) ->
+        store
+
+      true ->
+        nil
+    end
+  end
+
+  defp stored?(path) do
+    case File.stat(path) do
+      {:ok, %{size: size}} -> size > 0
+      _ -> false
+    end
+  end
+
+  defp kind_of(hex) do
+    case local_path(hex) do
+      nil -> :missing
+      path -> kind(content_type(path))
+    end
+  end
+
+  defp kind({:ok, "image/" <> _}), do: :image
+  defp kind({:ok, "audio/" <> _}), do: :audio
+  defp kind({:ok, "video/" <> _}), do: :video
+  defp kind(_), do: :file
+
+  # Magic bytes. An MPEG audio frame starts with eleven set bits, which
+  # is why the frame check takes the second byte whole: its top three
+  # bits set is the sync.
+  defp mime(<<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, _::binary>>), do: "image/png"
+  defp mime(<<0xFF, 0xD8, 0xFF, _::binary>>), do: "image/jpeg"
+  defp mime(<<"GIF87a", _::binary>>), do: "image/gif"
+  defp mime(<<"GIF89a", _::binary>>), do: "image/gif"
+  defp mime(<<"RIFF", _::binary-size(4), "WEBP", _::binary>>), do: "image/webp"
+  defp mime(<<"<svg", _::binary>>), do: "image/svg+xml"
+  defp mime(<<"ID3", _::binary>>), do: "audio/mpeg"
+  defp mime(<<0xFF, second, _::binary>>) when second >= 0xE0, do: "audio/mpeg"
+  defp mime(<<"OggS", _::binary>>), do: "audio/ogg"
+  defp mime(<<"fLaC", _::binary>>), do: "audio/flac"
+  defp mime(<<"RIFF", _::binary-size(4), "WAVE", _::binary>>), do: "audio/wav"
+  defp mime(<<"ftypM4A ", _::binary>>), do: "audio/mp4"
+  defp mime(<<"ftyp", _::binary>>), do: "video/mp4"
+  defp mime(<<0x1A, 0x45, 0xDF, 0xA3, _::binary>>), do: "video/webm"
+  defp mime(<<"%PDF-", _::binary>>), do: "application/pdf"
+  defp mime(_), do: "application/octet-stream"
 end

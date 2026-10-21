@@ -228,6 +228,16 @@
 }
 .md-body.md-open img { max-height: none; }
 
+/* A recording or a film rides as a player: it keeps to the column and
+   sits on its own line, the way a picture does. */
+.md-body audio,
+.md-body video {
+  display: block;
+  margin: 0.4em 0;
+  max-width: 100%;
+}
+.md-body video { max-height: 20rem; }
+
 /* The layout above shrinks most photos; the ones actually being shrunk
    carry the zoom affordance (app.js marks them once their bytes are in —
    only a real measurement can tell). */

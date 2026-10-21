@@ -7,6 +7,9 @@ defmodule HighWire.Markdown do
     * bare `&<base64>.sha256` refs and `![](&…)` / `[](&…)` targets
       resolve to local blob URLs (`/blob/<hex>`, cache-busted with `?v=`
       when a blob revision is given)
+    * a blob in an image slot rides as what its bytes say: a picture
+      stays a picture, a recording or a film becomes a player, anything
+      else a link to the file
     * `@<feed-id>.ed25519` mentions link to that feed's identity view
     * `%<base64>.sha256` message refs — bare or `[](…)` targets — link
       to the post viewer at `/post/<url-safe key>`
@@ -44,6 +47,22 @@ defmodule HighWire.Markdown do
     render(body, Keyword.get(opts, :blob_rev))
   end
 
+  @doc """
+  The marker a preview shows for a media reference: what the bytes are.
+
+  A preview says what a reply is about, so the media it carries is named
+  rather than shown.
+  """
+  @spec marker(binary()) :: binary()
+  def marker(ref) when is_binary(ref) do
+    case Blob.media_type(ref) do
+      :audio -> "[audio]"
+      :video -> "[video]"
+      :file -> "[file]"
+      _kind -> "[image]"
+    end
+  end
+
   # Pure in (body, rev) and re-run on every timeline render, so memoize
   # it: the feed rebuilds rows it has already drawn on nearly every
   # broadcast, and the comrak pass is the expensive part. The cache is
@@ -58,6 +77,7 @@ defmodule HighWire.Markdown do
     |> MDEx.to_html!(render: @render)
     |> String.replace("<!-- raw HTML omitted -->", "")
     |> String.replace("<img ", ~s|<img loading="lazy" onerror="this.remove()" |)
+    |> media_players(rev)
     # comrak drops node attrs on links, so target/rel are injected on
     # render. http(s) only: mailto and local links stay in-app.
     |> String.replace(~s|<a href="https://|, ~s|<a target="_blank" rel="noopener" href="https://|)
@@ -95,9 +115,15 @@ defmodule HighWire.Markdown do
   end
 
   defp walk(%Image{url: url, nodes: children} = node, ctx) do
-    case resolve_src(url, ctx.rev) do
-      {:ok, src} ->
+    case image_src(url, ctx.rev) do
+      {:image, src} ->
         %{node | url: src}
+
+      {:player, kind, hex} ->
+        %Link{url: media_href(kind, hex), nodes: media_label(children, url)}
+
+      {:file, src} ->
+        %Link{url: src, nodes: media_label(children, url)}
 
       :error ->
         flat_walk(children, ctx)
@@ -193,13 +219,38 @@ defmodule HighWire.Markdown do
     end
   end
 
+  # SSB posts put media in the image slot: `![alt](&<blob>)`. What the
+  # bytes are decides how it rides — a picture stays a picture, a
+  # recording or a film becomes a player, anything else a link to the
+  # file. A blob whose bytes have not arrived stays a picture: the
+  # route answers those with a placeholder.
+  defp image_src(url, rev) do
+    case Blob.ref_to_hex(url) do
+      {:ok, hex} -> blob_src(hex, url, rev)
+      :error -> other_src(url, rev)
+    end
+  end
+
+  defp blob_src(hex, url, rev) do
+    case Blob.media_type(url) do
+      :audio -> {:player, "audio", hex}
+      :video -> {:player, "video", hex}
+      :file -> {:file, bust("/blob/" <> hex, rev)}
+      _kind -> {:image, bust("/blob/" <> hex, rev)}
+    end
+  end
+
+  defp other_src(url, rev) do
+    case resolve_src(url, rev) do
+      {:ok, src} -> {:image, src}
+      :error -> :error
+    end
+  end
+
   defp resolve_src(url, _rev) when url in ["", nil], do: :error
 
   defp resolve_src(url, rev) do
     cond do
-      String.starts_with?(url, "&") and match?({:ok, _}, Blob.ref_to_hex(url)) ->
-        {:ok, Blob.url(url) |> bust(rev)}
-
       String.starts_with?(url, "/") ->
         {:ok, bust(url, rev)}
 
@@ -209,6 +260,34 @@ defmodule HighWire.Markdown do
       true ->
         :error
     end
+  end
+
+  # The sentinel the walk leaves behind for a player: comrak renders it
+  # as an ordinary link, and the render pass swaps it for the player
+  # element with the file's own link beside it.
+  defp media_href(kind, hex), do: "blobmedia:" <> kind <> ":" <> hex
+
+  # A post that names no file still gets a label: the reference itself.
+  defp media_label(children, ref) do
+    case children do
+      [%Text{literal: ""}] -> [%Text{literal: ref}]
+      [] -> [%Text{literal: ref}]
+      _ -> children
+    end
+  end
+
+  # A blob that is not a picture cannot ride in an <img>: the browser
+  # would fail to decode it and the reference would vanish with it.
+  defp media_players(html, rev) do
+    Regex.replace(
+      ~r/<a href="blobmedia:(audio|video):([0-9a-f]{64})"([^>]*)>/,
+      html,
+      fn _match, kind, hex, rest ->
+        url = bust("/blob/" <> hex, rev)
+
+        ~s(<#{kind} controls preload="none" src="#{url}"></#{kind}><a href="#{url}"#{rest}>)
+      end
+    )
   end
 
   defp bust(path, nil), do: path

@@ -66,6 +66,68 @@ defmodule HighWire.BlobTest do
     "&" <> Base.encode64(bytes) <> ".sha256"
   end
 
+  describe "media_type/1" do
+    test "a picture is a picture" do
+      hex = put_blob("png", <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "bytes">>)
+
+      assert Blob.media_type(ref_for(hex)) == :image
+    end
+
+    test "a recording is a recording" do
+      hex = put_blob("mp3", <<0xFF, 0xFB, "frame">>)
+
+      assert Blob.media_type(ref_for(hex)) == :audio
+    end
+
+    test "a film is a film" do
+      hex = put_blob("webm", <<0x1A, 0x45, 0xDF, 0xA3, "bytes">>)
+
+      assert Blob.media_type(ref_for(hex)) == :video
+    end
+
+    test "anything else is a file" do
+      hex = put_blob("pdf", "%PDF-1.4 rest")
+
+      assert Blob.media_type(ref_for(hex)) == :file
+    end
+
+    test "bytes that have not arrived are missing" do
+      hex = :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
+
+      assert Blob.media_type(ref_for(hex)) == :missing
+    end
+
+    test "a reference that is not a blob is missing" do
+      assert Blob.media_type("not-a-blob") == :missing
+      assert Blob.media_type("&nope=.sha256") == :missing
+    end
+  end
+
+  describe "content_type/1" do
+    test "the type comes from the bytes, not from a name" do
+      hex = put_blob("mp3-type", <<0xFF, 0xFB, "frame">>)
+      path = Path.join(Blob.cache_root(), hex)
+
+      assert Blob.content_type(path) == {:ok, "audio/mpeg"}
+    end
+
+    test "an unreadable file has no type" do
+      assert Blob.content_type(Path.join(Blob.cache_root(), "nothing-here")) ==
+               {:error, :unreadable}
+    end
+  end
+
+  # A blob on disk, so the renderer and the route can see its bytes.
+  defp put_blob(seed, bytes) do
+    hex = Base.encode16(:crypto.hash(:sha256, seed), case: :lower)
+    path = Path.join(Blob.cache_root(), hex)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, bytes)
+    on_exit(fn -> File.rm(path) end)
+
+    hex
+  end
+
   describe "ref/1" do
     test "is the id the engine hashes back: &<standard base64 sha256>.sha256" do
       # erlbutt's hash_id/1 is "&" ++ base64:encode(sha256(Blob)) ++

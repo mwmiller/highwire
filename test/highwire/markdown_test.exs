@@ -50,6 +50,68 @@ defmodule HighWire.MarkdownTest do
     refute Markdown.to_html("![gone](nope)") =~ "<img"
   end
 
+  test "a blob that is a recording becomes a player, not a broken picture" do
+    hex = put_blob("song", <<0xFF, 0xFB, "frame">>)
+    html = Markdown.to_html("![audio:song.mp3](#{blob_ref("song")})", blob_rev: 4)
+
+    assert html =~ ~s(<audio controls preload="none" src="/blob/#{hex}?v=4"></audio>)
+    assert html =~ ~s(<a href="/blob/#{hex}?v=4">audio:song.mp3</a>)
+    refute html =~ "<img"
+  end
+
+  test "a blob that is a film becomes a player" do
+    hex = put_blob("clip", <<0x1A, 0x45, 0xDF, 0xA3, "bytes">>)
+    html = Markdown.to_html("![the clip](#{blob_ref("clip")})", blob_rev: 2)
+
+    assert html =~ ~s(<video controls preload="none" src="/blob/#{hex}?v=2"></video>)
+    refute html =~ "<img"
+  end
+
+  test "a blob that is neither picture nor recording is a link to the file" do
+    hex = put_blob("form", "%PDF-1.4 rest")
+    html = Markdown.to_html("![the form](#{blob_ref("form")})", blob_rev: 1)
+
+    assert html =~ ~s(<a href="/blob/#{hex}?v=1">the form</a>)
+    refute html =~ "<img"
+  end
+
+  test "a picture stays a picture" do
+    hex = put_blob("photo", <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "bytes">>)
+    html = Markdown.to_html("![a photo](#{blob_ref("photo")})", blob_rev: 1)
+
+    assert html =~ ~s(src="/blob/#{hex}?v=1")
+    refute html =~ "<audio"
+  end
+
+  test "a recording with no name is still named after its reference" do
+    hex = put_blob("nameless", <<0xFF, 0xFB, "frame">>)
+    html = Markdown.to_html("![](#{blob_ref("nameless")})", blob_rev: 1)
+
+    assert html =~ ~s(<a href="/blob/#{hex}?v=1">)
+    # the reference is the label, escaped the way text is
+    assert html =~ ~s(>#{String.replace(blob_ref("nameless"), "&", "&amp;")}</a>)
+  end
+
+  test "the marker a preview shows names what the media is" do
+    put_blob("marker-audio", <<0xFF, 0xFB, "frame">>)
+    put_blob("marker-image", <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "bytes">>)
+
+    assert Markdown.marker(blob_ref("marker-audio")) == "[audio]"
+    assert Markdown.marker(blob_ref("marker-image")) == "[image]"
+    assert Markdown.marker(blob_ref("marker-gone")) == "[image]"
+  end
+
+  # A blob on disk, so the renderer can tell what its bytes are.
+  defp put_blob(seed, bytes) do
+    hex = hex(seed)
+    path = Path.join(HighWire.Blob.cache_root(), hex)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, bytes)
+    on_exit(fn -> File.rm(path) end)
+
+    hex
+  end
+
   test "bare blob refs become local blob links" do
     ref = blob_ref("bare")
     html = Markdown.to_html("see #{ref}")

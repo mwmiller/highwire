@@ -131,6 +131,71 @@ defmodule HighWireWeb.BlobControllerTest do
     assert response(conn, 200) == gif
   end
 
+  test "a recording is served as a recording, so a player can play it", %{
+    conn: conn,
+    hex: hex,
+    cache: cache
+  } do
+    File.mkdir_p!(Path.dirname(cache))
+    File.write!(cache, <<0xFF, 0xFB, "frame">>)
+
+    conn = get(conn, "/blob/#{hex}")
+
+    assert media_type(conn) == "audio/mpeg"
+    assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+  end
+
+  test "a player asking for part of a blob is answered with that part", %{
+    conn: conn,
+    hex: hex,
+    cache: cache
+  } do
+    File.mkdir_p!(Path.dirname(cache))
+    File.write!(cache, "0123456789")
+
+    conn =
+      conn
+      |> put_req_header("range", "bytes=2-5")
+      |> get("/blob/#{hex}")
+
+    assert response(conn, 206) == "2345"
+    assert get_resp_header(conn, "content-range") == ["bytes 2-5/10"]
+    assert get_resp_header(conn, "accept-ranges") == ["bytes"]
+  end
+
+  test "an open-ended range runs to the end of the blob", %{
+    conn: conn,
+    hex: hex,
+    cache: cache
+  } do
+    File.mkdir_p!(Path.dirname(cache))
+    File.write!(cache, "0123456789")
+
+    conn =
+      conn
+      |> put_req_header("range", "bytes=6-")
+      |> get("/blob/#{hex}")
+
+    assert response(conn, 206) == "6789"
+    assert get_resp_header(conn, "content-range") == ["bytes 6-9/10"]
+  end
+
+  test "a range nobody can satisfy falls back to the whole blob", %{
+    conn: conn,
+    hex: hex,
+    cache: cache
+  } do
+    File.mkdir_p!(Path.dirname(cache))
+    File.write!(cache, "0123456789")
+
+    conn =
+      conn
+      |> put_req_header("range", "bytes=50-60")
+      |> get("/blob/#{hex}")
+
+    assert response(conn, 200) == "0123456789"
+  end
+
   test "keys that are not 64 hex characters never reach the stores", %{conn: conn} do
     for bad <- ["not-hex", String.duplicate("a", 63), String.duplicate("a", 65)] do
       conn = get(conn, "/blob/#{bad}")
@@ -226,7 +291,7 @@ defmodule HighWireWeb.BlobControllerTest do
       # The test home has no sidecar: the bytes are validated, read, and
       # then there is nothing to hand them to.
       assert %{"error" => message} = upload(conn, "image/png", @png) |> json_response(503)
-      assert message =~ "engine"
+      assert message =~ "not connected"
     end
 
     defp upload(conn, type, body) do
