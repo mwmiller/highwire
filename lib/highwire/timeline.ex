@@ -641,6 +641,14 @@ defmodule HighWire.Timeline do
       contact_ref: nil,
       contact_buf: [],
       contact_msgs: [],
+      # The store-wide contact drain folds into one row per author per
+      # direction per spate. That fold is the single most expensive step
+      # over the 200k+ edits the drain carries, and running it inside
+      # every payload rebuilt it from scratch and held the Timeline — so
+      # every mount queued behind it. Kept folded here instead: the rows
+      # are computed when edits land (and only for the directions those
+      # edits touched), and the payload merges the finished rows.
+      collapsed_contacts: %{by_group: %{}, rows: %{}},
       about_ref: nil,
       # The feeds the store holds an `about` message for — the rail
       # suggests nothing else. Starts empty so the filter is armed from
@@ -2426,6 +2434,7 @@ defmodule HighWire.Timeline do
       | contact_ref: nil,
         contact_buf: [],
         contact_msgs: state.contact_msgs ++ fresh,
+        collapsed_contacts: fold_contacts(state.collapsed_contacts, fresh),
         last_drain_at: System.monotonic_time(:millisecond)
     }
 
@@ -2559,9 +2568,13 @@ defmodule HighWire.Timeline do
 
   defp build_payload(state) do
     # The window (acc) plus the store-wide contact drain: follow events
-    # are rare and old, so they routinely sit outside the per-feed
-    # window and would otherwise age out of every payload.
-    acc = Enum.uniq_by(state.acc ++ state.contact_msgs, & &1["key"])
+    # are rare and old, so they routinely sit outside the per-feed window
+    # and would otherwise age out of every payload. The drain arrives as
+    # one edit per relationship, so only the spate anchors — the edits the
+    # rows actually render — merge in; the folded rows carry the rest.
+    contacts = state.collapsed_contacts.rows |> Map.values() |> List.flatten()
+    anchors = Enum.map(contacts, & &1.anchor)
+    acc = Enum.uniq_by(state.acc ++ anchors, & &1["key"])
 
     reply_counts = reply_counts(acc)
     likes = likes_state(acc)
@@ -2579,7 +2592,7 @@ defmodule HighWire.Timeline do
       |> Enum.take(2000)
       |> Enum.map(&search_projection/1)
 
-    feed = build_feed(acc, state.self_id, like_counts)
+    feed = build_feed(acc, state.self_id, like_counts, contacts)
 
     # Suggestion rows need names/avatars too, or the sidebar shows bare
     # short ids for strangers — profile fetch covers them on top of the
@@ -2782,6 +2795,10 @@ defmodule HighWire.Timeline do
   # row per author per direction per spate listing who they touched.
   @doc false
   def build_feed(acc, self_id, like_counts) do
+    build_feed(acc, self_id, like_counts, nil)
+  end
+
+  defp build_feed(acc, self_id, like_counts, contact_entries) do
     # Every row builder below names a message by its value map
     # (value["author"], value["content"], …), so a record whose envelope
     # carries no value map — a corrupt one — would crash the timeline
@@ -2791,6 +2808,15 @@ defmodule HighWire.Timeline do
     # its value has nothing to render anyway.
     acc = Enum.filter(acc, &value_of/1)
     acc = Enum.map(acc, &sanitize_text/1)
+
+    # A caller that already folded the store-wide contact drain (the
+    # payload path) hands the finished rows in; the raw path folds them
+    # here, once, off the sanitized window.
+    contact_entries =
+      case contact_entries do
+        nil -> collapse_contacts(acc) |> Map.values() |> List.flatten()
+        entries -> entries
+      end
 
     # Boxed (encrypted) messages never form public rows — the Private tab
     # shows them decrypted, straight from privateFeed.
@@ -2808,7 +2834,7 @@ defmodule HighWire.Timeline do
     # line pointing nowhere. `edited_by` records every revision the row
     # absorbed, newest-first.
     edit_index = edit_index(acc)
-    {contacts, rest} = Enum.split_with(acc, &contact?/1)
+    {_contacts, rest} = Enum.split_with(acc, &contact?/1)
 
     {threaded, standalone} =
       Enum.split_with(rest, fn msg ->
@@ -2821,61 +2847,10 @@ defmodule HighWire.Timeline do
         thread_root(msg, by_key) || edit_thread(msg, by_key, edit_index)
       end)
       |> Enum.map(fn {root_key, group} ->
-        root_msg = Map.get(by_key, root_key)
-
-        edits =
-          group
-          |> Enum.filter(&edit?/1)
-          |> Enum.sort_by(&bump_ts/1, :desc)
-
-        # A row's text is the newest revision of the post it shows —
-        # otherwise the feed renders the pre-edit body forever and the
-        # edit is a row the reader can't act on.
-        row_msg =
-          case edits do
-            [latest | _] -> latest
-            [] -> root_msg || hd(Enum.sort_by(group, &bump_ts/1, :desc))
-          end
-
-        sorted = Enum.sort_by(group, &bump_ts/1, :desc)
-
-        # The head never previews itself; a fallback head (root absent
-        # from the window) is excluded too, else it greets its own row.
-        recent =
-          sorted
-          |> Enum.reject(&(&1["key"] in [root_key, row_msg["key"]]))
-          |> Enum.filter(&post?/1)
-          |> Enum.take(3)
-
-        replies =
-          group
-          |> Enum.filter(&post?/1)
-          |> Enum.reject(&(&1["key"] == row_msg["key"]))
-          |> length()
-
-        likes = thread_likes(group, root_key, like_counts)
-
-        # The edit is activity on the post: a revision moves the row up
-        # the feed exactly like a reply does.
-        activity = sorted |> Enum.map(&bump_ts/1) |> Enum.max()
-
-        participants = thread_participants(group, root_msg)
-
-        # A mention anywhere in the thread marks the row — including the
-        # root when it never made it into the window, which is exactly
-        # where keying off content["root"] alone loses mentions.
-        mentioned? = Enum.any?(maybe_cons(root_msg, group), &mentions_self?(&1, self_id))
-
-        build_entry(:thread, row_msg, activity, participants, replies, likes, recent,
-          self_id: self_id,
-          rooted: root_msg != nil,
-          mentioned?: mentioned?,
-          root_key: root_key
-        )
-        |> Map.put(:edited_by, Enum.map(edits, & &1["value"]["author"]))
+        build_thread_entry(root_key, group, by_key, like_counts, self_id)
       end)
 
-    contact_entries = contact_rows(contacts, self_id)
+    contact_entries = Enum.map(contact_entries, &contact_row(&1, self_id))
 
     other_entries =
       standalone
@@ -2902,6 +2877,64 @@ defmodule HighWire.Timeline do
     |> Enum.take(2000)
   end
 
+  # One row per thread: the head's newest text, the reply rollup, the
+  # likes, a preview of the most recent replies, and the activity that
+  # positions the row. `edits` are the revisions the row absorbed.
+  defp build_thread_entry(root_key, group, by_key, like_counts, self_id) do
+    root_msg = Map.get(by_key, root_key)
+
+    edits =
+      group
+      |> Enum.filter(&edit?/1)
+      |> Enum.sort_by(&bump_ts/1, :desc)
+
+    # A row's text is the newest revision of the post it shows —
+    # otherwise the feed renders the pre-edit body forever and the
+    # edit is a row the reader can't act on.
+    row_msg =
+      case edits do
+        [latest | _] -> latest
+        [] -> root_msg || hd(Enum.sort_by(group, &bump_ts/1, :desc))
+      end
+
+    sorted = Enum.sort_by(group, &bump_ts/1, :desc)
+
+    # The head never previews itself; a fallback head (root absent
+    # from the window) is excluded too, else it greets its own row.
+    recent =
+      sorted
+      |> Enum.reject(&(&1["key"] in [root_key, row_msg["key"]]))
+      |> Enum.filter(&post?/1)
+      |> Enum.take(3)
+
+    replies =
+      group
+      |> Enum.filter(&post?/1)
+      |> Enum.reject(&(&1["key"] == row_msg["key"]))
+      |> length()
+
+    likes = thread_likes(group, root_key, like_counts)
+
+    # The edit is activity on the post: a revision moves the row up
+    # the feed exactly like a reply does.
+    activity = sorted |> Enum.map(&bump_ts/1) |> Enum.max()
+
+    participants = thread_participants(group, root_msg)
+
+    # A mention anywhere in the thread marks the row — including the
+    # root when it never made it into the window, which is exactly
+    # where keying off content["root"] alone loses mentions.
+    mentioned? = Enum.any?(maybe_cons(root_msg, group), &mentions_self?(&1, self_id))
+
+    build_entry(:thread, row_msg, activity, participants, replies, likes, recent,
+      self_id: self_id,
+      rooted: root_msg != nil,
+      mentioned?: mentioned?,
+      root_key: root_key
+    )
+    |> Map.put(:edited_by, Enum.map(edits, & &1["value"]["author"]))
+  end
+
   # Contact edits arrive as many messages per author; they collapse into
   # one row per author *per direction* *per spate* — who they followed,
   # who they blocked, who they let go — positioned at the latest edit of
@@ -2914,31 +2947,82 @@ defmodule HighWire.Timeline do
   # store holds, and folding all of them into a single row pasted the
   # author's whole graph beside a block made this year: "blocked … +199
   # more".
-  defp contact_rows(msgs, self_id) do
+  # Fold a fresh batch of contact edits into the stored collapse. Only
+  # the directions the batch touched are re-split; every other direction
+  # keeps the rows it already had, so a store-wide drain folds each
+  # direction once and a later edit folds its own direction alone rather
+  # than re-reading the whole store-wide history.
+  defp fold_contacts(collapsed, []), do: collapsed
+
+  defp fold_contacts(%{by_group: groups, rows: rows}, fresh) do
+    {groups, rows} =
+      fresh
+      |> group_contacts()
+      |> Enum.reduce({groups, rows}, fn {{_author, _action} = group, msgs}, {g, r} ->
+        merged = Map.get(g, group, []) ++ msgs
+        {Map.put(g, group, merged), Map.put(r, group, collapse_group(group, merged))}
+      end)
+
+    %{by_group: groups, rows: rows}
+  end
+
+  # Fold raw contact edits into one entry per author per direction per
+  # spate, keyed by the direction. The entry carries the spate's anchor
+  # (its newest edit, which positions the row) and the distinct feeds
+  # that spate touched.
+  defp collapse_contacts(msgs) do
+    msgs
+    |> group_contacts()
+    |> Map.new(fn {group, group_msgs} -> {group, collapse_group(group, group_msgs)} end)
+  end
+
+  # Contact edits grouped by direction — the unit a fold touches. A batch
+  # merges into the groups it names and leaves the rest alone.
+  defp group_contacts(msgs) do
     msgs
     |> Enum.filter(fn msg ->
       is_binary(msg["value"]["author"]) and is_binary(content(msg)["contact"])
     end)
     |> Enum.group_by(fn msg -> {msg["value"]["author"], contact_action(content(msg))} end)
-    |> Enum.flat_map(fn {{author, action}, group} ->
-      group
-      |> Enum.map(fn msg -> {bump_ts(msg), msg} end)
-      |> Enum.sort_by(&elem(&1, 0), :desc)
-      |> spates()
-      |> Enum.map(fn [{anchor_ts, anchor} | _] = spate ->
-        contacts =
-          spate
-          |> Enum.map(&content(elem(&1, 1))["contact"])
-          |> Enum.uniq()
+  end
 
-        build_entry(:contact, anchor, anchor_ts, [author], 0, 0, [],
-          self_id: self_id,
-          rooted: true
-        )
-        |> Map.put(action, contacts)
-        |> Map.put(:contact_action, action)
-      end)
+  # One direction's edits — newest first — folded into spate entries.
+  defp collapse_group({author, action}, msgs) do
+    msgs
+    |> Enum.map(fn msg -> {bump_ts(msg), msg} end)
+    |> Enum.sort_by(&elem(&1, 0), :desc)
+    |> spates()
+    |> Enum.map(fn [{anchor_ts, anchor} | _] = spate ->
+      contacts =
+        spate
+        |> Enum.map(&content(elem(&1, 1))["contact"])
+        |> Enum.uniq()
+
+      %{
+        anchor: anchor,
+        anchor_ts: anchor_ts,
+        author: author,
+        action: action,
+        contacts: contacts
+      }
     end)
+  end
+
+  # One collapsed spate as a feed row. Kept apart from the fold so a
+  # stored collapse can be rendered into the payload without re-reading
+  # the messages it came from.
+  defp contact_row(
+         %{anchor: anchor, anchor_ts: anchor_ts, action: action, contacts: contacts},
+         self_id
+       ) do
+    author = anchor["value"]["author"]
+
+    build_entry(:contact, anchor, anchor_ts, [author], 0, 0, [],
+      self_id: self_id,
+      rooted: true
+    )
+    |> Map.put(action, contacts)
+    |> Map.put(:contact_action, action)
   end
 
   # Split one direction's edits — newest first — into spates: edits no

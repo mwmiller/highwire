@@ -213,6 +213,7 @@ defmodule HighWire.TimelineIndexTest do
         self_id: "@me.ed25519",
         follows: [],
         contact_msgs: [],
+        collapsed_contacts: %{by_group: %{}, rows: %{}},
         acc: [post("@alice", "%post.sha256", 1_000)],
         messages: messages,
         blob_rev: 0,
