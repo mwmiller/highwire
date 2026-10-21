@@ -1365,6 +1365,36 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert delay.(50) == 30_000
     end
 
+    test "the fill behind the window does not flash the loading bar", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs =
+        for i <- 1..8 do
+          ssb_msg("%root-#{i}.sha256", "@bob:.ed25519", now - i * 1_000, %{
+            "type" => "post",
+            "text" => "words #{i}"
+          })
+        end
+
+      {:ok, view, _html} = live(conn, "/")
+
+      # An updated payload turns the feed on and kicks its own first page
+      # with a nil resume. That fill is a background top-up behind rows
+      # the window already painted, so it must not read as "loading more"
+      # over a feed the reader is reading.
+      notify(view, feed_payload(msgs))
+      html = render(view)
+      assert html =~ "words 1"
+      refute html =~ "feed-loading"
+
+      # A page past the first is the reader's own scroll into the past, and
+      # that one does say so.
+      page = %{rows: HighWire.Timeline.build_feed(msgs, nil, %{}), resume: 42, more: true}
+      send(view.pid, {:page_loaded, :public, nil, page})
+      html = render_click(view, "load-more", %{})
+      assert html =~ "Loading more…"
+    end
+
     test "a page in flight tells the reader it is loading more", %{conn: conn} do
       now = 1_700_000_000_000
 

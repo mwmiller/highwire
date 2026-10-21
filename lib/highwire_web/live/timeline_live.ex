@@ -760,8 +760,17 @@ defmodule HighWireWeb.TimelineLive do
   # waiting out the backoff before it is requested again. Both sets are
   # keyed {view, resume} and a switch of tab strands neither: the count
   # for an abandoned view is dropped when its timer next fires.
-  defp pending_page?(pending, view) do
-    Enum.any?(pending, fn {pending_view, _resume} -> pending_view == view end)
+  #
+  # The initial fill (resume nil, kicked on mount) is not "more": the
+  # window's rows are already on screen and the page is a background
+  # top-up, so it must not flash a loading bar over a feed the reader is
+  # already reading. Only a page past that first one, or a retry of it,
+  # counts.
+  defp pending_more?(pending, view) do
+    Enum.any?(pending, fn
+      {pending_view, resume} when pending_view == view and is_integer(resume) -> true
+      _ -> false
+    end)
   end
 
   # Thread identity is the root key — a window row whose root never
@@ -895,8 +904,8 @@ defmodule HighWireWeb.TimelineLive do
 
   defp loading_rows?(assigns, rows) do
     rows != [] and assigns.q == "" and
-      (pending_page?(assigns.page_inflight, assigns.view) or
-         pending_page?(assigns.page_retries, assigns.view))
+      (pending_more?(assigns.page_inflight, assigns.view) or
+         pending_more?(assigns.page_retries, assigns.view))
   end
 
   defp finished_rows?(assigns, page, rows) do
