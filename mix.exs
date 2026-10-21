@@ -83,7 +83,10 @@ defmodule HighWire.MixProject do
       {:erlbutt,
        git: "https://github.com/cmoid/erlbutt", branch: "main", compile: false, app: false},
       {:bandit, "~> 1.0"},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      # Benchmarks only (bench/), and dev-only so it never reaches a
+      # release.
+      {:benchee, "~> 1.5", only: :dev, runtime: false}
     ]
   end
 
