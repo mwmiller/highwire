@@ -677,6 +677,27 @@ defmodule HighWire.TimelineTest do
   end
 
   describe "contact drain (messagesByType)" do
+    # A broadcast payload has every key a view reads, not just the ones
+    # under test: these unit states publish on the real topic, and a
+    # half-shaped map would crash any LiveView subscribed at the time.
+    defp payload(profiles) do
+      %{
+        feed: [],
+        messages: [],
+        reply_counts: %{},
+        like_counts: %{},
+        likes_by: %{},
+        my_likes: [],
+        index: %{},
+        follows: [],
+        self_id: nil,
+        profiles: profiles,
+        suggestions: [],
+        contacts: [],
+        blob_rev: 0
+      }
+    end
+
     # Follow events sit outside the per-feed window and never enter the
     # paged publicFeed — the store-wide drain is what keeps them on the
     # timeline at all.
@@ -715,7 +736,7 @@ defmodule HighWire.TimelineTest do
           status: :loading,
           acc: [post],
           pending: %{},
-          messages: %{feed: [], profiles: %{"@me.ed25519" => %{}, "@a.ed25519" => %{}}},
+          messages: payload(%{"@me.ed25519" => %{}, "@a.ed25519" => %{}}),
           blob_rev: 0,
           gen: 0,
           done_count: 0,
@@ -1014,7 +1035,7 @@ defmodule HighWire.TimelineTest do
           about_ref: :about_ref,
           about_snapshot?: false,
           status: :ok,
-          messages: %{feed: [], profiles: %{target => %{name: nil, image: nil}}, blob_rev: 0}
+          messages: payload(%{target => %{name: nil, image: nil}})
         )
 
       about =
@@ -1039,11 +1060,7 @@ defmodule HighWire.TimelineTest do
       st =
         drain_state(
           status: :ok,
-          messages: %{
-            feed: [],
-            profiles: %{id => %{name: nil, image: "&old=.sha256"}},
-            blob_rev: 0
-          }
+          messages: payload(%{id => %{name: nil, image: "&old=.sha256"}})
         )
 
       fetched = %{id => %{name: "Some Third Party", image: "&new=.sha256"}}
