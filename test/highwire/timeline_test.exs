@@ -632,6 +632,7 @@ defmodule HighWire.TimelineTest do
           # @a is a follow id too, so the contact author's profile is
           # never narrowed out of the payload between the two builds.
           follows: ["@me.ed25519", "@a.ed25519"],
+          blocked: [],
           self_id: "@me.ed25519",
           status: :loading,
           acc: [post],

@@ -194,4 +194,32 @@ defmodule HighWire.SSB.SuggestTest do
       assert Enum.map(rows, & &1["id"]) == [@a]
     end
   end
+
+  test "a blocked feed never takes a slot in the drawn rows" do
+    # Six candidates behind one follower. The ranking draws five, so with
+    # a blocked feed still in the pool the rail would show four — the
+    # drawn row dropped after the draw, with nothing to backfill it.
+    candidates = for i <- 1..6, do: "@f#{i}=.ed25519"
+    contact_msgs = Enum.map(candidates, &follow("@xxx=.ed25519", &1))
+    follows = [@me, "@xxx=.ed25519"]
+
+    blocked = "@f1=.ed25519"
+
+    for _ <- 1..20 do
+      {rows1, rows2} =
+        Suggest.sets(contact_msgs, follows, @me, nil, blocked: MapSet.new([blocked]))
+
+      for rows <- [rows1, rows2] do
+        assert length(rows) == 5
+        refute blocked in Enum.map(rows, & &1["id"])
+      end
+    end
+
+    # The same set taken from the pool the ranking actually builds: the
+    # blocked candidate is gone before the draw, not after it.
+    raw =
+      Suggest.rank(contact_msgs, follows, @me, MapSet.new(), blocked: [blocked], shuffle: false)
+
+    refute blocked in Enum.map(raw, & &1["id"])
+  end
 end

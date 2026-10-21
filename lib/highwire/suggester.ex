@@ -68,13 +68,26 @@ defmodule HighWire.Suggester do
 
   @doc """
   Hand over an input snapshot (`contact_msgs`, `follows`, `self_id`,
-  `about_ids`). A ranking runs only when the snapshot differs from the
-  one already ranked (or in flight).
+  `about_ids`, `blocked`). A ranking runs only when the snapshot differs
+  from the one already ranked (or in flight).
+
+  `blocked` is a `MapSet` (or list) of feed ids the account blocks. It is
+  part of the snapshot because the ranking drops blocked feeds before the
+  pool is cut: filtering them out of the drawn rows instead would leave
+  the rail a row short whenever a blocked feed was drawn, with nothing to
+  backfill it.
   """
-  @spec cast_inputs([map()], [String.t()], String.t() | nil, MapSet.t() | nil, GenServer.server()) ::
-          :ok
-  def cast_inputs(contact_msgs, follows, self_id, about_ids, server \\ __MODULE__) do
-    inputs = {List.wrap(contact_msgs), List.wrap(follows), self_id, about_ids}
+  @spec cast_inputs(
+          [map()],
+          [String.t()],
+          String.t() | nil,
+          MapSet.t() | nil,
+          MapSet.t() | [String.t()],
+          GenServer.server()
+        ) :: :ok
+  def cast_inputs(contact_msgs, follows, self_id, about_ids, blocked, server \\ __MODULE__) do
+    inputs =
+      {List.wrap(contact_msgs), List.wrap(follows), self_id, about_ids, MapSet.new(blocked)}
 
     case GenServer.whereis(server) do
       nil -> :ok
@@ -206,18 +219,25 @@ defmodule HighWire.Suggester do
 
   defp rank_now(
          %{task_ref: nil} = state,
-         {_contact_msgs, _follows, _self_id, _about_ids} = inputs
+         {_contact_msgs, _follows, _self_id, _about_ids, _blocked} = inputs
        ) do
     rank(state, inputs, serve: true)
   end
 
   defp rank_now(state, _inputs), do: state
 
-  defp rank(%{task_ref: nil} = state, {contact_msgs, follows, self_id, about_ids} = inputs, opts)
+  defp rank(
+         %{task_ref: nil} = state,
+         {contact_msgs, follows, self_id, about_ids, blocked} = inputs,
+         opts
+       )
        when is_list(contact_msgs) and is_list(follows) do
     task =
       Task.Supervisor.async_nolink(HighWire.TaskSupervisor, fn ->
-        Suggest.sets(contact_msgs, follows, self_id, about_ids, shuffle: true)
+        Suggest.sets(contact_msgs, follows, self_id, about_ids,
+          blocked: blocked,
+          shuffle: true
+        )
       end)
 
     %{state | task_ref: task.ref, task_serve: Keyword.fetch!(opts, :serve), ranked: inputs}

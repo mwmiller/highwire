@@ -34,20 +34,24 @@ defmodule HighWire.SSB.Suggest do
   @doc """
   Rank the store's contact graph into one set of suggestion rows.
 
-  Candidates are feeds we do not follow, endorsed by at least one feed
-  we do follow (friend-of-friend); self and already-followed feeds never
-  appear. Endorsements only count from feeds we follow, and — when
-  `about_ids` is a set — the store must hold an `about` message for the
-  candidate (a nil set is the deliberate "no filter"; Timeline passes an
-  empty set until the about pass has landed, which filters the list
-  blank rather than rendering bare ids). Sorted by endorsement desc,
-  then total followers desc, then id, and the top of that ordering is
-  shuffled and drawn from — pass `shuffle: false` for the raw ranking.
+  Candidates are feeds we do not follow and do not block, endorsed by at
+  least one feed we follow (friend-of-friend); self and already-followed
+  feeds never appear, and neither do blocked ones. Blocking is applied
+  here, before the pool is cut — filtering after the draw would strand a
+  drawn row and leave the rail a row short, with nothing to backfill it.
+  Endorsements only count from feeds we follow, and — when `about_ids` is
+  a set — the store must hold an `about` message for the candidate (a nil
+  set is the deliberate "no filter"; Timeline passes an empty set until
+  the about pass has landed, which filters the list blank rather than
+  rendering bare ids). Sorted by endorsement desc, then total followers
+  desc, then id, and the top of that ordering is shuffled and drawn from
+  — pass `shuffle: false` for the raw ranking. `blocked` arrives in
+  `opts` as a `MapSet` or list of feed ids.
   """
   @spec rank([map()], [String.t()], String.t() | nil, MapSet.t() | nil, keyword()) :: [map()]
   def rank(contact_msgs, follows, self_id, about_ids, opts \\ []) do
     contact_msgs
-    |> candidates(follows, self_id, about_ids)
+    |> candidates(follows, self_id, about_ids, blocked_set(opts))
     |> sample(opts)
   end
 
@@ -62,11 +66,13 @@ defmodule HighWire.SSB.Suggest do
   @spec sets([map()], [String.t()], String.t() | nil, MapSet.t() | nil, keyword()) ::
           {[map()], [map()]}
   def sets(contact_msgs, follows, self_id, about_ids, opts \\ []) do
-    pool = candidates(contact_msgs, follows, self_id, about_ids)
+    pool = candidates(contact_msgs, follows, self_id, about_ids, blocked_set(opts))
     {sample(pool, opts), sample(pool, opts)}
   end
 
-  defp candidates(contact_msgs, follows, self_id, about_ids) do
+  defp blocked_set(opts), do: opts |> Keyword.get(:blocked, []) |> MapSet.new()
+
+  defp candidates(contact_msgs, follows, self_id, about_ids, blocked) do
     endorsers_of_followed =
       follows
       |> Enum.filter(&is_binary/1)
@@ -75,7 +81,9 @@ defmodule HighWire.SSB.Suggest do
     {endorsers, followers} = graph(contact_msgs)
 
     endorsers
-    |> Map.reject(fn {id, _} -> id == self_id or MapSet.member?(endorsers_of_followed, id) end)
+    |> Map.reject(fn {id, _} ->
+      id == self_id or MapSet.member?(endorsers_of_followed, id) or MapSet.member?(blocked, id)
+    end)
     |> Enum.map(fn {id, set} ->
       endorsement = Enum.count(set, &MapSet.member?(endorsers_of_followed, &1))
 

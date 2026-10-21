@@ -65,7 +65,7 @@ defmodule HighWire.SuggesterTest do
 
     # @xxx (whom we follow) endorses @a; @b has no endorsement.
     contacts = [follow(@xxx, @a), follow(@xxx, @b, false)]
-    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, :test_suggester)
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, MapSet.new(), :test_suggester)
 
     assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) != [] end)
 
@@ -81,7 +81,14 @@ defmodule HighWire.SuggesterTest do
     cache = tmp_cache_path()
     start(cache)
 
-    Suggester.cast_inputs([follow(@xxx, @a)], [@me, @xxx], @me, nil, :test_suggester)
+    Suggester.cast_inputs(
+      [follow(@xxx, @a)],
+      [@me, @xxx],
+      @me,
+      nil,
+      MapSet.new(),
+      :test_suggester
+    )
 
     assert wait_until(fn ->
              Suggester.get_suggestions(:test_suggester) == [
@@ -92,11 +99,19 @@ defmodule HighWire.SuggesterTest do
     # Following @b removes @b's endorsement weight only if we no longer
     # follow @xxx; here we instead start following @a itself, so @a is no
     # longer a candidate.
-    Suggester.cast_inputs([follow(@xxx, @a)], [@me, @xxx, @a], @me, nil, :test_suggester)
+    Suggester.cast_inputs(
+      [follow(@xxx, @a)],
+      [@me, @xxx, @a],
+      @me,
+      nil,
+      MapSet.new(),
+      :test_suggester
+    )
+
     assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) == [] end)
 
     # A brand-new graph surfaces a fresh candidate.
-    Suggester.cast_inputs([follow(@a, @b)], [@me, @a], @me, nil, :test_suggester)
+    Suggester.cast_inputs([follow(@a, @b)], [@me, @a], @me, nil, MapSet.new(), :test_suggester)
 
     assert wait_until(fn ->
              Suggester.get_suggestions(:test_suggester) == [
@@ -111,12 +126,19 @@ defmodule HighWire.SuggesterTest do
 
     contacts = [follow(@xxx, @a), follow(@xxx, @b)]
 
-    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, :test_suggester)
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, MapSet.new(), :test_suggester)
     assert wait_until(fn -> length(Suggester.get_suggestions(:test_suggester)) == 2 end)
 
     # The about pass lands: only @b survives the filter — and the new
     # snapshot re-ranks even though the graph itself did not move.
-    Suggester.cast_inputs(contacts, [@me, @xxx], @me, MapSet.new([@b]), :test_suggester)
+    Suggester.cast_inputs(
+      contacts,
+      [@me, @xxx],
+      @me,
+      MapSet.new([@b]),
+      MapSet.new(),
+      :test_suggester
+    )
 
     assert wait_until(fn ->
              Suggester.get_suggestions(:test_suggester) == [%{"id" => @b, "followers" => 1}]
@@ -131,7 +153,7 @@ defmodule HighWire.SuggesterTest do
     # nine, shuffled, so consecutive sets differ.
     candidates = for i <- 1..9, do: "@f#{i}=.ed25519"
     contacts = Enum.map(candidates, &follow(@xxx, &1))
-    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, :test_suggester)
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, MapSet.new(), :test_suggester)
 
     assert wait_until(fn -> length(Suggester.get_suggestions(:test_suggester)) == 5 end)
     first = Suggester.get_suggestions(:test_suggester)
@@ -173,6 +195,7 @@ defmodule HighWire.SuggesterTest do
         [@me, @xxx],
         @me,
         MapSet.new(["@k#{i}=.ed25519"]),
+        MapSet.new(),
         :test_suggester
       )
 
@@ -185,12 +208,47 @@ defmodule HighWire.SuggesterTest do
     assert length(:sys.get_state(:test_suggester).ready) <= 2
   end
 
+  test "a block in the snapshot re-ranks and the rail keeps its full set" do
+    cache = tmp_cache_path()
+    start(cache)
+
+    # Six candidates behind one follower; the ranking draws five. Blocking
+    # one of the drawn feeds must still yield five rows — the block is
+    # applied before the pool is cut, so a fresh candidate takes the slot
+    # instead of the rail coming up a row short.
+    candidates = for i <- 1..6, do: "@f#{i}=.ed25519"
+    contacts = Enum.map(candidates, &follow(@xxx, &1))
+
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, MapSet.new(), :test_suggester)
+    assert wait_until(fn -> length(Suggester.get_suggestions(:test_suggester)) == 5 end)
+
+    blocked = hd(candidates)
+    # A block also retracts the follow, so the blocked feed leaves the
+    # follow list as well as joining the block set.
+    Suggester.cast_inputs(
+      contacts,
+      [@me, @xxx],
+      @me,
+      nil,
+      MapSet.new([blocked]),
+      :test_suggester
+    )
+
+    # Wait on the block actually taking effect, not merely on the count:
+    # the pre-block set is already five rows, so a length check would pass
+    # before the re-rank lands.
+    assert wait_until(fn ->
+             ids = Enum.map(Suggester.get_suggestions(:test_suggester), & &1["id"])
+             length(ids) == 5 and blocked not in ids
+           end)
+  end
+
   test "a ranking that dies while a refresh is owed is retried, not dropped" do
     cache = tmp_cache_path()
     start(cache, retry_ms: 20)
 
     contacts = [follow(@xxx, @a)]
-    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, :test_suggester)
+    Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, MapSet.new(), :test_suggester)
     assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) != [] end)
 
     # The moment a failed ranking leaves behind: no task, a refresh

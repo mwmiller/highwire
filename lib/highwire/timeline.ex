@@ -1548,7 +1548,13 @@ defmodule HighWire.Timeline do
     # list). Hand it off-process only once the contact graph is loaded —
     # before that there is nothing to rank against.
     if state.contact_msgs != [] do
-      Suggester.cast_inputs(state.contact_msgs, state.follows, state.self_id, state.about_ids)
+      Suggester.cast_inputs(
+        state.contact_msgs,
+        state.follows,
+        state.self_id,
+        state.about_ids,
+        state.blocked
+      )
     end
 
     # The rail's contacts are drawn by HighWire.Contacts, which re-draws
@@ -1674,7 +1680,7 @@ defmodule HighWire.Timeline do
   # gossip.peers refresh for the /network dashboard — a cheap local
   # sync RPC — and a read-back of the "Whom to follow" rows, which
   # HighWire.Suggester ranks off-process from the contact drain
-  # (Suggest.rank/4; the engine has no whoToFollow RPC). The dashboard
+  # (Suggest.rank/5; the engine has no whoToFollow RPC). The dashboard
   # stays hidden on engines predating its RPC (the call answers `true`,
   # which the branch does not accept).
   def handle_info({:network, gen}, %{gen: current} = state) when gen == current do
@@ -1843,10 +1849,12 @@ defmodule HighWire.Timeline do
   end
 
   # The rail's "Whom to follow" rows, with the feeds this account blocks
-  # taken out. The ranking process (HighWire.Suggester) ranks the raw
-  # contact graph and has no notion of blocks, so the filter lives at the
-  # display edge — a refresh can never offer back the feed the reader
-  # just blocked.
+  # taken out. The ranking drops blocked feeds before it cuts its pool
+  # (Suggest.candidates/5), so fresh rows never contain one; this edge
+  # filter is what covers the rows loaded from the disk cache at startup,
+  # which were ranked before the current block list was known. It also
+  # keeps a block applied immediately — a refresh cannot offer back the
+  # feed the reader just blocked, even if a re-rank has not run yet.
   defp suggestions(state), do: reject_blocked(Suggester.get_suggestions(), blocked_ids(state))
 
   defp reject_blocked(rows, blocked), do: Enum.reject(rows, &(&1["id"] in blocked))
@@ -2198,7 +2206,13 @@ defmodule HighWire.Timeline do
     # A refilled store-wide contact graph is a new ranking input. Hand it
     # to the Suggester off-process; Timeline never ranks inline.
     if state.contact_msgs != [] do
-      Suggester.cast_inputs(state.contact_msgs, state.follows, state.self_id, state.about_ids)
+      Suggester.cast_inputs(
+        state.contact_msgs,
+        state.follows,
+        state.self_id,
+        state.about_ids,
+        state.blocked
+      )
     end
 
     if fresh != [] and state.status == :ok and map_size(state.pending) == 0 do
@@ -2214,7 +2228,13 @@ defmodule HighWire.Timeline do
   # about arrives later joins the set on the pass that sees it.
   defp about_drained(state) do
     if state.contact_msgs != [] do
-      Suggester.cast_inputs(state.contact_msgs, state.follows, state.self_id, state.about_ids)
+      Suggester.cast_inputs(
+        state.contact_msgs,
+        state.follows,
+        state.self_id,
+        state.about_ids,
+        state.blocked
+      )
     end
 
     {:noreply, state}
