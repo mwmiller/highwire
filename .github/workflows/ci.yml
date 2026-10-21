@@ -9,9 +9,9 @@ jobs:
   precommit:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
 
       - name: libsodium
         run: sudo apt-get update && sudo apt-get install -y libsodium-dev

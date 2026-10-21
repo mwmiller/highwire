@@ -66,12 +66,12 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Unix toolchain: every tool pinned in .tool-versions (elixir,
       # erlang, rust, zig, node) in one step. mise has no Windows
       # support — that job sets its toolchain up piecewise below.
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
         if: runner.os != 'Windows'
 
       - uses: erlef/setup-beam@v1
@@ -388,7 +388,7 @@ jobs:
         working-directory: src-tauri
         run: tauri build --config tauri.windows.conf.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: installers-${{ matrix.triple }}
           # Only the final installers: bundle/** also holds the unpacked
@@ -430,12 +430,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/**/*
           generate_release_notes: true
