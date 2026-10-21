@@ -100,6 +100,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(contacts_expanded: false)
       |> assign(max_sidebar_contacts: Contacts.subset_size())
       |> assign(compose: "", compose_error: nil)
+      |> assign(private_recipients: MapSet.new())
       |> assign(mention_suggestions: [])
       |> assign(paged: %{}, page_inflight: MapSet.new(), page_retries: %{})
       |> assign(active: true, peers_timer: peers_timer)
@@ -326,8 +327,17 @@ defmodule HighWireWeb.TimelineLive do
   # locally, then calls the engine. A successful publish clears the box —
   # Timeline itself schedules the reload so the post appears without a
   # poll round-trip.
-  def handle_event("compose-draft", %{"body" => body}, socket) do
-    {:noreply, assign(socket, compose: body)}
+  def handle_event("compose-draft", %{"body" => body} = params, socket) do
+    socket = assign(socket, compose: body)
+
+    # The private composer's recipient boxes ride the same change event,
+    # so the selection survives the re-render a keystroke triggers.
+    if socket.assigns.view == :private do
+      {:noreply,
+       assign(socket, private_recipients: MapSet.new(Map.get(params, "recipients", [])))}
+    else
+      {:noreply, socket}
+    end
   end
 
   # The composer's mention popup: the Mentions hook saw a token started
@@ -342,7 +352,7 @@ defmodule HighWireWeb.TimelineLive do
     {:noreply, assign(socket, :mention_suggestions, [])}
   end
 
-  def handle_event("publish", %{"body" => body}, socket) do
+  def handle_event("publish", %{"body" => body} = params, socket) do
     body = String.trim(body)
 
     cond do
@@ -354,6 +364,9 @@ defmodule HighWireWeb.TimelineLive do
 
       not is_binary(socket.assigns.self_id) ->
         {:noreply, assign(socket, compose_error: "Not connected to the local SSB engine yet.")}
+
+      socket.assigns.view == :private ->
+        publish_private(socket, body, Map.get(params, "recipients", []))
 
       true ->
         case Timeline.publish(body) do
@@ -458,6 +471,31 @@ defmodule HighWireWeb.TimelineLive do
     if socket.assigns.peers_timer, do: Process.cancel_timer(socket.assigns.peers_timer)
 
     {:noreply, socket |> assign(:active, false) |> assign(peers_timer: nil)}
+  end
+
+  # A private thread is boxed for the chosen follows plus self, so the
+  # author can read back what they wrote. No choice means nothing to send
+  # to — the box needs at least one recipient that is not us.
+  defp publish_private(socket, body, chosen) do
+    recipients =
+      chosen
+      |> List.wrap()
+      |> Enum.filter(&is_binary/1)
+      |> Kernel.++([socket.assigns.self_id])
+      |> Enum.uniq()
+
+    if recipients == [socket.assigns.self_id] do
+      {:noreply, assign(socket, compose_error: "Choose at least one recipient.")}
+    else
+      case Timeline.publish_private(body, recipients) do
+        {:ok, _key} ->
+          {:noreply,
+           assign(socket, compose: "", compose_error: nil, private_recipients: MapSet.new())}
+
+        {:error, reason} ->
+          {:noreply, assign(socket, compose_error: publish_error(reason))}
+      end
+    end
   end
 
   # The mention popup's candidates: follows first (already sorted as
@@ -1046,7 +1084,7 @@ defmodule HighWireWeb.TimelineLive do
           next one, and this feed was running to 160. --%>
           <div id="feed-column" phx-hook="ClampRows" class="mx-auto w-full max-w-2xl">
             <form
-              :if={@view == :public and @q == ""}
+              :if={@view in [:public, :private] and @q == ""}
               id="compose"
               phx-hook="Attach"
               data-attach-zone
@@ -1099,6 +1137,33 @@ defmodule HighWireWeb.TimelineLive do
                           {Ident.short_id(id)}
                         </span>
                       </button>
+                    </div>
+                  </div>
+                  <div :if={@view == :private} class="mt-2 rounded border border-edge bg-input p-2">
+                    <p class="mb-1 text-xs text-faint">
+                      Private thread — choose who can read it.
+                    </p>
+                    <div
+                      :if={@all_contacts == []}
+                      class="text-xs italic text-dim"
+                    >
+                      Follow someone first — there is no one to send to yet.
+                    </div>
+                    <div class="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+                      <label
+                        :for={id <- @all_contacts}
+                        class="flex cursor-pointer items-center gap-1.5 rounded border border-edge px-2 py-1 text-xs hover:bg-raised"
+                      >
+                        <input
+                          type="checkbox"
+                          name="recipients[]"
+                          value={id}
+                          checked={id in @private_recipients}
+                        />
+                        <span class="min-w-0 truncate text-paper">
+                          {Ident.display_name(id, @profiles)}
+                        </span>
+                      </label>
                     </div>
                   </div>
                   <p :if={@compose_error} role="alert" class="mt-1 text-xs text-bad">

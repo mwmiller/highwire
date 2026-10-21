@@ -59,7 +59,7 @@ defmodule HighWire.Timeline do
 
   alias HighWire.Blob
   alias HighWire.Contacts
-  alias HighWire.SSB.{Client, Keys, Profile, Sidecar}
+  alias HighWire.SSB.{Client, Keys, PrivateBox, Profile, Sidecar}
   alias HighWire.Suggester
 
   @topic "timeline"
@@ -398,6 +398,16 @@ defmodule HighWire.Timeline do
   def publish(text) when is_binary(text), do: publish_content(post_content(text))
 
   @doc """
+  Publishes a new private thread, boxed for `recipients` — the feeds a
+  private message is meant to reach. Returns the new message key, or
+  `{:error, reason}` when the engine is unreachable or refused.
+  """
+  @spec publish_private(binary(), [binary()]) :: {:ok, binary() | nil} | {:error, term()}
+  def publish_private(text, recipients) when is_binary(text) do
+    boxed_publish(post_content(text), recipients)
+  end
+
+  @doc """
   Stores an image in the engine's blob store and returns the SSB
   reference (`&<base64>.sha256`) a post can carry.
 
@@ -434,6 +444,21 @@ defmodule HighWire.Timeline do
   end
 
   @doc """
+  Publishes a reply inside a private thread.
+
+  The body is boxed for `recipients` and published like any other
+  message, so a reply to a private post never leaves the box it arrived
+  in. `recipients` are feed ids — the thread's participants plus self —
+  and the box format caps them at seven.
+  """
+  @spec reply_private(binary(), binary(), binary(), [binary()]) ::
+          {:ok, binary() | nil} | {:error, term()}
+  def reply_private(root, branch, text, recipients)
+      when is_binary(root) and is_binary(branch) and is_binary(text) do
+    boxed_publish(reply_content(root, branch, text), recipients)
+  end
+
+  @doc """
   Likes (`like/1`) or unlikes (`unlike/1`) a message by publishing a
   vote. The content shape matches this network's production votes
   (`{type, vote: {link, value, expression}}`), which is also what
@@ -444,6 +469,15 @@ defmodule HighWire.Timeline do
 
   @spec unlike(binary()) :: {:ok, binary() | nil} | {:error, term()}
   def unlike(key) when is_binary(key), do: publish_content(vote_content(key, 0))
+
+  @doc """
+  Likes or unlikes a message inside a private thread, boxing the vote for
+  `recipients` so the like does not disclose the thread to the network.
+  """
+  @spec like_private(binary(), [binary()], 0 | 1) :: {:ok, binary() | nil} | {:error, term()}
+  def like_private(key, recipients, value \\ 1) when is_binary(key) do
+    boxed_publish(vote_content(key, value), recipients)
+  end
 
   @doc """
   Follows (`follow/1`) or unfollows (`unfollow/1`) an identity by
@@ -476,7 +510,6 @@ defmodule HighWire.Timeline do
 
   @doc false
   def post_content(text), do: %{"type" => "post", "text" => text}
-
   @doc false
   def reply_content(root, branch, text) do
     %{"type" => "post", "text" => text, "root" => root, "branch" => branch}
@@ -517,6 +550,56 @@ defmodule HighWire.Timeline do
         catch
           :exit, _ -> {:error, :offline}
         end
+    end
+  end
+
+  # A private message is boxed here rather than by the engine: the
+  # recipient list is all a box needs, and the app already holds the
+  # recipients' public keys, so the message goes out through the same
+  # publish chokepoint as everything else. `recps` travels inside the
+  # ciphertext — it is part of the content every recipient reads back,
+  # not a field the network can see.
+  defp boxed_publish(content, recipients) do
+    with {:ok, box} <- private_content(content, recipients) do
+      publish_content(box)
+    end
+  end
+
+  @doc """
+  Boxes `content` for `recipients` — a pure step with no engine or
+  process involved. `recps` joins the content before it is sealed, so a
+  recipient can read back who the message was for; the box format caps
+  the list at seven and self must be among them, which callers who want
+  to read their own message back are responsible for.
+  """
+  @spec private_content(map(), [binary()]) :: {:ok, binary()} | {:error, term()}
+  def private_content(content, recipients) when is_map(content) do
+    with {:ok, recipients} <- private_recipients(recipients) do
+      plaintext = content |> Map.put("recps", recipients) |> Jason.encode!()
+      {:ok, PrivateBox.encrypt(plaintext, recipients)}
+    end
+  end
+
+  @doc false
+  @spec private_recipients([binary()]) :: {:ok, [binary()]} | {:error, term()}
+  def private_recipients(recipients) do
+    ids = recipients |> List.wrap() |> Enum.filter(&is_binary/1) |> Enum.uniq()
+
+    cond do
+      ids == [] ->
+        {:error, :no_recipients}
+
+      length(ids) > PrivateBox.max_recipients() ->
+        Logger.warning(
+          "timeline: #{length(ids)} private recipients exceeds the box's " <>
+            "#{PrivateBox.max_recipients()}; keeping the first " <>
+            "#{PrivateBox.max_recipients()}"
+        )
+
+        {:ok, Enum.take(ids, PrivateBox.max_recipients())}
+
+      true ->
+        {:ok, ids}
     end
   end
 

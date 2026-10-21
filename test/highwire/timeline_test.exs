@@ -112,6 +112,73 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  describe "private content" do
+    alias HighWire.SSB.PrivateBox
+
+    defp keypair, do: :enacl.crypto_sign_ed25519_keypair()
+    defp feed_id(%{public: pk}), do: "@" <> Base.encode64(pk) <> ".ed25519"
+
+    test "boxing seals the content and carries recps inside" do
+      kp = keypair()
+      recipient = feed_id(kp)
+
+      assert {:ok, box} =
+               Timeline.private_content(Timeline.post_content("secret plans"), [recipient])
+
+      assert PrivateBox.private?(box)
+      refute box =~ "secret plans"
+
+      assert {:ok, json} = PrivateBox.decrypt(box, kp.secret)
+
+      assert %{"recps" => [^recipient], "type" => "post", "text" => "secret plans"} =
+               Jason.decode!(json)
+    end
+
+    test "a reply's root and branch survive the box" do
+      kp = keypair()
+      content = Timeline.reply_content("%root=.sha256", "%branch=.sha256", "answer")
+
+      assert {:ok, box} = Timeline.private_content(content, [feed_id(kp)])
+      assert {:ok, json} = PrivateBox.decrypt(box, kp.secret)
+
+      assert %{
+               "root" => "%root=.sha256",
+               "branch" => "%branch=.sha256",
+               "text" => "answer"
+             } = Jason.decode!(json)
+    end
+
+    test "a vote keeps its value through the box" do
+      kp = keypair()
+
+      assert {:ok, box} =
+               Timeline.private_content(Timeline.vote_content("%t=.sha256", 0), [feed_id(kp)])
+
+      assert {:ok, json} = PrivateBox.decrypt(box, kp.secret)
+      assert %{"type" => "vote", "vote" => %{"value" => 0}} = Jason.decode!(json)
+    end
+
+    test "no recipients is refused rather than boxed for nobody" do
+      assert Timeline.private_content(Timeline.post_content("hi"), []) ==
+               {:error, :no_recipients}
+
+      assert Timeline.private_recipients([]) == {:error, :no_recipients}
+    end
+
+    test "more than the box's ceiling keeps the first seven" do
+      ids = for _ <- 1..9, do: feed_id(keypair())
+      assert {:ok, kept} = Timeline.private_recipients(ids)
+      assert kept == Enum.take(ids, 7)
+    end
+
+    test "duplicate recipients collapse, and non-binaries drop" do
+      a = feed_id(keypair())
+      b = feed_id(keypair())
+      assert {:ok, kept} = Timeline.private_recipients([a, a, nil, b, 42])
+      assert kept == [a, b]
+    end
+  end
+
   describe "vote_link/1" do
     test "nested vote shape (what this network publishes)" do
       c = %{"type" => "vote", "vote" => %{"link" => "%a=.sha256", "value" => 1}}

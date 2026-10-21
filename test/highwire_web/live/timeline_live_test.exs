@@ -219,6 +219,79 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "SSB engine disabled in this configuration."
   end
 
+  describe "private composer" do
+    # Stand up the Private tab with a follow to address, since the
+    # engine is off under test and the sidebar would be empty.
+    defp private_view(conn, contacts \\ ["@peer=.ed25519"]) do
+      {:ok, view, _html} = live(conn, "/")
+      render_click(view, "view", %{"v" => "private"})
+
+      :sys.replace_state(view.pid, fn state ->
+        socket = state.socket
+        assigns = socket.assigns
+
+        changed =
+          assigns.__changed__
+          |> Map.put(:all_contacts, assigns.all_contacts)
+          |> Map.put(:self_id, assigns.self_id)
+          |> Map.put(:status, assigns.status)
+
+        assigns =
+          assigns
+          |> Map.put(:all_contacts, contacts)
+          |> Map.put(:self_id, "@me=.ed25519")
+          |> Map.put(:status, :ok)
+          |> Map.put(:__changed__, changed)
+
+        %{state | socket: %{socket | assigns: assigns}}
+      end)
+
+      send(view.pid, :nudge)
+      :sys.get_state(view.pid)
+      view
+    end
+
+    test "the composer appears on the Private tab with a recipient list", %{conn: conn} do
+      view = private_view(conn)
+      html = render(view)
+
+      assert html =~ ~s(id="compose")
+      assert html =~ "Private thread — choose who can read it."
+      assert html =~ ~s(name="recipients[]")
+      assert html =~ ~s(value="@peer=.ed25519")
+    end
+
+    test "a private post without a recipient is refused locally", %{conn: conn} do
+      view = private_view(conn)
+
+      html =
+        view
+        |> form("#compose", %{"body" => "just me"})
+        |> render_submit()
+
+      assert html =~ "Choose at least one recipient."
+    end
+
+    test "a recipient selection survives a draft keystroke", %{conn: conn} do
+      view = private_view(conn)
+
+      html =
+        render_change(view, "compose-draft", %{
+          "body" => "half",
+          "recipients" => ["@peer=.ed25519"]
+        })
+
+      assert html =~ "half"
+      assert html =~ ~s(value="@peer=.ed25519" checked)
+    end
+
+    test "the composer is hidden on the Public tab", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/")
+      assert render(view) =~ ~s(id="compose")
+      refute render(view) =~ "Private thread — choose who can read it."
+    end
+  end
+
   describe "event rows from the engine window" do
     test "follow events land on the Public tab in chronological context", %{conn: conn} do
       now = 1_700_000_000_000

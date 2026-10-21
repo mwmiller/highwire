@@ -34,6 +34,13 @@ defmodule HighWire.SSB.PrivateBox do
   @type feed_id :: binary()
 
   @doc """
+  How many recipients a single box can carry — the format's own ceiling,
+  which callers must respect when a thread has more participants.
+  """
+  @spec max_recipients() :: pos_integer()
+  def max_recipients, do: @max_recipients
+
+  @doc """
   Boxes `plaintext` for `recipient_ids` (1–7 feed ids), returning a
   `".box"` string ready to publish as an ordinary message content.
 

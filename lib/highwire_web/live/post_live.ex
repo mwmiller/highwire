@@ -184,7 +184,16 @@ defmodule HighWireWeb.PostLive do
       true ->
         # A reply from this view answers the thread root; branch points
         # at the same root (there is no per-reply addressing here).
-        case Timeline.reply(root["key"], root["key"], body) do
+        # A private thread's reply is boxed for its participants so the
+        # answer never leaves the box the thread arrived in.
+        result =
+          if private_thread?(root) do
+            Timeline.reply_private(root["key"], root["key"], body, private_recipients(socket))
+          else
+            Timeline.reply(root["key"], root["key"], body)
+          end
+
+        case result do
           {:ok, _key} ->
             {:noreply, assign(socket, reply_body: "", reply_error: nil)}
 
@@ -201,7 +210,13 @@ defmodule HighWireWeb.PostLive do
     liked? = key in socket.assigns.my_likes
     socket = assign(socket, Heart.toggle(socket.assigns, key))
 
-    result = if liked?, do: Timeline.unlike(key), else: Timeline.like(key)
+    result =
+      if private_thread?(socket.assigns.root) do
+        value = if liked?, do: 0, else: 1
+        Timeline.like_private(key, private_recipients(socket), value)
+      else
+        if liked?, do: Timeline.unlike(key), else: Timeline.like(key)
+      end
 
     case result do
       {:error, reason} ->
@@ -229,6 +244,31 @@ defmodule HighWireWeb.PostLive do
   defp reply_error(:offline), do: "Not connected to the local SSB engine yet."
 
   defp reply_error(_reason), do: "Reply failed — the engine refused the message."
+
+  # A thread is private when its root arrived boxed; the badge already
+  # keys off the same flag.
+  defp private_thread?(%{"value" => %{"private" => true}}), do: true
+  defp private_thread?(_), do: false
+
+  # Everyone a private reply in this thread must reach: the root author,
+  # the reply authors, and self — the participants a box should carry.
+  # The root author and self go first, so a thread too large for one box
+  # keeps the two readers it cannot drop; Timeline caps the rest.
+  defp private_recipients(socket) do
+    root = socket.assigns.root
+    replies = Map.get(socket.assigns, :replies, [])
+
+    [author_of(root)]
+    |> Kernel.++([socket.assigns.self_id])
+    |> Kernel.++(Enum.map(replies, &author_of/1))
+    |> Enum.filter(&feed_id?/1)
+    |> Enum.uniq()
+  end
+
+  # A recipient must be a real feed id; `author_of/1` answers "unknown"
+  # for a message with no author on it, which is not one.
+  defp feed_id?(<<"@", _::binary>> = id), do: String.ends_with?(id, ".ed25519")
+  defp feed_id?(_), do: false
 
   defp liked?(assigns, key), do: key in assigns.my_likes
 
