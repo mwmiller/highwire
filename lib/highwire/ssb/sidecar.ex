@@ -792,7 +792,11 @@ defmodule HighWire.SSB.Sidecar do
 
     cond do
       not File.dir?(rel) ->
-        import_error(state, :no_release, "the erlbutt engine is not installed (#{rel})")
+        import_error(
+          state,
+          :no_release,
+          "the Secure Scuttlebutt service is not installed (#{rel})"
+        )
 
       is_nil(engine_erl(rel)) ->
         import_error(state, :no_erl, "no Erlang runtime is available to the importer")
@@ -866,9 +870,9 @@ defmodule HighWire.SSB.Sidecar do
 
   # What the failed-import screen will show the user: prepare/0's
   # reasons in words, POSIX atoms as they stand, anything else as-is.
-  defp describe_error(:no_js_secret), do: "the old store's secret is gone"
-  defp describe_error(:enoent), do: "could not copy the secret out of the old store"
-  defp describe_error(:port_busy), do: "the engine did not stop in time — try again"
+  defp describe_error(:no_js_secret), do: "the old client's secret is gone"
+  defp describe_error(:enoent), do: "could not copy the secret out of the old client"
+  defp describe_error(:port_busy), do: "the service did not stop in time. Try again."
 
   defp describe_error({path, reason}) when is_binary(path),
     do: "could not clear #{Path.basename(path)} (#{reason})"

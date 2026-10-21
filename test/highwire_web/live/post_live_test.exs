@@ -9,7 +9,8 @@ defmodule HighWireWeb.PostLiveTest do
     key = Base.url_encode64("%missing=.sha256", padding: false)
     {:ok, _view, html} = live(conn, "/post/" <> key)
 
-    assert html =~ "not in the local store"
+    # the copy is escaped in the markup, as all text is
+    assert html =~ "That message hasn&#39;t arrived yet."
     # the rail still carries its section, with an explanation instead
     # of an empty column
     assert html =~ "In this thread"

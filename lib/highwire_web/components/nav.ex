@@ -91,7 +91,7 @@ defmodule HighWireWeb.Components.Nav do
       {render_slot(@inner_block)}
       <.link
         navigate="/network"
-        title={"Network: #{Network.label(Network.current())} — #{@gossip.connected} live — click to manage"}
+        title={"Network: #{Network.label(Network.current())}, #{@gossip.connected} live. Click to manage."}
         aria-label="Network"
         class={[
           "mt-auto block border-t border-edge py-2 text-center text-[10px] font-medium uppercase",
@@ -160,13 +160,13 @@ defmodule HighWireWeb.Components.Nav do
   # it just received; everyone else resolves from the read model here.
   defp identity_title(%{"name" => name, "label" => label})
        when is_binary(name) and is_binary(label) and label != "",
-       do: "You are #{name} (#{label}) — click to manage identities"
+       do: "You are #{name} (#{label}). Click to manage identities."
 
   defp identity_title(%{"id" => id, "label" => label})
        when is_binary(label) and label != "",
-       do: "You are #{Profile.display_name(id)} (#{label}) — click to manage identities"
+       do: "You are #{Profile.display_name(id)} (#{label}). Click to manage identities."
 
-  defp identity_title(_identity), do: "Identity — click to manage"
+  defp identity_title(_identity), do: "Identity. Click to manage."
 
   defp identity_image(%{"id" => _id, "image" => image}) when is_binary(image), do: image
   defp identity_image(%{"id" => id}), do: Profile.image(id)

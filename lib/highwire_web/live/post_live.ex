@@ -177,35 +177,16 @@ defmodule HighWireWeb.PostLive do
         {:noreply, assign(socket, reply_error: "Nothing to reply.")}
 
       socket.assigns.status == :disabled ->
-        {:noreply, assign(socket, reply_error: "SSB engine disabled in this configuration.")}
+        {:noreply, assign(socket, reply_error: "Replying is turned off in this configuration.")}
 
       not is_binary(socket.assigns.self_id) ->
-        {:noreply, assign(socket, reply_error: "Not connected to the local SSB engine yet.")}
+        {:noreply, assign(socket, reply_error: "Still connecting. Try again in a moment.")}
 
       socket.assigns.reply_pending ->
         {:noreply, socket}
 
       true ->
-        socket = assign(socket, reply_pending: true)
-
-        # A reply from this view answers the thread root; branch points
-        # at the same root (there is no per-reply addressing here).
-        # A private thread's reply is boxed for its participants so the
-        # answer never leaves the box the thread arrived in.
-        result =
-          if private_thread?(root) do
-            Timeline.reply_private(root["key"], root["key"], body, private_recipients(socket))
-          else
-            Timeline.reply(root["key"], root["key"], body)
-          end
-
-        case result do
-          {:ok, _key} ->
-            {:noreply, assign(socket, reply_body: "", reply_error: nil, reply_pending: false)}
-
-          {:error, reason} ->
-            {:noreply, assign(socket, reply_error: reply_error(reason), reply_pending: false)}
-        end
+        {:noreply, reply_now(socket, root, body)}
     end
   end
 
@@ -242,12 +223,40 @@ defmodule HighWireWeb.PostLive do
     {:noreply, assign(socket, :mention_suggestions, [])}
   end
 
+  # The reply itself, with the button held down while it waits: a
+  # second press on the same body is a duplicate, not a second reply.
+  defp reply_now(socket, root, body) do
+    socket = assign(socket, reply_pending: true)
+
+    # A reply from this view answers the thread root; branch points
+    # at the same root (there is no per-reply addressing here).
+    # A private thread's reply is boxed for its participants so the
+    # answer never leaves the box the thread arrived in.
+    result =
+      if private_thread?(root) do
+        Timeline.reply_private(root["key"], root["key"], body, private_recipients(socket))
+      else
+        Timeline.reply(root["key"], root["key"], body)
+      end
+
+    socket =
+      case result do
+        {:ok, _key} ->
+          assign(socket, reply_body: "", reply_error: nil)
+
+        {:error, reason} ->
+          assign(socket, reply_error: reply_error(reason))
+      end
+
+    assign(socket, reply_pending: false)
+  end
+
   defp mention_candidates(socket, q) do
     profiles = Map.get(socket.assigns, :profiles, %{})
     Mentions.candidates(q, Map.keys(profiles), &Ident.display_name(&1, profiles))
   end
 
-  defp reply_error(:offline), do: "Not connected to the local SSB engine yet."
+  defp reply_error(:offline), do: "Still connecting. Try again in a moment."
 
   defp reply_error(_reason), do: "Reply failed."
 
@@ -418,7 +427,7 @@ defmodule HighWireWeb.PostLive do
         </div>
 
         <p :if={@root == nil} class="px-4 pb-4 text-xs italic text-faint">
-          Nothing loaded — the message may not be in the local store yet.
+          Nothing loaded. This message may not have arrived yet.
         </p>
       </Nav.rail>
       <section class="flex-1 overflow-y-auto">
@@ -428,7 +437,7 @@ defmodule HighWireWeb.PostLive do
           </.link>
 
           <div :if={@not_found} class="text-sm text-dim">
-            That message is not in the local store — it may not have replicated yet.
+            That message hasn't arrived yet.
           </div>
 
           <div :if={@root}>
@@ -593,7 +602,7 @@ defmodule HighWireWeb.PostLive do
             </div>
 
             <p :if={@replies == []} class="mt-6 text-sm italic text-faint">
-              No replies in the local store.
+              No replies yet.
             </p>
 
             <form
@@ -660,11 +669,16 @@ defmodule HighWireWeb.PostLive do
                 </span>
                 <label
                   class="btn cursor-pointer"
-                  title="Attach an image — or paste, or drop one here"
+                  title="Attach an image, or paste or drop one here"
                 >
                   Attach <input type="file" accept="image/*" data-attach-input class="hidden" />
                 </label>
-                <button type="submit" class="btn btn-primary" phx-disable-with="Replying…" disabled={@reply_pending}>
+                <button
+                  type="submit"
+                  class="btn btn-primary"
+                  phx-disable-with="Replying…"
+                  disabled={@reply_pending}
+                >
                   {if @reply_pending, do: "Replying…", else: "Reply"}
                 </button>
               </div>

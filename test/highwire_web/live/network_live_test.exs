@@ -78,7 +78,7 @@ defmodule HighWireWeb.NetworkLiveTest do
 
       # A cache-seeded report has no live engine to command, so the
       # controls disable and the notice says the numbers are the cache's.
-      assert html =~ "The local engine is not answering"
+      assert html =~ "The local service is not answering"
       assert html =~ ~r/<button[^>]*phx-click="dialer-toggle"[^>]*disabled/
       assert html =~ ~r/<button[^>]*phx-click="dialer-trigger"[^>]*disabled/
     end
@@ -90,7 +90,7 @@ defmodule HighWireWeb.NetworkLiveTest do
 
       # The page no longer hides behind a nil report: it opens on the
       # peer cache, so every section stands and states what it knows.
-      assert html =~ "The local engine is not answering"
+      assert html =~ "The local service is not answering"
       assert html =~ "Connections ·"
       assert html =~ "No peers connected."
       assert html =~ "Known peers · 0"
@@ -605,7 +605,7 @@ defmodule HighWireWeb.NetworkLiveTest do
           }
         )
 
-      assert html =~ "Suppress 1 &amp; restart engine"
+      assert html =~ "Suppress 1 &amp; restart"
       assert html =~ "1 loopback"
       assert html =~ "1 to suppress"
       assert html =~ ~s(phx-click="suppress-apply")

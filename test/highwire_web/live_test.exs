@@ -12,7 +12,7 @@ defmodule HighWireWeb.LiveTest do
     test "live mount shows engine status", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/about")
 
-      assert render(view) =~ "erlbutt"
+      assert render(view) =~ "Secure Scuttlebutt"
       assert render(view) =~ HighWire.home_dir()
 
       assert view

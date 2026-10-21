@@ -89,7 +89,7 @@ defmodule HighWireWeb.DiagnosticsLive do
               <span class={level_class(p.level)}>{level_label(p.level)}</span>
               <span class="min-w-0">
                 <span class="font-medium text-paper">{p.name}</span>
-                <span class="text-dim"> — {p.note}</span>
+                <span class="text-dim">: {p.note}</span>
               </span>
             </li>
           </ul>

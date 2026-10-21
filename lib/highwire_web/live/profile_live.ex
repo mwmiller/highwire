@@ -240,9 +240,14 @@ defmodule HighWireWeb.ProfileLive do
             class={["btn mt-3 w-full", @id in @follows and "btn-primary"]}
           >
             {cond do
-              MapSet.member?(@follow_pending, @id) -> if @id in @follows, do: "Unfollowing…", else: "Following…"
-              @id in @follows -> "Following"
-              true -> "Follow"
+              MapSet.member?(@follow_pending, @id) ->
+                if @id in @follows, do: "Unfollowing…", else: "Following…"
+
+              @id in @follows ->
+                "Following"
+
+              true ->
+                "Follow"
             end}
           </button>
 
@@ -255,9 +260,14 @@ defmodule HighWireWeb.ProfileLive do
             class={["btn mt-2 w-full", @id not in @blocked and "text-bad"]}
           >
             {cond do
-              MapSet.member?(@block_pending, @id) -> if @id in @blocked, do: "Unblocking…", else: "Blocking…"
-              @id in @blocked -> "Unblock"
-              true -> "Block"
+              MapSet.member?(@block_pending, @id) ->
+                if @id in @blocked, do: "Unblocking…", else: "Blocking…"
+
+              @id in @blocked ->
+                "Unblock"
+
+              true ->
+                "Block"
             end}
           </button>
         </div>

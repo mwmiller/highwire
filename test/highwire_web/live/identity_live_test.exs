@@ -46,7 +46,7 @@ defmodule HighWireWeb.IdentityLiveTest do
       # the name is the short id — what a feed with no profile shows.
       assert html =~ ~s(aria-label="Identity")
       assert html =~ ~s(href="/identity")
-      assert html =~ "You are #{Ident.short_id(main)} (Main) — click to manage identities"
+      assert html =~ "You are #{Ident.short_id(main)} (Main). Click to manage identities."
 
       # A row with nothing published resolves the same way: short id
       # first, the local label in parens after it.
@@ -80,7 +80,7 @@ defmodule HighWireWeb.IdentityLiveTest do
       assert html =~ "Main is your identity now"
 
       assert html =~
-               "You are #{Ident.short_id(Identities.active_id())} (Main) — click to manage identities"
+               "You are #{Ident.short_id(Identities.active_id())} (Main). Click to manage identities."
 
       assert [row] = Identities.list()
       assert row["active"]
@@ -96,10 +96,10 @@ defmodule HighWireWeb.IdentityLiveTest do
         |> form("form", %{label: "Bot"})
         |> render_submit()
 
-      assert html =~ "Created Bot — switch to it when you want to post as it"
+      assert html =~ "Created Bot. Switch to it when you want to post as it."
 
       assert html =~
-               "You are #{Ident.short_id(Identities.active_id())} (Main) — click to manage identities"
+               "You are #{Ident.short_id(Identities.active_id())} (Main). Click to manage identities."
     end
 
     test "switching rewrites the secret the engine authenticates with", %{conn: conn, home: home} do
@@ -111,7 +111,7 @@ defmodule HighWireWeb.IdentityLiveTest do
 
       # Engine disabled: the secret write is the whole switch.
       assert html =~ "Now posting as Bot"
-      assert html =~ "You are #{Ident.short_id(bot)} (Bot) — click to manage identities"
+      assert html =~ "You are #{Ident.short_id(bot)} (Bot). Click to manage identities."
       assert Keys.load!(secret_path(home)).id == bot
       assert Identities.active_id() == bot
     end
@@ -126,7 +126,7 @@ defmodule HighWireWeb.IdentityLiveTest do
       {:ok, _view, html} = live(conn, "/identity")
 
       # The title pairs the alias followers know with the local label…
-      assert html =~ "You are dtBy (Main) — click to manage identities"
+      assert html =~ "You are dtBy (Main). Click to manage identities."
       # …and the card pairs them the same way: name, then parens.
       assert html =~ ~r/dtBy\s*<span[^>]*>\(Main\)/
       # The avatar is the feed's own image, never the identicon.
@@ -148,7 +148,7 @@ defmodule HighWireWeb.IdentityLiveTest do
       send(view.pid, {HighWire.Timeline, :updated, %{}})
 
       html = render(view)
-      assert html =~ "You are dtBy (Main) — click to manage identities"
+      assert html =~ "You are dtBy (Main). Click to manage identities."
     end
 
     test "delete is two-stage, and only ever offered on disabled rows", %{conn: conn} do

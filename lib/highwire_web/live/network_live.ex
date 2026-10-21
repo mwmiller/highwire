@@ -149,7 +149,7 @@ defmodule HighWireWeb.NetworkLive do
        switching: false,
        network: profile,
        polls: 0,
-       switch_notice: "Network set to #{Network.label(profile)} — starting the engine…"
+       switch_notice: "Network set to #{Network.label(profile)}. Starting up…"
      )}
   end
 
@@ -160,7 +160,7 @@ defmodule HighWireWeb.NetworkLive do
        network: Network.current(),
        net_status: Sidecar.status(),
        switch_notice:
-         "Still set to #{Network.label(Network.current())} — switch failed: #{switch_error(reason)}"
+         "Still set to #{Network.label(Network.current())}. The switch failed: #{switch_error(reason)}"
      )}
   end
 
@@ -183,7 +183,7 @@ defmodule HighWireWeb.NetworkLive do
         {:noreply,
          assign(socket,
            net_status: status,
-           switch_notice: "The engine has not come back yet — reload this page shortly."
+           switch_notice: "The service has not come back yet. Reload this page shortly."
          )}
 
       true ->
@@ -228,11 +228,11 @@ defmodule HighWireWeb.NetworkLive do
       case result do
         {:ok, changed, backup} ->
           "Suppressed #{changed} address#{if changed == 1, do: "", else: "es"}; " <>
-            "the engine was restarted to pick it up. Backup: #{Path.basename(backup)}"
+            "the service was restarted to pick it up. Backup: #{Path.basename(backup)}"
 
         {:error, {:restart_failed, reason, changed, backup}} ->
           "Wrote #{changed} suppression#{if changed == 1, do: "", else: "s"} (backup #{Path.basename(backup)}), " <>
-            "but the engine would not restart: #{inspect(reason)}"
+            "but the service would not restart: #{inspect(reason)}"
 
         {:error, reason} ->
           "Suppression failed: #{inspect(reason)}"
@@ -303,7 +303,7 @@ defmodule HighWireWeb.NetworkLive do
         {:noreply, socket}
 
       socket.assigns.report["seeded"] ->
-        {:noreply, assign(socket, :dial_notice, "No engine report — is the engine up?")}
+        {:noreply, assign(socket, :dial_notice, "No report yet. Is the service up?")}
 
       true ->
         want = if socket.assigns.report["enabled"], do: :disable, else: :enable
@@ -330,7 +330,7 @@ defmodule HighWireWeb.NetworkLive do
         {:noreply, socket}
 
       socket.assigns.report["seeded"] ->
-        {:noreply, assign(socket, :dial_notice, "No engine report — is the engine up?")}
+        {:noreply, assign(socket, :dial_notice, "No report yet. Is the service up?")}
 
       true ->
         parent = self()
@@ -390,7 +390,7 @@ defmodule HighWireWeb.NetworkLive do
          assign(socket,
            suppressing: true,
            suppress_preview: nil,
-           suppress_notice: "Writing conn.json and restarting the engine…"
+           suppress_notice: "Saving connection settings and restarting…"
          )}
 
       _ ->
@@ -454,8 +454,8 @@ defmodule HighWireWeb.NetworkLive do
             </p>
 
             <p class="mt-2 text-sm text-dim">
-              Switching rewrites the engine's overrides file and restarts the local
-              engine — feeds and blobs carry over either way.
+              Switching rewrites the local configuration and restarts the service.
+              Feeds and blobs carry over either way.
             </p>
 
             <div class="mt-3 flex flex-wrap gap-3" role="group" aria-label="Network">
@@ -478,7 +478,7 @@ defmodule HighWireWeb.NetworkLive do
 
             <p :if={@network == :custom} class="mt-2 text-sm text-bad">
               Unknown network id in overrides.cfg
-              (<span class="font-mono text-xs">{Network.current_id()}</span>) — this is not a
+              (<span class="font-mono text-xs">{Network.current_id()}</span>). This is not a
               network HighWire knows. Switch to Development or Mainnet.
             </p>
           </section>
@@ -541,8 +541,8 @@ defmodule HighWireWeb.NetworkLive do
           </section>
 
           <p :if={@report["seeded"]} class="mt-6 text-sm text-dim" role="status">
-            The local engine is not answering, so this is the cache from the last
-            session that did — connections and dial history are unknown.
+            The local service is not answering, so this is the cache from the last
+            session that did. Connections and dial history are unknown.
           </p>
 
           <div class="mt-8 space-y-8">
@@ -675,7 +675,7 @@ defmodule HighWireWeb.NetworkLive do
                     <title>
                       {"retrying " <>
                         sky_peer_title(try_row["addr"], @profiles) <>
-                        " — #{try_row["attempts"] || 0} fails"}
+                        ". #{try_row["attempts"] || 0} fails"}
                     </title>
                   </g>
 
@@ -702,7 +702,7 @@ defmodule HighWireWeb.NetworkLive do
                     <title>
                       {"reached " <>
                         sky_peer_title(try_row["addr"], @profiles) <>
-                        " — last handshake"}
+                        ". Last handshake"}
                     </title>
                   </g>
 
@@ -804,7 +804,7 @@ defmodule HighWireWeb.NetworkLive do
                   </span>
                   <span
                     class="flex items-center gap-1.5"
-                    title="handshakes are failing and the dialer is backing off — still trying, so drawn as an open ring"
+                    title="handshakes are failing and the dialer is backing off. Still trying, so drawn as an open ring"
                   >
                     <span class="h-2 w-2 rounded-full border border-warn"></span>retrying
                   </span>
@@ -829,7 +829,7 @@ defmodule HighWireWeb.NetworkLive do
               </div>
 
               <p :if={sky_empty?(@report)} class="mt-2 text-sm text-dim">
-                Quiet sky — no peers, no pending dials, empty address book.
+                Quiet sky. No peers, no pending dials, empty address book.
               </p>
             </section>
 
@@ -881,7 +881,7 @@ defmodule HighWireWeb.NetworkLive do
               </h2>
 
               <div :if={@report["knownPeers"] in [nil, []]} class="mt-2 text-sm text-dim">
-                The address book is empty — it fills as pubs announce themselves.
+                The address book is empty. It fills as pubs announce themselves.
               </div>
 
               <div
@@ -948,14 +948,14 @@ defmodule HighWireWeb.NetworkLive do
 
               <div class="mt-3 rounded border border-edge-soft bg-panel px-3 py-2">
                 <p class="text-xs text-dim">
-                  Stop dialing addresses that can never answer — loopback and
+                  Stop dialing addresses that can never answer: loopback and
                   private announce addresses, <code class="text-faint">.onion</code>,
                   IPv6 literals, wrong ports, and any address the dialer has
                   failed repeatedly with no handshake on record. An address that
                   has ever answered is never listed. Each is marked
                   <code class="text-faint">autoconnect: false</code>
                   in <code class="text-faint">conn.json</code>, which survives
-                  re-announcement; applying it restarts the engine to take effect.
+                  re-announcement; applying it restarts the service to take effect.
                 </p>
 
                 <div class="mt-2 flex flex-wrap items-center gap-3">
@@ -975,7 +975,7 @@ defmodule HighWireWeb.NetworkLive do
                     phx-click="suppress-apply"
                     disabled={@suppressing or @suppress_preview.addrs == []}
                   >
-                    Suppress {@suppress_preview.counts[:total] || 0} &amp; restart engine
+                    Suppress {@suppress_preview.counts[:total] || 0} &amp; restart
                   </button>
 
                   <button
@@ -1000,7 +1000,7 @@ defmodule HighWireWeb.NetworkLive do
                   :if={@suppress_preview && @suppress_preview.addrs == []}
                   class="mt-2 text-xs text-dim"
                 >
-                  Nothing to suppress — every book entry could still answer.
+                  Nothing to suppress. Every book entry could still answer.
                 </p>
 
                 <p :if={@suppress_notice} role="status" class="mt-2 text-xs text-dim">
@@ -1018,7 +1018,7 @@ defmodule HighWireWeb.NetworkLive do
               </h2>
 
               <p class="mt-2 text-sm text-dim">
-                Addresses the dialer has tried {dial_window(@report["dialTry"])} — not
+                Addresses the dialer has tried {dial_window(@report["dialTry"])} are not
                 open sockets. <span class="text-ok">ok</span> means the last handshake
                 completed; <span class="text-warn">fails</span> counts consecutive
                 failures.
@@ -1026,7 +1026,7 @@ defmodule HighWireWeb.NetworkLive do
 
               <div :if={@report["dialTry"] in [nil, []]} class="mt-2 text-sm text-dim">
                 {if @report["partial"],
-                  do: "Nothing dialed yet — this engine build does not report dial history.",
+                  do: "Nothing dialed yet. This build does not report dial history.",
                   else: "Nothing dialed yet."}
               </div>
 
@@ -1079,10 +1079,10 @@ defmodule HighWireWeb.NetworkLive do
     end
   end
 
-  defp switch_error(:disabled), do: "the SSB engine is disabled in this configuration."
+  defp switch_error(:disabled), do: "SSB is disabled in this configuration."
 
   defp switch_error(:port_busy),
-    do: "the engine port is still in use — a leftover engine is holding it."
+    do: "the port is still in use. A leftover process is holding it."
 
   defp switch_error(reason), do: inspect(reason)
 
@@ -1097,11 +1097,11 @@ defmodule HighWireWeb.NetworkLive do
   defp status_dot(:down), do: "bg-dot-bad"
   defp status_dot(_), do: "bg-dot"
 
-  defp status_text(:ok), do: "engine online"
+  defp status_text(:ok), do: "service online"
   defp status_text(:connecting), do: "connecting…"
   defp status_text(:loading), do: "loading feeds…"
-  defp status_text(:down), do: "engine down"
-  defp status_text(_), do: "engine disabled"
+  defp status_text(:down), do: "service down"
+  defp status_text(_), do: "service disabled"
 
   # The rows the address book shows: each entry paired with the feed id
   # behind it — the engine's own `key` when it carries one, else the

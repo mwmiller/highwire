@@ -8,7 +8,7 @@ defmodule HighWireWeb.TimelineLiveTest do
 
     assert html =~ "Timeline"
     # sidecar disabled under test
-    assert html =~ "SSB engine disabled"
+    assert html =~ "Publishing is turned off"
     # the feed scroller carries the scroll-position hook, so returning
     # from a post lands where the reader left off
     assert html =~ ~s(id="feed-scroller" phx-hook="FeedScroll")
@@ -34,7 +34,7 @@ defmodule HighWireWeb.TimelineLiveTest do
 
     # engine disabled under test — the chip still renders, with
     # status-appropriate copy instead of vanishing
-    assert html =~ "Engine off"
+    assert html =~ "Offline"
     assert html =~ ~s(href="/network")
   end
 
@@ -69,7 +69,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     :sys.get_state(view.pid)
     html = render(view)
 
-    assert html =~ "60,000 messages indexed so far"
+    assert html =~ "60,000 messages so far"
     refute html =~ "6000,000"
   end
 
@@ -216,7 +216,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       |> form("#compose", %{"body" => "hello world"})
       |> render_submit()
 
-    assert html =~ "SSB engine disabled in this configuration."
+    assert html =~ "Publishing is turned off in this configuration."
   end
 
   describe "private composer" do
@@ -256,7 +256,7 @@ defmodule HighWireWeb.TimelineLiveTest do
       html = render(view)
 
       assert html =~ ~s(id="compose")
-      assert html =~ "Private thread — choose who can read it."
+      assert html =~ "Private thread. Choose who can read it."
       assert html =~ ~s(name="recipients[]")
       assert html =~ ~s(value="@peer=.ed25519")
     end
@@ -288,7 +288,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     test "the composer is hidden on the Public tab", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/")
       assert render(view) =~ ~s(id="compose")
-      refute render(view) =~ "Private thread — choose who can read it."
+      refute render(view) =~ "Private thread. Choose who can read it."
     end
   end
 
@@ -918,7 +918,7 @@ defmodule HighWireWeb.TimelineLiveTest do
 
     # The query is still out. Nothing is known yet, so the view says so
     # rather than presenting "no matches" as an answer.
-    assert html =~ "Searching the store"
+    assert html =~ "Searching…"
     refute html =~ "Nothing matches"
 
     html = wait_for_search_answer(view)
@@ -931,12 +931,12 @@ defmodule HighWireWeb.TimelineLiveTest do
     notify(view, feed_payload([]))
 
     html = render_change(view, "search", %{"q" => "zzznope"})
-    assert html =~ "Searching the store"
+    assert html =~ "Searching…"
     refute html =~ "Nothing matches"
 
     # The test store answers empty, and only then is that claim honest.
     html = wait_for_search_answer(view)
-    refute html =~ "Searching the store"
+    refute html =~ "Searching…"
     assert html =~ "Nothing matches"
   end
 
@@ -959,7 +959,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     html = render_change(view, "search", %{"q" => "haystack"})
     assert html =~ ~s(id="search-results")
     assert html =~ "1 match"
-    assert html =~ "Searching the store"
+    assert html =~ "Searching…"
 
     # The new query's answer replaces them, so stale hits never outlive
     # the query that superseded them.
@@ -1011,7 +1011,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     # And the answer for what is on screen lands it.
     send(view.pid, {:search_results, "three", []})
     html = render(view)
-    refute html =~ "Searching the store"
+    refute html =~ "Searching…"
     assert html =~ "Nothing matches"
   end
 
@@ -1039,7 +1039,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     send(view.pid, :nudge)
     :sys.get_state(view.pid)
     html = render(view)
-    assert html =~ "did not answer"
+    assert html =~ "Some results may be missing"
     refute html =~ "Nothing matches"
   end
 
@@ -1480,7 +1480,7 @@ defmodule HighWireWeb.TimelineLiveTest do
   defp wait_for_search_answer(view, tries \\ 100) do
     html = render(view)
 
-    if tries > 0 and html =~ "Searching the store" do
+    if tries > 0 and html =~ "Searching…" do
       Process.sleep(10)
       wait_for_search_answer(view, tries - 1)
     else

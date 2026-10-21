@@ -361,31 +361,17 @@ defmodule HighWireWeb.TimelineLive do
         {:noreply, assign(socket, compose_error: "Nothing to publish.")}
 
       socket.assigns.status == :disabled ->
-        {:noreply, assign(socket, compose_error: "SSB engine disabled in this configuration.")}
+        {:noreply,
+         assign(socket, compose_error: "Publishing is turned off in this configuration.")}
 
       not is_binary(socket.assigns.self_id) ->
-        {:noreply, assign(socket, compose_error: "Not connected to the local SSB engine yet.")}
+        {:noreply, assign(socket, compose_error: "Still connecting. Try again in a moment.")}
 
       socket.assigns.compose_pending ->
         {:noreply, socket}
 
-      socket.assigns.view == :private ->
-        socket = assign(socket, compose_pending: true)
-
-        case publish_private(socket, body, Map.get(params, "recipients", [])) do
-          {:noreply, s} -> {:noreply, assign(s, compose_pending: false)}
-        end
-
       true ->
-        socket = assign(socket, compose_pending: true)
-
-        case Timeline.publish(body) do
-          {:ok, _key} ->
-            {:noreply, assign(socket, compose: "", compose_error: nil, compose_pending: false)}
-
-          {:error, reason} ->
-            {:noreply, assign(socket, compose_error: publish_error(reason), compose_pending: false)}
-        end
+        {:noreply, publish_now(socket, body, Map.get(params, "recipients", []))}
     end
   end
 
@@ -481,6 +467,25 @@ defmodule HighWireWeb.TimelineLive do
     if socket.assigns.peers_timer, do: Process.cancel_timer(socket.assigns.peers_timer)
 
     {:noreply, socket |> assign(:active, false) |> assign(peers_timer: nil)}
+  end
+
+  # The publish itself, with the button held down while it waits: a
+  # second press on the same body is a duplicate, not a second post.
+  defp publish_now(socket, body, recipients) do
+    socket = assign(socket, compose_pending: true)
+
+    socket =
+      if socket.assigns.view == :private do
+        {:noreply, s} = publish_private(socket, body, recipients)
+        s
+      else
+        case Timeline.publish(body) do
+          {:ok, _key} -> assign(socket, compose: "", compose_error: nil)
+          {:error, reason} -> assign(socket, compose_error: publish_error(reason))
+        end
+      end
+
+    assign(socket, compose_pending: false)
   end
 
   # A private thread is boxed for the chosen follows plus self, so the
@@ -878,7 +883,7 @@ defmodule HighWireWeb.TimelineLive do
   defp in_scope?(:participating, row, _self_id), do: participating?(row)
   defp in_scope?(:mentions, row, _self_id), do: mention_match?(row)
 
-  defp publish_error(:offline), do: "SSB engine offline."
+  defp publish_error(:offline), do: "Not connected yet. Try again in a moment."
 
   defp publish_error(reason) when is_binary(reason), do: reason
   defp publish_error(%{"message" => msg}) when is_binary(msg), do: msg
@@ -968,7 +973,7 @@ defmodule HighWireWeb.TimelineLive do
         </div>
         <div class="pb-4">
           <p :if={@sidebar_contacts == []} class="px-4 py-1 text-xs italic text-faint">
-            No contacts yet — open a profile to follow someone.
+            No contacts yet. Open a profile to follow someone.
           </p>
           <.link
             :for={c <- if(@contacts_expanded, do: @all_contacts, else: @sidebar_contacts)}
@@ -1078,14 +1083,14 @@ defmodule HighWireWeb.TimelineLive do
           <span
             :if={@transfer.active?}
             id="transfer-activity"
-            title="Recent engine network activity"
+            title="Recent network activity"
             class="flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs text-info"
           >
             <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-dot-info"></span> active
           </span>
           <.link
             navigate="/network"
-            title="Network — connections and dialing"
+            title="Network. Connections and dialing."
             class={[
               "flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs transition",
               "hover:bg-raised",
@@ -1160,13 +1165,13 @@ defmodule HighWireWeb.TimelineLive do
                   </div>
                   <div :if={@view == :private} class="mt-2 rounded border border-edge bg-input p-2">
                     <p class="mb-1 text-xs text-faint">
-                      Private thread — choose who can read it.
+                      Private thread. Choose who can read it.
                     </p>
                     <div
                       :if={@all_contacts == []}
                       class="text-xs italic text-dim"
                     >
-                      Follow someone first — there is no one to send to yet.
+                      Follow someone first. There is no one to send to yet.
                     </div>
                     <div class="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
                       <label
@@ -1202,11 +1207,16 @@ defmodule HighWireWeb.TimelineLive do
                     </span>
                     <label
                       class="btn cursor-pointer"
-                      title="Attach an image — or paste, or drop one here"
+                      title="Attach an image, or paste or drop one here"
                     >
                       Attach <input type="file" accept="image/*" data-attach-input class="hidden" />
                     </label>
-                    <button type="submit" class="btn btn-primary" phx-disable-with="Publishing…" disabled={@compose_pending}>
+                    <button
+                      type="submit"
+                      class="btn btn-primary"
+                      phx-disable-with="Publishing…"
+                      disabled={@compose_pending}
+                    >
                       {if @compose_pending, do: "Publishing…", else: "Publish"}
                     </button>
                   </div>
@@ -1215,19 +1225,19 @@ defmodule HighWireWeb.TimelineLive do
             </form>
 
             <p :if={@status == :connecting} class="px-4 py-3 text-sm text-info">
-              Connecting to the local SSB engine…
+              Connecting…
             </p>
             <p :if={@status == :loading} class="px-4 py-3 text-sm text-info">
               Loading feeds…
             </p>
             <p :if={@status == :disabled} class="px-4 py-3 text-sm text-dim">
-              SSB engine disabled in this configuration.
+              Publishing is turned off in this configuration.
             </p>
             <p
               :if={@status == :ok and @q != "" and @search_state == :pending}
               class="px-4 py-3 text-sm text-info"
             >
-              Searching the store…
+              Searching…
             </p>
             <p
               :if={@status == :ok and @q != "" and @search_state == :stalled}
@@ -1488,7 +1498,7 @@ defmodule HighWireWeb.TimelineLive do
           :if={@row.kind == :thread and not @row.rooted?}
           class="mt-1.5 text-xs italic text-faint"
         >
-          thread root not in the local window
+          The post this replies to isn't shown here.
         </p>
       </div>
     </article>
@@ -1796,7 +1806,7 @@ defmodule HighWireWeb.TimelineLive do
   defp peer_count(network) when is_map(network), do: length(network["connections"] || [])
 
   defp peer_label(nil, :connecting), do: "Connecting…"
-  defp peer_label(nil, :disabled), do: "Engine off"
+  defp peer_label(nil, :disabled), do: "Offline"
   defp peer_label(nil, _status), do: "Network"
 
   defp peer_label(peers, _status) do
@@ -1848,23 +1858,23 @@ defmodule HighWireWeb.TimelineLive do
   defp index_status_tone(_connecting_or_crawling), do: "text-info"
 
   defp index_status_title(:disabled),
-    do: "SSB engine disabled in config — store-wide search is off"
+    do: "Search is turned off in this configuration"
 
   defp index_status_title(:unavailable),
-    do: "The search index file could not be opened — store-wide search is unavailable"
+    do: "Search is unavailable right now"
 
   defp index_status_title(:connecting),
-    do: "Connecting to the engine to build the search index"
+    do: "Connecting and getting search ready"
 
   defp index_status_title(:reconnecting),
-    do: "Index stream dropped — reconnecting and catching up from the last checkpoint"
+    do: "Reconnecting and catching up"
 
   defp index_status_title(:live),
-    do: "Search index up to date — every post the engine can serve is indexed"
+    do: "Search is up to date"
 
   defp index_status_title({:crawling, n}),
     do:
-      "Building the store-wide index — #{format_count(n)} messages indexed so far; search is usable but incomplete"
+      "Search is still warming up. #{format_count(n)} messages so far, so results may be incomplete"
 
   # The query takes at most 200 hits; at the cap the true total is
   # unknown, so say so rather than pass the last page off as the end.
@@ -1872,13 +1882,13 @@ defmodule HighWireWeb.TimelineLive do
     do: if(length(hits) >= 200, do: "200+", else: Integer.to_string(length(hits)))
 
   defp search_empty_message({:crawling, _}, q),
-    do: "Nothing in the index matches “#{q}” yet — the store index is still building."
+    do: "Nothing matches “#{q}” yet. Search is still warming up."
 
   defp search_empty_message(:connecting, q),
-    do: "Nothing in the index matches “#{q}” yet — still connecting to the engine."
+    do: "Nothing matches “#{q}” yet. Still connecting."
 
   defp search_empty_message(:reconnecting, q),
-    do: "Nothing in the index matches “#{q}” yet — the index is catching up."
+    do: "Nothing matches “#{q}” yet. Search is catching up."
 
   defp search_empty_message(_status, q), do: "Nothing matches “#{q}”."
 

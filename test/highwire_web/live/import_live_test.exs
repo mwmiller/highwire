@@ -67,7 +67,7 @@ defmodule HighWireWeb.ImportLiveTest do
       assert html =~ ~s(title="Settings")
       assert html =~ "@publ1c.ed25519"
       assert html =~ "4.0 MB of messages"
-      assert html =~ "present — they come too"
+      assert html =~ "present, they come too"
       assert html =~ "Quit the old client before importing"
       assert html =~ "Import it"
       assert html =~ "Start fresh"
@@ -77,7 +77,7 @@ defmodule HighWireWeb.ImportLiveTest do
     test "consent without a log admits it is identity only" do
       html = render_face(:import_pending, %{id: "@publ1c.ed25519"})
 
-      assert html =~ "identity only — no history log found"
+      assert html =~ "identity only, no history log found"
       assert html =~ "none found"
     end
 

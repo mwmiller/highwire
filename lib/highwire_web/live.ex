@@ -26,14 +26,14 @@ defmodule HighWireWeb.Live do
           <img src={~p"/images/highwire-mark.png"} alt="" class="mt-2 h-32 w-32 rounded-2xl" />
           <h1 class="mt-4 text-4xl font-bold tracking-tight">HighWire</h1>
           <p class="mt-2 text-lg text-sub">
-            A local-first social network on Secure Scuttlebutt — catenary's
-            interface, SSB's network.
+            A local-first social network on Secure Scuttlebutt, with an interface
+            built for reading.
           </p>
 
           <div class="mt-8 grid gap-4 sm:grid-cols-2">
             <div class="rounded-lg border border-edge bg-panel p-4">
-              <h2 class="font-semibold text-paper">SSB engine</h2>
-              <p class="mt-1 text-sm text-warn">erlbutt sidecar — local muxrpc over loopback</p>
+              <h2 class="font-semibold text-paper">SSB network</h2>
+              <p class="mt-1 text-sm text-warn">Secure Scuttlebutt, running on this device</p>
             </div>
             <div class="rounded-lg border border-edge bg-panel p-4">
               <h2 class="font-semibold text-paper">Data directory</h2>

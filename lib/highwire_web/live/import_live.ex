@@ -77,8 +77,9 @@ defmodule HighWireWeb.ImportLive do
               <img src={~p"/images/highwire-mark.png"} alt="" class="h-16 w-16 rounded-2xl" />
               <h1 class="mt-4 text-2xl font-bold text-paper">Bring your old feed along</h1>
               <p class="mt-2 text-sm text-sub">
-                HighWire found an existing Secure Scuttlebutt store from another client.
-                Take it over — identity, history, blobs — or start with a clean one.
+                HighWire found data from another Secure Scuttlebutt client.
+                Take it over, with its identity, history and blobs, or start with a
+                clean one.
               </p>
             </div>
 
@@ -88,7 +89,7 @@ defmodule HighWireWeb.ImportLive do
                 <dd class="min-w-0 break-all text-right font-mono text-paper">{@info[:id]}</dd>
               </div>
               <div class="flex items-baseline justify-between gap-4 py-2.5">
-                <dt class="shrink-0 text-dim">Store</dt>
+                <dt class="shrink-0 text-dim">Location</dt>
                 <dd class="min-w-0 break-all text-right font-mono text-xs text-sub">
                   {Import.js_home()}
                 </dd>
@@ -98,20 +99,20 @@ defmodule HighWireWeb.ImportLive do
                 <dd class="text-right text-paper">
                   {if is_integer(@info[:log_size]),
                     do: "#{human_size(@info[:log_size])} of messages",
-                    else: "identity only — no history log found"}
+                    else: "identity only, no history log found"}
                 </dd>
               </div>
               <div class="flex items-baseline justify-between gap-4 py-2.5">
                 <dt class="shrink-0 text-dim">Blobs</dt>
                 <dd class="text-right text-paper">
-                  {if @info[:blobs], do: "present — they come too", else: "none found"}
+                  {if @info[:blobs], do: "present, they come too", else: "none found"}
                 </dd>
               </div>
             </dl>
 
             <p class="rounded-lg border border-edge bg-panel p-3 text-sm text-warn">
               Quit the old client before importing. Two programs publishing from one
-              identity fork your feed — permanently, signed, and unrecoverable.
+              identity fork your feed: permanently, signed, and unrecoverable.
             </p>
 
             <div class="flex flex-wrap gap-3">
@@ -126,7 +127,7 @@ defmodule HighWireWeb.ImportLive do
             <div>
               <h1 class="text-2xl font-bold text-paper">Converting your history</h1>
               <p class="mt-2 text-sm text-sub">
-                Reading the old store and rebuilding it for this engine. Keep the old
+                Reading the old data and rebuilding it for HighWire. Keep the old
                 client closed; HighWire starts when it finishes.
               </p>
             </div>
@@ -168,8 +169,9 @@ defmodule HighWireWeb.ImportLive do
             <div>
               <h1 class="text-2xl font-bold text-paper">The import stopped</h1>
               <p class="mt-2 text-sm text-sub">
-                Nothing finished, and the old store was not touched. Trying again re-runs
-                the whole import; starting fresh mints a new identity instead.
+                Nothing finished, and the old data was not touched. Trying again
+                re-runs the whole import; starting fresh creates a new identity
+                instead.
               </p>
             </div>
 
@@ -193,8 +195,8 @@ defmodule HighWireWeb.ImportLive do
             <div>
               <h1 class="text-2xl font-bold text-paper">Nothing to import into</h1>
               <p class="mt-2 text-sm text-sub">
-                The SSB engine is disabled in this configuration, so there is no store
-                to bring an old feed into.
+                SSB is disabled in this configuration, so there is nothing to bring an
+                old feed into.
               </p>
             </div>
 
@@ -252,7 +254,7 @@ defmodule HighWireWeb.ImportLive do
     "#{div(seconds, 60)}m #{rem(seconds, 60)}s"
   end
 
-  defp elapsed(_info), do: "—"
+  defp elapsed(_info), do: "not yet"
 
   defp est_messages(dots) when is_integer(dots), do: max(dots - 1, 0) * @dot_size
 

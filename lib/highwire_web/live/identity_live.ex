@@ -149,7 +149,7 @@ defmodule HighWireWeb.IdentityLive do
           if first? do
             {:info, "#{created} is your identity now"}
           else
-            {:info, "Created #{created} — switch to it when you want to post as it"}
+            {:info, "Created #{created}. Switch to it when you want to post as it."}
           end
 
         {:noreply, fresh |> assign(form_label: "") |> assign(notice: notice)}
@@ -269,7 +269,7 @@ defmodule HighWireWeb.IdentityLive do
     end
   end
 
-  defp explain(:unknown_identity), do: "that identity is not in this store"
+  defp explain(:unknown_identity), do: "that identity is not here"
   defp explain(:disabled_identity), do: "that identity is disabled"
   defp explain(:active_identity), do: "switch away from it first"
   defp explain(:not_disabled), do: "disable it first"
@@ -299,9 +299,9 @@ defmodule HighWireWeb.IdentityLive do
           <h1 class="text-xl font-bold text-paper">Identity</h1>
 
           <p class="mt-3 text-sm text-dim">
-            Every identity lives in this one store — switching changes who you post as,
-            not where your data lives. Deleting is two-stage: an identity must be
-            disabled before it can be removed for good.
+            Every identity lives in this one installation. Switching changes who you
+            post as, not where your data lives. Deleting is two-stage: an identity must
+            be disabled before it can be removed for good.
           </p>
 
           <p :if={@notice} role="status" class={notice_class(@notice)}>
@@ -343,7 +343,7 @@ defmodule HighWireWeb.IdentityLive do
             :if={@active == nil}
             class="mt-4 rounded-lg border border-edge bg-panel p-4 text-sm text-dim"
           >
-            No identity yet — the engine mints one on its first boot, or create one below.
+            No identity yet. One is created on first run, or create one below.
           </p>
 
           <h2
@@ -450,11 +450,11 @@ defmodule HighWireWeb.IdentityLive do
                 class="mt-3 rounded border border-bad/40 bg-bad/5 p-3"
               >
                 <p class="text-sm text-paper">
-                  Permanently delete “{row["label"]}”? The private key is destroyed —
-                  signing as this feed becomes impossible, and there is no recovery.
+                  Permanently delete “{row["label"]}”? The private key is destroyed.
+                  Signing as this feed becomes impossible, and there is no recovery.
                 </p>
                 <p class="mt-1 text-xs text-dim">
-                  Whatever it published stays in the store. Export the key first if it
+                  Whatever it published stays here. Export the key first if it
                   still matters.
                 </p>
                 <div class="mt-3 flex gap-2">
@@ -475,7 +475,7 @@ defmodule HighWireWeb.IdentityLive do
               <div :if={exporting?(@exported, row["id"])} class="mt-3">
                 <div class="flex items-center justify-between">
                   <p class="text-xs text-dim">
-                    The ssb-keys secret file — keep it as safe as it keeps you.
+                    The ssb-keys secret file. Keep it as safe as it keeps you.
                   </p>
                   <button type="button" class="btn" phx-click="export-close">Close</button>
                 </div>
@@ -503,9 +503,9 @@ defmodule HighWireWeb.IdentityLive do
           </h2>
 
           <p class="mt-3 text-sm text-dim">
-            A fresh ed25519 keypair, minted here. It starts enabled but inactive —
-            switch to it to post as it. To move an existing identity in instead,
-            replace the secret file while the engine is stopped.
+            A fresh ed25519 keypair, minted here. It starts enabled but inactive.
+            Switch to it to post as it. To move an existing identity in instead,
+            replace the secret file while the service is stopped.
           </p>
 
           <form phx-submit="create" class="mt-4 flex items-end gap-3">
