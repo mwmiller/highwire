@@ -101,6 +101,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(max_sidebar_contacts: Contacts.subset_size())
       |> assign(compose: "", compose_error: nil)
       |> assign(private_recipients: MapSet.new())
+      |> assign(compose_pending: false)
       |> assign(mention_suggestions: [])
       |> assign(paged: %{}, page_inflight: MapSet.new(), page_retries: %{})
       |> assign(active: true, peers_timer: peers_timer)
@@ -365,16 +366,25 @@ defmodule HighWireWeb.TimelineLive do
       not is_binary(socket.assigns.self_id) ->
         {:noreply, assign(socket, compose_error: "Not connected to the local SSB engine yet.")}
 
+      socket.assigns.compose_pending ->
+        {:noreply, socket}
+
       socket.assigns.view == :private ->
-        publish_private(socket, body, Map.get(params, "recipients", []))
+        socket = assign(socket, compose_pending: true)
+
+        case publish_private(socket, body, Map.get(params, "recipients", [])) do
+          {:noreply, s} -> {:noreply, assign(s, compose_pending: false)}
+        end
 
       true ->
+        socket = assign(socket, compose_pending: true)
+
         case Timeline.publish(body) do
           {:ok, _key} ->
-            {:noreply, assign(socket, compose: "", compose_error: nil)}
+            {:noreply, assign(socket, compose: "", compose_error: nil, compose_pending: false)}
 
           {:error, reason} ->
-            {:noreply, assign(socket, compose_error: publish_error(reason))}
+            {:noreply, assign(socket, compose_error: publish_error(reason), compose_pending: false)}
         end
     end
   end
@@ -1196,8 +1206,8 @@ defmodule HighWireWeb.TimelineLive do
                     >
                       Attach <input type="file" accept="image/*" data-attach-input class="hidden" />
                     </label>
-                    <button type="submit" class="btn btn-primary" phx-disable-with="Publishing…">
-                      Publish
+                    <button type="submit" class="btn btn-primary" phx-disable-with="Publishing…" disabled={@compose_pending}>
+                      {if @compose_pending, do: "Publishing…", else: "Publish"}
                     </button>
                   </div>
                 </div>

@@ -44,6 +44,7 @@ defmodule HighWireWeb.PostLive do
        raw_key: nil,
        reply_body: "",
        reply_error: nil,
+       reply_pending: false,
        mention_suggestions: [],
        blob_rev: 0
      )}
@@ -181,7 +182,12 @@ defmodule HighWireWeb.PostLive do
       not is_binary(socket.assigns.self_id) ->
         {:noreply, assign(socket, reply_error: "Not connected to the local SSB engine yet.")}
 
+      socket.assigns.reply_pending ->
+        {:noreply, socket}
+
       true ->
+        socket = assign(socket, reply_pending: true)
+
         # A reply from this view answers the thread root; branch points
         # at the same root (there is no per-reply addressing here).
         # A private thread's reply is boxed for its participants so the
@@ -195,10 +201,10 @@ defmodule HighWireWeb.PostLive do
 
         case result do
           {:ok, _key} ->
-            {:noreply, assign(socket, reply_body: "", reply_error: nil)}
+            {:noreply, assign(socket, reply_body: "", reply_error: nil, reply_pending: false)}
 
           {:error, reason} ->
-            {:noreply, assign(socket, reply_error: reply_error(reason))}
+            {:noreply, assign(socket, reply_error: reply_error(reason), reply_pending: false)}
         end
     end
   end
@@ -658,8 +664,8 @@ defmodule HighWireWeb.PostLive do
                 >
                   Attach <input type="file" accept="image/*" data-attach-input class="hidden" />
                 </label>
-                <button type="submit" class="btn btn-primary" phx-disable-with="Replying…">
-                  Reply
+                <button type="submit" class="btn btn-primary" phx-disable-with="Replying…" disabled={@reply_pending}>
+                  {if @reply_pending, do: "Replying…", else: "Reply"}
                 </button>
               </div>
             </form>

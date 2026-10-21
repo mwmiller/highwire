@@ -35,7 +35,9 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:follows, [])
      |> assign(:blocked, [])
      |> assign(:self_id, nil)
-     |> assign(:more, false)}
+     |> assign(:more, false)
+     |> assign(:follow_pending, MapSet.new())
+     |> assign(:block_pending, MapSet.new())}
   end
 
   @impl true
@@ -88,28 +90,44 @@ defmodule HighWireWeb.ProfileLive do
   end
 
   def handle_event("toggle-follow", %{"id" => id}, socket) do
+    socket =
+      socket
+      |> update(:follow_pending, &MapSet.put(&1, id))
+      |> update(:block_pending, &MapSet.delete(&1, id))
+
     result = if id in socket.assigns.follows, do: Timeline.unfollow(id), else: Timeline.follow(id)
 
     case result do
-      {:error, reason} -> Logger.warning("profile: follow publish failed: #{inspect(reason)}")
-      _ok -> :ok
+      {:error, reason} ->
+        Logger.warning("profile: follow publish failed: #{inspect(reason)}")
+
+      _ok ->
+        :ok
     end
 
-    {:noreply, socket}
+    {:noreply, update(socket, :follow_pending, &MapSet.delete(&1, id))}
   end
 
   # Blocking publishes one contact message that carries both edges — the
   # block and the retracted follow — so a blocked feed also stops feeding
   # the timeline. Unblocking clears only the block.
   def handle_event("toggle-block", %{"id" => id}, socket) do
+    socket =
+      socket
+      |> update(:block_pending, &MapSet.put(&1, id))
+      |> update(:follow_pending, &MapSet.delete(&1, id))
+
     result = if id in socket.assigns.blocked, do: Timeline.unblock(id), else: Timeline.block(id)
 
     case result do
-      {:error, reason} -> Logger.warning("profile: block publish failed: #{inspect(reason)}")
-      _ok -> :ok
+      {:error, reason} ->
+        Logger.warning("profile: block publish failed: #{inspect(reason)}")
+
+      _ok ->
+        :ok
     end
 
-    {:noreply, socket}
+    {:noreply, update(socket, :block_pending, &MapSet.delete(&1, id))}
   end
 
   # Clicking a post opens its thread — the same journey as the timeline
@@ -140,7 +158,9 @@ defmodule HighWireWeb.ProfileLive do
       follows: viewer.follows,
       blocked: viewer.blocked,
       self_id: viewer.self_id,
-      blob_rev: viewer.blob_rev
+      blob_rev: viewer.blob_rev,
+      follow_pending: MapSet.new(),
+      block_pending: MapSet.new()
     )
   end
 
@@ -216,9 +236,14 @@ defmodule HighWireWeb.ProfileLive do
             type="button"
             phx-click="toggle-follow"
             phx-value-id={@id}
+            phx-disabled={MapSet.member?(@follow_pending, @id)}
             class={["btn mt-3 w-full", @id in @follows and "btn-primary"]}
           >
-            {if @id in @follows, do: "Following", else: "Follow"}
+            {cond do
+              MapSet.member?(@follow_pending, @id) -> if @id in @follows, do: "Unfollowing…", else: "Following…"
+              @id in @follows -> "Following"
+              true -> "Follow"
+            end}
           </button>
 
           <button
@@ -226,9 +251,14 @@ defmodule HighWireWeb.ProfileLive do
             type="button"
             phx-click="toggle-block"
             phx-value-id={@id}
+            phx-disabled={MapSet.member?(@block_pending, @id)}
             class={["btn mt-2 w-full", @id not in @blocked and "text-bad"]}
           >
-            {if @id in @blocked, do: "Unblock", else: "Block"}
+            {cond do
+              MapSet.member?(@block_pending, @id) -> if @id in @blocked, do: "Unblocking…", else: "Blocking…"
+              @id in @blocked -> "Unblock"
+              true -> "Block"
+            end}
           </button>
         </div>
 
