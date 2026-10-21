@@ -243,7 +243,7 @@ defmodule HighWireWeb.PostLive do
 
   defp reply_error(:offline), do: "Not connected to the local SSB engine yet."
 
-  defp reply_error(_reason), do: "Reply failed — the engine refused the message."
+  defp reply_error(_reason), do: "Reply failed."
 
   # A thread is private when its root arrived boxed; the badge already
   # keys off the same flag.

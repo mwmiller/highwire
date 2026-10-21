@@ -1087,7 +1087,7 @@ defmodule HighWireWeb.NetworkLive do
   defp switch_error(reason), do: inspect(reason)
 
   defp dial_error({:exit, reason}), do: inspect(reason)
-  defp dial_error(:timeout), do: "the engine did not answer in time."
+  defp dial_error(:timeout), do: "Connection timed out."
   defp dial_error(:no_secret), do: "no account secret found."
   defp dial_error(reason), do: inspect(reason)
 

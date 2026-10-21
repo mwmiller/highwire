@@ -872,7 +872,7 @@ defmodule HighWireWeb.TimelineLive do
 
   defp publish_error(reason) when is_binary(reason), do: reason
   defp publish_error(%{"message" => msg}) when is_binary(msg), do: msg
-  defp publish_error(_reason), do: "Publish failed — the engine refused the message."
+  defp publish_error(_reason), do: "Publish failed."
 
   # The tail of the feed reads three ways: a page on its way back, more
   # rows still to ask for, or the true end. A reader used to have to
@@ -1223,7 +1223,7 @@ defmodule HighWireWeb.TimelineLive do
               :if={@status == :ok and @q != "" and @search_state == :stalled}
               class="px-4 py-3 text-sm text-warn"
             >
-              The store index did not answer — this search may be incomplete.
+              Some results may be missing.
             </p>
             <p :if={@empty_search?} class="px-4 py-3 text-sm text-dim">
               {search_empty_message(@index_status, @q)}
