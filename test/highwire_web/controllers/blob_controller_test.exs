@@ -37,7 +37,8 @@ defmodule HighWireWeb.BlobControllerTest do
 
     assert response(conn, 200) == @png
     assert media_type(conn) == "image/png"
-    assert get_resp_header(conn, "cache-control") == ["public, max-age=60"]
+    # keyed by the hash of its bytes, so the file is immutable: cached hard
+    assert get_resp_header(conn, "cache-control") == ["public, max-age=31536000, immutable"]
   end
 
   test "a hit in the engine's own store is served directly, without copying", %{
@@ -92,6 +93,9 @@ defmodule HighWireWeb.BlobControllerTest do
     # color scheme; Excon identicons carry neither
     assert body =~ "prefers-color-scheme"
     assert body =~ "stroke-dasharray"
+    # the placeholder waits on bytes that have not arrived, so its window
+    # is short — the real blob takes over the URL as soon as it lands
+    assert get_resp_header(conn, "cache-control") == ["public, max-age=60"]
     refute File.exists?(cache)
     refute File.exists?(gen)
 

@@ -14,8 +14,11 @@ defmodule HighWireWeb.BlobController do
        mountain glyph, no per-key derivation) — the bytes have never
        been seen. It deliberately does NOT look like an identicon:
        identicons only mean something keyed by a feed id (a long-lived
-       identity), never by a blob. The short cache window lets the
-       real blob take over as soon as it lands.
+       identity), never by a blob.
+
+  A served file is immutable — its key is the hash of its bytes — and is
+  cached for a year. The placeholder is the exception, on a minute-long
+  window so the real blob takes over its URL as soon as it lands.
 
   Also serves `GET /identicon/<feed-id-hex>`: the Excon `:framed`
   identicon for feeds without an avatar image (deterministic per id, so
@@ -102,12 +105,18 @@ defmodule HighWireWeb.BlobController do
   defp describe(reason) when is_binary(reason), do: reason
   defp describe(reason), do: inspect(reason)
 
+  # A blob's key is the hash of its bytes, so the file at this path can
+  # never become different bytes: immutable, cached for a year. Avatars
+  # ride this route and feeds share the same people, so a minute-long
+  # window meant every repeated face was refetched for as long as a page
+  # stayed open. The `?v=<blob_rev>` query an avatar URL carries is what
+  # re-fetches a URL whose bytes upgraded from placeholder to real blob.
   defp serve(conn, {:file, path}) do
     case content_type(path) do
       {:ok, type} ->
         conn
         |> put_resp_content_type(type)
-        |> put_resp_header("cache-control", "public, max-age=60")
+        |> put_resp_header("cache-control", "public, max-age=31536000, immutable")
         |> put_blob_headers(type)
         |> send_file(200, path)
 
@@ -116,6 +125,9 @@ defmodule HighWireWeb.BlobController do
     end
   end
 
+  # The placeholder answers a blob whose bytes are not local yet, and the
+  # short window is the point: the real blob takes over the URL as soon
+  # as it lands.
   defp serve(conn, {:generated, data}) do
     conn
     |> put_resp_content_type("image/svg+xml")
