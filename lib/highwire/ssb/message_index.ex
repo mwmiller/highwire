@@ -1,7 +1,7 @@
 defmodule HighWire.SSB.MessageIndex do
   @moduledoc """
   The store's honoured tombstones and edit targets, kept in a local
-  DETS file and mirrored in ETS for reads.
+  DETS file.
 
   Two kinds of message change another message after the fact, and both
   arrive outside the per-feed windows the timeline renders from:
@@ -18,9 +18,9 @@ defmodule HighWire.SSB.MessageIndex do
       thread root so the row still lands in the right conversation.
 
   Both are keyed by the message they act on, so the render path asks one
-  question per message it is about to show. The DETS file is the durable
-  copy; reads come from an ETS mirror so a render never queues behind
-  disk.
+  question per message it is about to show. The index is a handful of
+  rows per deletion or edit, so the render path reads the file itself;
+  there is no second copy to keep in step.
 
   The file also carries a received-time cursor per drain type, so the
   store is walked once — on the first run — and every pass afterwards
@@ -34,7 +34,6 @@ defmodule HighWire.SSB.MessageIndex do
   require Logger
 
   @table :highwire_message_index
-  @mirror :highwire_message_index_mirror
 
   @type feed_id :: binary()
 
@@ -114,10 +113,10 @@ defmodule HighWire.SSB.MessageIndex do
     GenServer.call(__MODULE__, :clear, 5_000)
   end
 
-  # Reads go to the ETS mirror; a miss (or the index not running) reads
+  # Reads go to the file itself; a miss (or the index not running) reads
   # as "nothing known", which is the safe default for every caller.
   defp lookup(key) do
-    case :ets.lookup(@mirror, key) do
+    case :dets.lookup(@table, key) do
       [{^key, value}] -> value
       [] -> nil
     end
@@ -130,8 +129,6 @@ defmodule HighWire.SSB.MessageIndex do
     path = Keyword.get(opts, :path, dets_path())
     File.mkdir_p!(Path.dirname(path))
 
-    :ets.new(@mirror, [:named_table, :set, :protected, read_concurrency: true])
-
     case :dets.open_file(@table, [
            {:file, String.to_charlist(path)},
            {:type, :set},
@@ -140,7 +137,6 @@ defmodule HighWire.SSB.MessageIndex do
            {:access, :read_write}
          ]) do
       {:ok, @table} ->
-        seed_mirror()
         {:ok, %{path: path}}
 
       {:error, reason} ->
@@ -181,7 +177,6 @@ defmodule HighWire.SSB.MessageIndex do
   end
 
   def handle_call(:clear, _from, state) do
-    :ets.delete_all_objects(@mirror)
     if not Map.get(state, :disabled?, false), do: :dets.delete_all_objects(@table)
     {:reply, :ok, state}
   end
@@ -191,20 +186,8 @@ defmodule HighWire.SSB.MessageIndex do
   defp write(_state, []), do: :ok
 
   defp write(_state, rows) do
-    :ets.insert(@mirror, rows)
     :dets.insert(@table, rows)
     :ok
-  end
-
-  defp seed_mirror do
-    :dets.foldl(
-      fn {key, value}, _ ->
-        :ets.insert(@mirror, {key, value})
-        :ok
-      end,
-      :ok,
-      @table
-    )
   end
 
   defp dets_path, do: Path.join([HighWire.home_dir(), ".ssberl", "message-index.dets"])
