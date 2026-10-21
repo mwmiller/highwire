@@ -101,6 +101,12 @@ defmodule HighWire.Timeline do
   # cooloff.
   @contact_cooloff_ms :timer.minutes(20)
 
+  # One page of a roots-shaped view — a profile's feed, a tab. The engine
+  # honors this; the drain bounds itself to it too, because the drain runs
+  # inside the Timeline's GenServer call.
+  @profile_page 60
+  @roots_page 30
+
   def topic, do: @topic
 
   @doc "PubSub topic for gossip events — the live connection set changing."
@@ -246,26 +252,51 @@ defmodule HighWire.Timeline do
   end
 
   @doc """
-  A feed's full profile card — `%{name, image, description}` — resolved
-  through the sidecar (social-value semantics), or nil when the engine
-  is down. Used by the profile page; the timeline bulk-fetches only
-  name/image via the payload's `:profiles`.
+  The viewer's own facts — `%{status, self_id, follows, blocked, blob_rev}`
+  — as one small read.
+
+  A page that shows a thread or a profile needs the viewer's identity,
+  who they follow and block, and the blob revision; it does not need the
+  feed, the flat message list or the index. Reading those off the whole
+  payload shipped a store-sized map to every such mount, so this answers
+  the question actually asked. `:disabled` when the timeline is down.
   """
-  @spec profile(binary()) ::
-          %{name: binary() | nil, image: binary() | nil, description: binary() | nil} | nil
-  def profile(id) when is_binary(id) do
+  @spec viewer() :: %{
+          status: atom(),
+          self_id: binary() | nil,
+          follows: [binary()],
+          blocked: [binary()],
+          blob_rev: integer()
+        }
+  def viewer do
     case Process.whereis(__MODULE__) do
       nil ->
-        nil
+        %{status: :disabled, self_id: nil, follows: [], blocked: [], blob_rev: 0}
 
       pid ->
         try do
-          GenServer.call(pid, {:profile, id}, 5_000)
+          GenServer.call(pid, :viewer, 1_000)
         catch
-          :exit, _ -> nil
+          :exit, _ -> %{status: :loading, self_id: nil, follows: [], blocked: [], blob_rev: 0}
         end
     end
   end
+
+  @doc """
+  A feed's profile card — `%{name, image, description}` — read straight
+  from the `HighWire.SSB.Profile` read model, or nil while nothing has
+  resolved that feed.
+
+  No Timeline call: the read model is public ETS, written by the payload
+  broadcast (name, image) and the store-wide about drain (name,
+  description), so the profile page reads it in its own process without
+  queueing behind the Timeline's mailbox or waiting on a sidecar
+  round-trip. The timeline itself bulk-fetches only name/image via the
+  payload's `:profiles`.
+  """
+  @spec profile(binary()) ::
+          %{name: binary() | nil, image: binary() | nil, description: binary() | nil} | nil
+  def profile(id) when is_binary(id), do: Profile.get(id)
 
   def profile(_), do: nil
 
@@ -728,22 +759,15 @@ defmodule HighWire.Timeline do
     {:reply, Map.get(state, :peer_meta, %{}), state}
   end
 
-  def handle_call({:profile, id}, _from, state) do
-    base = %{name: nil, image: nil, description: nil}
-
-    profile =
-      case avatar_of(state.client, id) do
-        {:ok, p} -> Map.merge(base, p)
-        _ -> base
-      end
-
-    description =
-      case about_value(state.client, id, "description") do
-        {:ok, v} -> v
-        _ -> nil
-      end
-
-    {:reply, Map.put(profile, :description, description), state}
+  def handle_call(:viewer, _from, state) do
+    {:reply,
+     %{
+       status: state.status,
+       self_id: state.self_id,
+       follows: state.follows,
+       blocked: blocked_ids(state),
+       blob_rev: state.blob_rev
+     }, state}
   end
 
   def handle_call({:profile_feed, id, resume}, _from, state) do
@@ -949,21 +973,6 @@ defmodule HighWire.Timeline do
 
   defp active?(state), do: map_size(state.active) > 0
 
-  defp about_value(nil, _dest, _key), do: :error
-
-  defp about_value(client, dest, key) do
-    case Client.call(client, ["about", "socialValue"], [%{"dest" => dest, "key" => key}], 2_000) do
-      {:ok, v} -> {:ok, about_text(v)}
-      _ -> :error
-    end
-  catch
-    :exit, _ -> :error
-  end
-
-  defp about_text(v) when is_binary(v), do: v
-  defp about_text(%{"link" => link}) when is_binary(link), do: link
-  defp about_text(_), do: nil
-
   # gossip.peers is the whole report in one call. Public (with @doc
   # false) so tests can drive the assembly without a live engine.
   @doc false
@@ -1118,7 +1127,7 @@ defmodule HighWire.Timeline do
   # chronological view — without it the engine pages by thread activity,
   # so a bumped thread jumps above more recent posts.
   defp fetch_profile(state, id, resume) do
-    props = %{"id" => id, "limit" => 60, "reverse" => true, "order" => "timestamp"}
+    props = %{"id" => id, "limit" => @profile_page, "reverse" => true, "order" => "timestamp"}
     props = if is_integer(resume), do: Map.put(props, "resume", resume), else: props
 
     if is_pid(state.client) and Process.alive?(state.client) do
@@ -1139,7 +1148,10 @@ defmodule HighWire.Timeline do
   end
 
   defp profile_page(ref) do
-    {markers, rows} = drain_stream(ref, []) |> Enum.split_with(&(&1["marker"] == true))
+    # Drain the page plus the marker frame that follows it; the surplus
+    # row the extra read may catch is trimmed — the page stays 60 wide.
+    {markers, rows} = drain_stream(ref, @profile_page) |> Enum.split_with(&(&1["marker"] == true))
+    rows = Enum.take(rows, @profile_page)
     cursor = private_cursor(markers)
 
     %{
@@ -1188,7 +1200,7 @@ defmodule HighWire.Timeline do
   # carries the integer cursor for the next one. Rows are shaped like
   # feed rows; private items arrive freshly decrypted from the view.
   defp fetch_roots(state, feed, extra, resume, private?) do
-    props = Map.merge(%{"limit" => 30, "reverse" => true}, extra)
+    props = Map.merge(%{"limit" => @roots_page, "reverse" => true}, extra)
     props = if is_integer(resume), do: Map.put(props, "resume", resume), else: props
     self_id = state.self_id
 
@@ -1205,7 +1217,8 @@ defmodule HighWire.Timeline do
   end
 
   defp roots_page(ref, state, self_id, private?) do
-    {markers, items} = drain_stream(ref, []) |> Enum.split_with(&(&1["marker"] == true))
+    {markers, items} = drain_stream(ref, @roots_page) |> Enum.split_with(&(&1["marker"] == true))
+    items = Enum.take(items, @roots_page)
     cursor = private_cursor(markers)
 
     like_counts =
@@ -1230,14 +1243,42 @@ defmodule HighWire.Timeline do
     end
   end
 
-  defp drain_stream(ref, acc) do
+  # Drain a paged stream up to `page` rows, plus the marker frame the
+  # engine sends with a full page. The engine honors the limit it was
+  # asked for, so this is a belt on top of the request: an engine that
+  # ignores it, or a stream that keeps flowing, cannot hold the Timeline —
+  # the call runs inline on the GenServer, so an unbounded drain blocks
+  # every mount behind it. The short timeout is the same guard for a
+  # stream that goes quiet mid-page.
+  defp drain_stream(ref, page, acc \\ []) do
     receive do
-      {Client, ^ref, {:item, msg}} -> drain_stream(ref, [msg | acc])
-      {Client, ^ref, :done} -> Enum.reverse(acc)
-      {Client, ^ref, {:error, _}} -> Enum.reverse(acc)
+      {Client, ^ref, {:item, msg}} ->
+        acc = [msg | acc]
+
+        if page_full?(acc, page) do
+          Enum.reverse(acc)
+        else
+          drain_stream(ref, page, acc)
+        end
+
+      {Client, ^ref, :done} ->
+        Enum.reverse(acc)
+
+      {Client, ^ref, {:error, _}} ->
+        Enum.reverse(acc)
     after
-      10_000 -> Enum.reverse(acc)
+      2_000 -> Enum.reverse(acc)
     end
+  end
+
+  # The page's rows are in, and either its marker has landed or one row
+  # past the page has — the marker follows the last row, so that extra
+  # read is what puts the cursor in hand. Once one of those holds the
+  # drain stops, however much more the stream is offering.
+  defp page_full?(acc, page) do
+    rows = Enum.count(acc, &(&1["marker"] != true))
+
+    rows > page or (rows == page and Enum.any?(acc, &(&1["marker"] == true)))
   end
 
   # -- post viewer ---------------------------------------------------------

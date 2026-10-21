@@ -1148,6 +1148,83 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  # Serves a paged roots stream the way the engine does — a page of rows,
+  # then the marker that carries the next cursor — followed by far more
+  # rows than the page asked for. The drain must stop at the page, not
+  # read the surplus into the GenServer call.
+  defmodule PagedClient do
+    @moduledoc false
+    use GenServer
+
+    def start(rows), do: GenServer.start_link(__MODULE__, rows)
+
+    @impl true
+    def init(rows), do: {:ok, rows}
+
+    @impl true
+    def handle_call({:stream, _name, _args, subscriber}, _from, rows) do
+      ref = make_ref()
+      {page, surplus} = Enum.split(rows, 60)
+
+      Enum.each(page, &send(subscriber, {HighWire.SSB.Client, ref, {:item, &1}}))
+      send(subscriber, {HighWire.SSB.Client, ref, {:item, %{"marker" => true, "resume" => 99}}})
+      Enum.each(surplus, &send(subscriber, {HighWire.SSB.Client, ref, {:item, &1}}))
+      send(subscriber, {HighWire.SSB.Client, ref, :done})
+
+      {:reply, {:ok, ref}, rows}
+    end
+
+    def handle_call({:call, _name, _args}, _from, rows),
+      do: {:reply, {:error, :methodnotfound}, rows}
+  end
+
+  # A profile page must not read past what it asked for: the drain runs
+  # inside the Timeline's GenServer call, so an engine (or a stream) that
+  # keeps flowing would block every mount until it stopped. The request
+  # asks for 60; the page comes back 60 wide with its cursor, however
+  # many more rows the stream offers.
+  describe "profile pages drain only the page they asked for" do
+    defp profile_state(client) do
+      %{
+        client: client,
+        self_id: "@me.ed25519",
+        follows: [],
+        contact_msgs: [],
+        collapsed_contacts: %{by_group: %{}, rows: %{}},
+        acc: [],
+        messages: %{},
+        blob_rev: 0,
+        status: :ok,
+        gen: 0,
+        reload_timer: nil,
+        pending: %{},
+        done_count: 0,
+        profile_fetching?: false
+      }
+    end
+
+    test "a stream offering more rows than the page is cut at the page" do
+      rows =
+        for i <- 1..500 do
+          %{"key" => "%p#{i}.sha256", "timestamp" => 1_000 + i, "value" => %{"author" => "@a"}}
+        end
+
+      {:ok, client} = PagedClient.start(rows)
+      state = profile_state(client)
+
+      {:reply, page, _state} =
+        Timeline.handle_call({:profile_feed, "@a.ed25519", nil}, {self(), make_ref()}, state)
+
+      assert length(page.rows) == 60
+      assert page.more
+      assert page.resume == 99
+
+      # The surplus rows are still in the mailbox, unread: the drain
+      # stopped at the page instead of walking the whole stream.
+      assert_received {HighWire.SSB.Client, _ref, {:item, %{"key" => "%p61.sha256"}}}
+    end
+  end
+
   describe "fork replies (reply-to-a-reply)" do
     # The patchwork fork shape: the reply pins root to the message it
     # answers, with fork naming the thread (and one sibling leaving the

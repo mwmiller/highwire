@@ -44,9 +44,7 @@ defmodule HighWireWeb.ProfileLive do
   end
 
   def handle_params(_params, _uri, socket) do
-    {_status, payload} = Timeline.snapshot()
-
-    case payload.self_id do
+    case Timeline.viewer().self_id do
       nil -> {:noreply, socket}
       self -> {:noreply, load(socket, self)}
     end
@@ -121,43 +119,29 @@ defmodule HighWireWeb.ProfileLive do
   end
 
   defp load(socket, id) do
-    {status, payload} = Timeline.snapshot()
+    viewer = Timeline.viewer()
 
-    case Timeline.profile_feed(id) do
-      {:ok, %{rows: rows, resume: resume, more: more}} ->
-        posts = Enum.filter(rows, &post?/1)
+    {status, messages, resume, more} =
+      case Timeline.profile_feed(id) do
+        {:ok, %{rows: rows, resume: resume, more: more}} ->
+          {viewer.status, Enum.filter(rows, &post?/1), resume, more}
 
-        socket
-        |> assign(
-          status: status,
-          id: id,
-          profile: Timeline.profile(id),
-          messages: posts,
-          resume: resume,
-          more: more,
-          follows: Map.get(payload, :follows, []),
-          blocked: Map.get(payload, :blocked, []),
-          self_id: Map.get(payload, :self_id),
-          blob_rev: Map.get(payload, :blob_rev, 0)
-        )
+        {:error, _reason} ->
+          {viewer.status, [], nil, false}
+      end
 
-      {:error, _reason} ->
-        posts = []
-
-        socket
-        |> assign(
-          status: status,
-          id: id,
-          profile: Timeline.profile(id),
-          messages: posts,
-          resume: nil,
-          more: false,
-          follows: Map.get(payload, :follows, []),
-          blocked: Map.get(payload, :blocked, []),
-          self_id: Map.get(payload, :self_id),
-          blob_rev: Map.get(payload, :blob_rev, 0)
-        )
-    end
+    assign(socket,
+      status: status,
+      id: id,
+      profile: Timeline.profile(id),
+      messages: messages,
+      resume: resume,
+      more: more,
+      follows: viewer.follows,
+      blocked: viewer.blocked,
+      self_id: viewer.self_id,
+      blob_rev: viewer.blob_rev
+    )
   end
 
   # Guarded: private messages carry an encrypted binary `content`.
