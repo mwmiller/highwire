@@ -4,6 +4,7 @@ defmodule HighWire.TimelineTest do
   use ExUnit.Case, async: true
 
   alias HighWire.SSB.Client
+  alias HighWire.SSB.Profile
   alias HighWire.Timeline
 
   # A feed message carrying `content` for the given author/key.
@@ -579,6 +580,7 @@ defmodule HighWire.TimelineTest do
           collapsed_contacts: %{by_group: %{}, rows: %{}},
           about_ref: nil,
           about_ids: MapSet.new(),
+          about_snapshot?: true,
           drain_client: nil,
           last_drain_at: nil,
           follows: [],
@@ -693,6 +695,7 @@ defmodule HighWire.TimelineTest do
           collapsed_contacts: %{by_group: %{}, rows: %{}},
           about_ref: nil,
           about_ids: MapSet.new(),
+          about_snapshot?: true,
           tombstone_ref: nil,
           tombstone_buf: [],
           tombstone_snapshot?: true,
@@ -847,7 +850,7 @@ defmodule HighWire.TimelineTest do
 
       assert FakeClient.streams(dedicated) == [
                {["messagesByType"], [%{"type" => "contact"}]},
-               {["messagesByType"], [%{"type" => "about"}]},
+               {["messagesByType"], [%{"type" => "about", "live" => true, "old" => true}]},
                {["messagesByType"], [%{"type" => "delete", "live" => true, "old" => true}]},
                {["messagesByType"], [%{"type" => "post-edit", "live" => true, "old" => true}]}
              ]
@@ -869,8 +872,11 @@ defmodule HighWire.TimelineTest do
         )
 
       {:noreply, st} = Timeline.handle_info({:reload, 0}, st)
+      # The contact drain waits out its refresh window…
       assert st.contact_ref == nil
-      assert st.about_ref == nil
+      # …while the about tail is live: once open it stays open, and a
+      # closed one reopens on the next heartbeat regardless of the window.
+      assert is_reference(st.about_ref)
     end
 
     test "the drain re-opens once the refresh window has passed" do
@@ -919,9 +925,16 @@ defmodule HighWire.TimelineTest do
 
     test "the about pass folds feed targets and completes into the filter" do
       st = drain_state(about_ref: :about_ref, status: :ok)
+      target = "@b-about-#{:erlang.unique_integer([:positive])}=.ed25519"
 
+      # The target names itself.
       about =
-        msg("@b=.ed25519", "%a=.sha256", 9_000, %{"type" => "about", "about" => "@b=.ed25519"})
+        msg(target, "%a=.sha256", 9_000, %{
+          "type" => "about",
+          "about" => target,
+          "name" => "Mayor",
+          "description" => "nasty, brutish, short"
+        })
 
       # Abouts that target a message, or of another type, name no feed.
       other =
@@ -930,7 +943,15 @@ defmodule HighWire.TimelineTest do
       {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, about}}, st)
       {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, other}}, st)
 
-      assert st.about_ids == MapSet.new(["@b=.ed25519"])
+      assert st.about_ids == MapSet.new([target])
+
+      # The name and bio ride the same drain into the read model, so the
+      # profile page reads them from ETS instead of a sidecar round-trip.
+      assert Profile.get(target) == %{
+               name: "Mayor",
+               image: nil,
+               description: "nasty, brutish, short"
+             }
 
       # The contact pass is untouched while the about pass runs.
       assert st.contact_ref == :contact_ref
@@ -938,7 +959,42 @@ defmodule HighWire.TimelineTest do
       {:noreply, st} = Timeline.handle_info({Client, :about_ref, :done}, st)
 
       assert st.about_ref == nil
-      assert st.about_ids == MapSet.new(["@b=.ed25519"])
+      assert st.about_ids == MapSet.new([target])
+    end
+
+    test "an about names a feed only from the feed itself or from us" do
+      st = drain_state(about_ref: :about_ref, status: :ok)
+
+      stranger = "@stranger-#{:erlang.unique_integer([:positive])}=.ed25519"
+      ours = "@ours-#{:erlang.unique_integer([:positive])}=.ed25519"
+      labelled = "@labelled-#{:erlang.unique_integer([:positive])}=.ed25519"
+
+      # We name a feed we follow.
+      from_us =
+        msg("@me.ed25519", "%us=.sha256", 9_000, %{
+          "type" => "about",
+          "about" => ours,
+          "name" => "Our name for them"
+        })
+
+      # A third party names a feed. Anyone can publish one of these, so it
+      # is a fact about the id but not a name the feed wears.
+      from_third_party =
+        msg(stranger, "%them=.sha256", 9_000, %{
+          "type" => "about",
+          "about" => labelled,
+          "name" => "Someone else's label",
+          "description" => "not their bio"
+        })
+
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, from_us}}, st)
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, from_third_party}}, st)
+
+      assert Profile.get(ours) == %{name: "Our name for them", image: nil, description: nil}
+      assert Profile.get(labelled) == nil
+
+      # Both ids are still feeds the store can speak for.
+      assert st.about_ids == MapSet.new([ours, labelled])
     end
 
     test "a completed about pass marks an empty store" do
@@ -947,6 +1003,54 @@ defmodule HighWire.TimelineTest do
       st = drain_state(about_ref: :about_ref, status: :ok)
       {:noreply, st} = Timeline.handle_info({Client, :about_ref, :done}, st)
       assert st.about_ids == MapSet.new()
+    end
+
+    test "a live about republishes the payload with the name it taught" do
+      target = "@b-live-#{:erlang.unique_integer([:positive])}=.ed25519"
+      :ok = Phoenix.PubSub.subscribe(HighWire.PubSub, Timeline.topic())
+
+      st =
+        drain_state(
+          about_ref: :about_ref,
+          about_snapshot?: false,
+          status: :ok,
+          messages: %{feed: [], profiles: %{target => %{name: nil, image: nil}}, blob_rev: 0}
+        )
+
+      about =
+        msg(target, "%a=.sha256", 9_000, %{
+          "type" => "about",
+          "about" => target,
+          "name" => "Live Name"
+        })
+
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, about}}, st)
+
+      assert Profile.display_name(target) == "Live Name"
+      assert st.messages.profiles[target] == %{name: "Live Name", image: nil}
+
+      assert_receive {Timeline, :updated, %{profiles: %{^target => %{name: "Live Name"}}}}
+    end
+
+    test "fetched profiles keep the engine's image and take the trusted name" do
+      id = "@b-fetched-#{:erlang.unique_integer([:positive])}=.ed25519"
+      :ok = Profile.put_about(id, %{"name" => "Trusted"})
+
+      st =
+        drain_state(
+          status: :ok,
+          messages: %{
+            feed: [],
+            profiles: %{id => %{name: nil, image: "&old=.sha256"}},
+            blob_rev: 0
+          }
+        )
+
+      fetched = %{id => %{name: "Some Third Party", image: "&new=.sha256"}}
+      {:noreply, st} = Timeline.handle_info({:profiles_fetched, fetched}, st)
+
+      assert st.messages.profiles[id] == %{name: "Trusted", image: "&new=.sha256"}
+      assert Profile.get(id) == %{name: "Trusted", image: "&new=.sha256", description: nil}
     end
 
     test "a failed about pass keeps whatever arrived" do

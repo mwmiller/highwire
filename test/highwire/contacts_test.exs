@@ -59,7 +59,8 @@ defmodule HighWire.ContactsTest do
     zed = "@zzz=.ed25519"
     amy = "@yyy=.ed25519"
 
-    Profile.put_all(%{zed => %{name: "Zed"}, amy => %{name: "Amy"}})
+    Profile.put_about(zed, %{"name" => "Zed"})
+    Profile.put_about(amy, %{"name" => "Amy"})
 
     Contacts.cast_contacts([zed, amy], :test_contacts)
 

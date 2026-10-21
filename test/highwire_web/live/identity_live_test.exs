@@ -120,7 +120,8 @@ defmodule HighWireWeb.IdentityLiveTest do
       {:ok, id} = Identities.create("Main")
       ref = "&ohrb6WhNesxa/1Qu6mccRSZgjUKh5kF1tZ5aykPQDjo=.sha256"
 
-      :ok = Profile.put_all(%{id => %{name: "dtBy", image: ref}})
+      :ok = Profile.put_all(%{id => %{image: ref}})
+      :ok = Profile.put_about(id, %{"name" => "dtBy"})
 
       {:ok, _view, html} = live(conn, "/identity")
 
@@ -139,7 +140,7 @@ defmodule HighWireWeb.IdentityLiveTest do
       {:ok, view, html} = live(conn, "/identity")
       refute html =~ "dtBy"
 
-      :ok = Profile.put_all(%{id => %{name: "dtBy", image: nil}})
+      :ok = Profile.put_about(id, %{"name" => "dtBy"})
 
       # Transfers ride the same topic and carry nothing — the page
       # takes both messages without a hiccup.

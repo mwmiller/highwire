@@ -12,8 +12,15 @@ defmodule HighWire.SSB.Profile do
   which is the set the identity page needs to show its own feeds
   whether or not they still hold a window seat.
 
-  A read degrades to nil: a feed the engine has never described has no
-  entry, and `HighWire.Avatar.display_name/2` then falls back to the
+  The payload owns the image; an `about` owns the name and the bio. The
+  engine resolves a name for every feed it can, but that answer may be a
+  third party's label for the feed rather than the feed's own word for
+  itself, so it is never applied here. A name is written only from an
+  about message the feed itself (or we) published, which is why
+  `put_all/1` leaves the name alone and `put_about/2` writes it.
+
+  A read degrades to nil: a feed whose own about has not been read has
+  no name, and `HighWire.Avatar.display_name/2` then falls back to the
   short id — what that feed shows its followers anyway.
   """
 
@@ -21,7 +28,7 @@ defmodule HighWire.SSB.Profile do
 
   @table __MODULE__
 
-  @type profile :: %{name: binary() | nil, image: binary() | nil}
+  @type profile :: %{name: binary() | nil, image: binary() | nil, description: binary() | nil}
   @type profiles :: %{optional(binary()) => profile()}
 
   @doc """
@@ -36,23 +43,41 @@ defmodule HighWire.SSB.Profile do
   end
 
   @doc """
-  Store a payload's profiles (id → `%{name, image}`), merging over
+  Store a payload's profile images (id → `%{name, image}`), merging over
   what is already known. Entries are never dropped — a later payload
-  that no longer covers a feed must not take its name away from the
+  that no longer covers a feed must not take its image away from the
   pages still showing it.
+
+  The name the payload carries is not written: it is whatever the
+  engine's profile call resolved, which may be a third party's label.
+  Names come from the about drain through `put_about/2`.
   """
   @spec put_all(map()) :: :ok
   def put_all(profiles) when is_map(profiles) do
     entries =
       Enum.map(profiles, fn
         {id, profile} when is_map(profile) ->
-          {id, %{name: Map.get(profile, :name), image: Map.get(profile, :image)}}
+          {id, payload_entry(get(id), profile)}
 
         {id, _other} ->
-          {id, %{name: nil, image: nil}}
+          {id, payload_entry(get(id), %{})}
       end)
 
     true = :ets.insert(ensure_table(), entries)
+    :ok
+  end
+
+  @doc """
+  Fold one feed's `about` message into its entry: the display name and
+  the bio the profile page shows. The store-wide about drain already
+  reads every about message, but only the feed's own word for itself
+  (or ours about it) arrives here — that is what makes this the one
+  source of names. The profile page then reads a bio from the read
+  model instead of waiting on a sidecar round-trip through the Timeline.
+  """
+  @spec put_about(binary(), map()) :: :ok
+  def put_about(id, fields) when is_binary(id) and is_map(fields) do
+    true = :ets.insert(ensure_table(), {id, about_entry(get(id), fields)})
     :ok
   end
 
@@ -67,12 +92,69 @@ defmodule HighWire.SSB.Profile do
   @spec get(binary()) :: profile() | nil
   def get(id) when is_binary(id) do
     case :ets.lookup(@table, id) do
-      [{^id, profile}] -> profile
+      [{^id, profile}] -> normalize(profile)
       [] -> nil
     end
   rescue
     ArgumentError -> nil
   end
+
+  # A payload speaks for the window it covers: its image is the answer,
+  # so a present key wins even when it is nil — a feed whose avatar went
+  # away must lose the stale one. Its name is not the feed's own word for
+  # itself, so the name already known (from an about) is carried over.
+  defp payload_entry(existing, profile) do
+    %{
+      name: existing_name(existing),
+      image: value(profile, "image") || value(profile, :image),
+      description: existing_description(existing)
+    }
+  end
+
+  # An about message is the feed's own word for itself (or ours about
+  # it), so the name and bio it carries are the answer. Fields it does
+  # not carry are left as they are: an about that only revises the bio
+  # must not take the name away.
+  defp about_entry(existing, fields) do
+    %{
+      name: value(fields, "name") || value(fields, :name) || existing_name(existing),
+      image: existing_image(existing),
+      description:
+        value(fields, "description") || value(fields, :description) ||
+          existing_description(existing)
+    }
+  end
+
+  defp value(map, key) when is_map(map) do
+    case Map.get(map, key) do
+      v when is_binary(v) -> v
+      _ -> nil
+    end
+  end
+
+  defp value(_map, _key), do: nil
+
+  defp existing_name(%{name: name}), do: name
+  defp existing_name(_), do: nil
+
+  defp existing_image(%{image: image}), do: image
+  defp existing_image(_), do: nil
+
+  defp existing_description(%{description: description}), do: description
+  defp existing_description(_), do: nil
+
+  # Entries written before the bio joined the model carry only name and
+  # image; read them as a bio-less profile rather than crashing on the
+  # missing key.
+  defp normalize(%{} = profile) do
+    %{
+      name: Map.get(profile, :name),
+      image: Map.get(profile, :image),
+      description: Map.get(profile, :description)
+    }
+  end
+
+  defp normalize(_), do: %{name: nil, image: nil, description: nil}
 
   @doc "Presentations for the given ids, dropping the unresolved ones."
   @spec take([binary()]) :: profiles()
@@ -82,6 +164,32 @@ defmodule HighWire.SSB.Profile do
         nil -> acc
         profile -> Map.put(acc, id, profile)
       end
+    end)
+  end
+
+  @doc """
+  Lay the read model's names over a payload's `%{id => %{name, image}}`
+  map, keeping each entry's image. The payload's name is replaced, not
+  trusted: it speaks for the engine's resolution, which may be a third
+  party's label. A feed the read model has not named reads as nameless,
+  so `HighWire.Avatar.display_name/2` falls back to the short id.
+  """
+  @spec with_names(profiles()) :: profiles()
+  def with_names(profiles) when is_map(profiles) do
+    known = take(Map.keys(profiles))
+
+    Map.new(profiles, fn
+      {id, profile} when is_map(profile) ->
+        known_name =
+          case known do
+            %{^id => %{name: name}} -> name
+            _ -> nil
+          end
+
+        {id, Map.put(profile, :name, known_name)}
+
+      entry ->
+        entry
     end)
   end
 

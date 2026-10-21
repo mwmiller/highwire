@@ -651,6 +651,10 @@ defmodule HighWire.Timeline do
       # edits touched), and the payload merges the finished rows.
       collapsed_contacts: %{by_group: %{}, rows: %{}},
       about_ref: nil,
+      # True while the about tail's backlog is still arriving: a name
+      # taught by the snapshot republishes once, when the sentinel closes
+      # it, rather than once per item.
+      about_snapshot?: true,
       # The feeds the store holds an `about` message for — the rail
       # suggests nothing else. Starts empty so the filter is armed from
       # the first pass: the about drain fills it, and once it has read
@@ -1745,30 +1749,48 @@ defmodule HighWire.Timeline do
   end
 
   # messagesByType("about"): which feeds the store can speak for — the
-  # Suggester's rail filter. Targets fold in on arrival; a store-wide
-  # about pass is a lot of messages and only the `about` ids are worth
-  # keeping.
+  # Suggester's rail filter — and the names and bios the profile page
+  # shows. Opened as a live tail like the tombstone/edit drains, so a
+  # name published after the pass lands without waiting for a cycle.
+  # No cursor, unlike those drains: the read model lives only as long as
+  # this process, so every boot must walk the store once to refill it.
+  # Only the feed's own word for itself, or ours about them, is written:
+  # anyone can publish an about naming someone, and a third party's name
+  # for a target is not what that target goes by.
   def handle_info({Client, ref, {:item, msg}}, %{about_ref: ref} = state) do
-    case about_id(msg) do
-      nil ->
-        {:noreply, state}
+    if MessageIndex.sentinel?(msg) do
+      about_drained(%{state | about_snapshot?: false})
+    else
+      {state, wrote?} = fold_about(state, msg)
 
-      id ->
-        {:noreply, %{state | about_ids: MapSet.put(state.about_ids || MapSet.new(), id)}}
+      state =
+        if wrote? and not state.about_snapshot? do
+          refresh_names(state)
+        else
+          state
+        end
+
+      {:noreply, state}
     end
   end
 
   def handle_info({Client, ref, :done}, %{about_ref: ref} = state) do
     # :done is the completeness mark — a pass with zero items means the
     # store holds no abouts at all, which the nil "not read yet" state
-    # cannot express. Whatever arrived on a failed pass stays: every id
-    # seen is a fact, only the list's completeness is lost.
-    about_drained(%{state | about_ref: nil, about_ids: state.about_ids || MapSet.new()})
+    # cannot express. A live tail closed by the peer is reopened by the
+    # heartbeat; whatever arrived on a failed pass stays, since every id
+    # and every trusted field seen is a fact.
+    about_drained(%{
+      state
+      | about_ref: nil,
+        about_snapshot?: true,
+        about_ids: state.about_ids || MapSet.new()
+    })
   end
 
   def handle_info({Client, ref, {:error, reason}}, %{about_ref: ref} = state) do
-    Logger.debug("timeline: about drain failed: #{inspect(reason)}")
-    {:noreply, %{state | about_ref: nil}}
+    Logger.debug("timeline: about stream failed: #{inspect(reason)}")
+    {:noreply, refresh_names(%{state | about_ref: nil, about_snapshot?: true})}
   end
 
   # messagesByType("delete"): the store-wide tombstone stream. A delete
@@ -1987,7 +2009,12 @@ defmodule HighWire.Timeline do
     if map_size(fetched) == 0 do
       {:noreply, state}
     else
-      payload = %{state.messages | profiles: Map.merge(state.messages.profiles, fetched)}
+      profiles =
+        state.messages.profiles
+        |> Map.merge(fetched)
+        |> Profile.with_names()
+
+      payload = %{state.messages | profiles: profiles}
       broadcast_updated(payload)
       {:noreply, %{state | messages: payload}}
     end
@@ -2192,9 +2219,11 @@ defmodule HighWire.Timeline do
 
     # The about pass rides the same cycle but keeps its own slot: a
     # stalled or failed pass must never hold up the contact drain, and
-    # the contact drain must never hold one up either.
+    # the contact drain must never hold one up either. It is a live tail,
+    # so once open it needs no re-walk; a `nil` ref means one is not open
+    # yet (boot, or a drop to reconnect).
     state =
-      if state.about_ref == nil and drain_due?(state) do
+      if state.about_ref == nil do
         open_about_drain(state)
       else
         state
@@ -2233,16 +2262,18 @@ defmodule HighWire.Timeline do
     _, _ -> state
   end
 
-  # messagesByType("about"): the rail's feed filter. Same dedicated
-  # connection and cadence as the contact pass — the per-feed windows
-  # only carry each author's last N messages, so they cover the store's
-  # abouts by accident at best.
+  # messagesByType("about"): the rail's feed filter and the names/bios the
+  # read model owns. Same dedicated connection as the contact pass, but a
+  # live tail: the whole store is walked once per boot (the read model does
+  # not outlive this process, so there is no cursor to resume from) and
+  # then every new about arrives as it lands.
   defp open_about_drain(state) do
     {client, state} = drain_endpoint(state)
+    args = live_by_type("about", nil)
 
     with true <- is_pid(client),
-         {:ok, ref} <- Client.stream(client, ["messagesByType"], [%{"type" => "about"}], self()) do
-      %{state | about_ref: ref}
+         {:ok, ref} <- Client.stream(client, ["messagesByType"], args, self()) do
+      %{state | about_ref: ref, about_snapshot?: true}
     else
       _ -> state
     end
@@ -2473,8 +2504,48 @@ defmodule HighWire.Timeline do
       )
     end
 
-    {:noreply, state}
+    {:noreply, refresh_names(state)}
   end
+
+  # Fold one about into the rail's id set and, when its author is the
+  # feed itself or us, its name and bio into the read model. Returns
+  # whether display fields were written, so a live tail can republish
+  # just when something changed.
+  defp fold_about(state, msg) do
+    case about_fields(msg) do
+      nil ->
+        {state, false}
+
+      {id, author, fields} ->
+        state = %{state | about_ids: MapSet.put(state.about_ids || MapSet.new(), id)}
+
+        if map_size(fields) > 0 and trusted_about?(author, id, state.self_id) do
+          Profile.put_about(id, fields)
+          {state, true}
+        else
+          {state, false}
+        end
+    end
+  end
+
+  # Names are applied to the payload from the read model when it is built,
+  # and the about stream can teach the model a name the current payload
+  # does not carry. Republish it (nothing else moves) so the rail, rows
+  # and composer catch up without waiting for unrelated traffic.
+  defp refresh_names(%{status: :ok, messages: %{profiles: profiles, blob_rev: _}} = state)
+       when is_map(profiles) do
+    named = Profile.with_names(profiles)
+
+    if named == profiles do
+      state
+    else
+      payload = %{state.messages | profiles: named}
+      broadcast_updated(payload)
+      %{state | messages: payload}
+    end
+  end
+
+  defp refresh_names(state), do: state
 
   # A tombstone pass — the snapshot's close sentinel or the finite
   # fallback's `:done`. Each delete names the message it asks readers to
@@ -2550,11 +2621,35 @@ defmodule HighWire.Timeline do
   # names a feed. The target is what counts — the store can name a feed
   # when something says about *it*; a feed whose abouts only speak for
   # others still renders as a bare id.
-  defp about_id(msg) do
+  # The display fields an about message carries for its target: the name
+  # and the bio, and the author who wrote them. A name is only the feed's
+  # own word for itself, or ours about them — anyone can publish an about
+  # naming someone, and a third party's "documentary" for a target is not
+  # what that target goes by. An about carrying neither field is still a
+  # fact about the id (the store can speak for it) but nothing to write.
+  defp about_fields(msg) do
     case content(msg) do
-      %{"type" => "about", "about" => <<"@", _::binary>> = about} -> about
+      %{"type" => "about", "about" => <<"@", _::binary>> = about} ->
+        {about, author_id(msg), Map.take(content(msg), ["name", "description"])}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp author_id(msg) do
+    case msg do
+      %{"value" => %{"author" => author}} when is_binary(author) -> author
       _ -> nil
     end
+  end
+
+  # A feed's name is its own word for itself, or ours about it. Anyone
+  # can publish an about naming another feed, so a third party's name is
+  # not applied — that is how a target ends up wearing someone else's
+  # label.
+  defp trusted_about?(author, target, self_id) do
+    is_binary(author) and (author == target or author == self_id)
   end
 
   # First-paint snapshot: same payload, nothing cleared — feeds are
@@ -2616,7 +2711,9 @@ defmodule HighWire.Timeline do
     ids = Enum.uniq(profile_ids(feed, state.follows) ++ sugg_ids ++ wants)
     known = Map.get(state.messages, :profiles, %{})
     missing = Enum.reject(ids, &Map.has_key?(known, &1))
-    base = Map.take(known, ids)
+    # The engine's name for a feed may be someone else's label for it; the
+    # payload carries images, and the read model supplies the names.
+    base = known |> Map.take(ids) |> Profile.with_names()
     post_refs = post_image_refs(acc)
 
     payload = %{
