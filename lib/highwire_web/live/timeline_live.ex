@@ -2091,10 +2091,10 @@ defmodule HighWireWeb.TimelineLive do
   defp meta_line(_row, _ctx), do: nil
 
   # The row already carries the newest revision's text; `edited_by`
-  # (the author of each absorbed revision) is the only sign the reader
-  # gets that what they see is a revision. A lone editor is the author
-  # already on the row, so it reads as a plain "edited"; several name
-  # everyone who touched it.
+  # (the authors of the head's own revisions) is the only sign the
+  # reader gets that what they see is a revision. A lone editor is the
+  # author already on the row, so it reads as a plain "edited"; several
+  # name everyone who touched it.
   defp edit_note(row, ctx) do
     case Enum.uniq(Map.get(row, :edited_by, [])) do
       [] -> nil

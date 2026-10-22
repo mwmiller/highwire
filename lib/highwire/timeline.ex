@@ -3053,8 +3053,8 @@ defmodule HighWire.Timeline do
     # An edit revises the post named by revisionRoot/revisionBranch/root.
     # It threads under that post instead of standing alone, so the row it
     # lands on carries the newest text rather than a bare "edited a post"
-    # line pointing nowhere. `edited_by` records every revision the row
-    # absorbed, newest-first.
+    # line pointing nowhere. `edited_by` records the revisions of the
+    # row's head; a reply's revisions belong to the reply itself.
     edit_index = edit_index(acc)
     {_contacts, rest} = Enum.split_with(acc, &contact?/1)
 
@@ -3101,39 +3101,55 @@ defmodule HighWire.Timeline do
 
   # One row per thread: the head's newest text, the reply rollup, the
   # likes, a preview of the most recent replies, and the activity that
-  # positions the row. `edits` are the revisions the row absorbed.
+  # positions the row. `edited_by` names the head's own revisers — the
+  # note beside the row marks the text the reader sees as a revision.
   defp build_thread_entry(root_key, group, by_key, like_counts, self_id) do
     root_msg = Map.get(by_key, root_key)
 
-    edits =
-      group
+    sorted = Enum.sort_by(group, &bump_ts/1, :desc)
+
+    # The revisions the group absorbed, newest first under the post
+    # each revises. A revision belongs to its post, not to the thread
+    # at large: the root's revisions are the row's own text, and a
+    # reply's revisions belong to that reply.
+    revised =
+      sorted
       |> Enum.filter(&edit?/1)
-      |> Enum.sort_by(&bump_ts/1, :desc)
+      |> Enum.group_by(&edit_target_key/1)
+
+    head_edits = Map.get(revised, root_key, [])
 
     # A row's text is the newest revision of the post it shows —
     # otherwise the feed renders the pre-edit body forever and the
-    # edit is a row the reader can't act on.
+    # edit is a row the reader can't act on. A reply's revision never
+    # takes the head's place: the row keeps the root's text.
     row_msg =
-      case edits do
+      case head_edits do
         [latest | _] -> latest
-        [] -> root_msg || hd(Enum.sort_by(group, &bump_ts/1, :desc))
+        [] -> root_msg || hd(sorted)
       end
 
-    sorted = Enum.sort_by(group, &bump_ts/1, :desc)
-
-    # The head never previews itself; a fallback head (root absent
-    # from the window) is excluded too, else it greets its own row.
-    recent =
+    # Each reply speaks once, at its newest wording: where a revision
+    # absorbed a reply, the revision stands in and the pre-edit
+    # original drops out — the same reply at an older wording is not a
+    # second reply, and it never greets its own row with the body the
+    # edit just replaced. A fallback head (root absent from the
+    # window) is excluded too, else it greets its own row.
+    fresh =
       sorted
-      |> Enum.reject(&(&1["key"] in [root_key, row_msg["key"]]))
       |> Enum.filter(&post?/1)
-      |> Enum.take(3)
+      |> Enum.reject(
+        &(&1["key"] in [root_key, row_msg["key"]] or Map.has_key?(revised, &1["key"]))
+      )
+      |> Enum.concat(
+        revised
+        |> Enum.reject(fn {target, _} -> target == root_key end)
+        |> Enum.map(fn {_target, [latest | _]} -> latest end)
+      )
+      |> Enum.sort_by(&bump_ts/1, :desc)
 
-    replies =
-      group
-      |> Enum.filter(&post?/1)
-      |> Enum.reject(&(&1["key"] == row_msg["key"]))
-      |> length()
+    recent = Enum.take(fresh, 3)
+    replies = length(fresh)
 
     likes = thread_likes(group, root_key, like_counts)
 
@@ -3154,7 +3170,7 @@ defmodule HighWire.Timeline do
       mentioned?: mentioned?,
       root_key: root_key
     )
-    |> Map.put(:edited_by, Enum.map(edits, & &1["value"]["author"]))
+    |> Map.put(:edited_by, Enum.map(head_edits, & &1["value"]["author"]))
   end
 
   # Contact edits arrive as many messages per author; they collapse into

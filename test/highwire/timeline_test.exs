@@ -399,7 +399,64 @@ defmodule HighWire.TimelineTest do
 
       assert [row] = Timeline.build_feed([root, reply, edit], "@me", %{})
       assert row.root_key == "%root.sha256"
-      assert row.edited_by == ["@bob"]
+
+      # The revision belongs to the reply, not to the row's head: the
+      # row keeps the root's text, and the note marks only the head's
+      # own revisions.
+      assert row.msg["key"] == "%root.sha256"
+      assert row.msg["value"]["content"]["text"] == "hi"
+      assert row.edited_by == []
+
+      # The reply speaks once, at its newest wording: the revision
+      # stands in for the pre-edit original in the count and the
+      # preview.
+      assert row.replies == 1
+      assert [%{"key" => "%edit.sha256"}] = row.recent
+
+      # The revision is still activity on the thread.
+      assert row.activity == 3_000
+    end
+
+    test "an edited post is no longer its own reply" do
+      root = post("@alice", "%root.sha256", 1_000)
+
+      edit =
+        msg("@alice", "%edit.sha256", 2_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%root.sha256",
+          "text" => "revised"
+        })
+
+      assert [row] = Timeline.build_feed([root, edit], "@me", %{})
+
+      # The pre-edit original is the row's own earlier body, not a
+      # reply to it: no phantom count, no self-preview.
+      assert row.replies == 0
+      assert row.recent == []
+    end
+
+    test "several revisions of one reply count and preview once, newest first" do
+      root = post("@alice", "%root.sha256", 1_000)
+      reply = post("@bob", "%reply.sha256", 2_000, "%root.sha256")
+
+      first =
+        msg("@bob", "%e1.sha256", 3_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%reply.sha256",
+          "text" => "one"
+        })
+
+      second =
+        msg("@bob", "%e2.sha256", 4_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%reply.sha256",
+          "text" => "two"
+        })
+
+      assert [row] = Timeline.build_feed([root, reply, first, second], "@me", %{})
+
+      assert row.replies == 1
+      assert [%{"key" => "%e2.sha256"}] = row.recent
     end
 
     test "an edit whose target is outside the window stands alone" do
