@@ -36,6 +36,7 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:blocked, [])
      |> assign(:self_id, nil)
      |> assign(:more, false)
+     |> assign(:loading_more, false)
      |> assign(:follow_pending, MapSet.new())
      |> assign(:block_pending, MapSet.new())
      |> assign(:action_error, nil)}
@@ -98,14 +99,14 @@ defmodule HighWireWeb.ProfileLive do
     end
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
-
+  # A page lands with the cursor it was asked for, so an answer that
+  # belongs to where the reader was cannot land on where they are now.
   @impl true
-  def handle_event("load-more", _params, socket) do
-    id = socket.assigns.id
-
-    if socket.assigns.more and is_binary(id) do
-      case Timeline.profile_feed(id, socket.assigns.resume) do
+  def handle_info({:load_more, id, resume}, socket) do
+    if id != socket.assigns.id or resume != socket.assigns.resume do
+      {:noreply, assign(socket, :loading_more, false)}
+    else
+      case Timeline.profile_feed(id, resume) do
         {:ok, %{rows: rows, resume: resume, more: more}} ->
           new = Enum.filter(rows, &post?/1)
 
@@ -113,12 +114,31 @@ defmodule HighWireWeb.ProfileLive do
            assign(socket,
              messages: socket.assigns.messages ++ new,
              resume: resume,
-             more: more
+             more: more,
+             loading_more: false
            )}
 
         {:error, _reason} ->
-          {:noreply, socket}
+          {:noreply, assign(socket, :loading_more, false)}
       end
+    end
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # The page comes back over a handle_info, so the request is answered
+  # by the loading line going up and the profile keeps answering while
+  # the store is read: a page fetch must not queue the follow and block
+  # buttons behind it.
+  @impl true
+  def handle_event("load-more", _params, socket) do
+    id = socket.assigns.id
+
+    if socket.assigns.more and is_binary(id) and not socket.assigns.loading_more do
+      # The cursor rides along so an answer that belongs to where the
+      # reader was cannot land on where they are now.
+      send(self(), {:load_more, id, socket.assigns.resume})
+      {:noreply, assign(socket, :loading_more, true)}
     else
       {:noreply, socket}
     end
@@ -215,7 +235,8 @@ defmodule HighWireWeb.ProfileLive do
       blob_rev: viewer.blob_rev,
       follow_pending: MapSet.new(),
       block_pending: MapSet.new(),
-      action_error: nil
+      action_error: nil,
+      loading_more: false
     )
   end
 
@@ -406,6 +427,15 @@ defmodule HighWireWeb.ProfileLive do
             </div>
             <div class="mt-1 text-xs text-faint"><.age ts={ts(msg)} /></div>
           </div>
+
+          <p
+            :if={@loading_more}
+            id="profile-loading"
+            role="status"
+            class="py-3 text-sm text-info"
+          >
+            Loading more…
+          </p>
 
           <div :if={@more} id="profile-sentinel" phx-hook="InfiniteScroll" class="h-px"></div>
         </div>

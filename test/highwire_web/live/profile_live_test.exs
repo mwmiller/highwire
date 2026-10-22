@@ -14,6 +14,48 @@ defmodule HighWireWeb.ProfileLiveTest do
     assert render_hook(view, "load-more", %{}) =~ "Posts"
   end
 
+  test "a page on the way says so, and lands where it was asked for", %{conn: conn} do
+    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+
+    msg = %{
+      "key" => "%p1.sha256",
+      "value" => %{
+        "author" => id,
+        "timestamp" => 1_700_000_000_000,
+        "content" => %{"type" => "post", "text" => "the thing"}
+      }
+    }
+
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+    seed(view, %{id: id, messages: [msg], more: true, resume: "cursor-1"})
+
+    # The sentinel asks for the next page, and the request is answered
+    # by the line going up: the reader can see the page is on its way.
+    html = element(view, "#profile-sentinel") |> render_hook("load-more", %{})
+    assert html =~ "Loading more…"
+
+    # Under test the store has nothing behind the cursor: the line
+    # clears and the posts the reader had are still there.
+    send(view.pid, {:load_more, id, "cursor-1"})
+    html = render(view)
+    refute html =~ "Loading more…"
+    assert html =~ "the thing"
+
+    # The profile moved on while the next page was out. The answer
+    # belongs to where the reader was, so it clears its own line and
+    # lands nothing on the feed now on screen.
+    seed(view, %{id: "@someone=.ed25519", messages: [msg], more: true, resume: "cursor-2"})
+    html = element(view, "#profile-sentinel") |> render_hook("load-more", %{})
+    assert html =~ "Loading more…"
+
+    seed(view, %{id: "@someone=.ed25519", messages: [msg], more: true, resume: "cursor-2"})
+    send(view.pid, {:load_more, id, "cursor-1"})
+
+    html = render(view)
+    refute html =~ "Loading more…"
+    assert html =~ "the thing"
+  end
+
   test "profile without an id defaults to the signed-in feed", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/profile")
     # sidecar disabled under test: no signed-in feed resolves
