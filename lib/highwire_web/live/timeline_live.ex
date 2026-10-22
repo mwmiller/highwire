@@ -287,6 +287,31 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
+  # The publish itself, behind the held button: the press has already
+  # been shown the box in flight, and this reply is the one that says
+  # whether the post went out. The box and the recipients were settled
+  # at press time, so a tab switch under a publish cannot change who
+  # it goes to.
+  def handle_info({:publish_post, body, recipients, private?}, socket) do
+    result =
+      if private?, do: Timeline.publish_private(body, recipients), else: Timeline.publish(body)
+
+    socket =
+      case result do
+        {:ok, _key} ->
+          if private? do
+            assign(socket, compose: "", compose_error: nil, private_recipients: MapSet.new())
+          else
+            assign(socket, compose: "", compose_error: nil)
+          end
+
+        {:error, reason} ->
+          assign(socket, compose_error: publish_error(reason))
+      end
+
+    {:noreply, assign(socket, compose_pending: false)}
+  end
+
   # The like itself, behind the filled heart. The heart already shows
   # the state the press asked for; this reply is the one that says
   # whether it took, and a refusal puts the heart back and says so
@@ -514,48 +539,33 @@ defmodule HighWireWeb.TimelineLive do
     {:noreply, socket |> assign(:active, false) |> assign(peers_timer: nil)}
   end
 
-  # The publish itself, with the button held down while it waits: a
-  # second press on the same body is a duplicate, not a second post.
-  defp publish_now(socket, body, recipients) do
-    socket = assign(socket, compose_pending: true)
+  # The press is answered by the button taking the hold, and the
+  # publish waits behind it: the render that goes out now carries
+  # "Publishing…" with the button dead under it, so the post is on its
+  # way while the rest of the timeline keeps answering. A press the
+  # composer can already refuse on its own never leaves the box: the
+  # reason is said at once, with no hold in between.
+  defp publish_now(socket, body, chosen) do
+    private? = socket.assigns.view == :private
+    recipients = boxed_recipients(socket, chosen)
 
-    socket =
-      if socket.assigns.view == :private do
-        {:noreply, s} = publish_private(socket, body, recipients)
-        s
-      else
-        case Timeline.publish(body) do
-          {:ok, _key} -> assign(socket, compose: "", compose_error: nil)
-          {:error, reason} -> assign(socket, compose_error: publish_error(reason))
-        end
-      end
-
-    assign(socket, compose_pending: false)
+    if private? and recipients == [socket.assigns.self_id] do
+      assign(socket, compose_error: "Choose at least one recipient.")
+    else
+      send(self(), {:publish_post, body, recipients, private?})
+      assign(socket, compose_pending: true)
+    end
   end
 
   # A private thread is boxed for the chosen follows plus self, so the
   # author can read back what they wrote. No choice means nothing to send
   # to — the box needs at least one recipient that is not us.
-  defp publish_private(socket, body, chosen) do
-    recipients =
-      chosen
-      |> List.wrap()
-      |> Enum.filter(&is_binary/1)
-      |> Kernel.++([socket.assigns.self_id])
-      |> Enum.uniq()
-
-    if recipients == [socket.assigns.self_id] do
-      {:noreply, assign(socket, compose_error: "Choose at least one recipient.")}
-    else
-      case Timeline.publish_private(body, recipients) do
-        {:ok, _key} ->
-          {:noreply,
-           assign(socket, compose: "", compose_error: nil, private_recipients: MapSet.new())}
-
-        {:error, reason} ->
-          {:noreply, assign(socket, compose_error: publish_error(reason))}
-      end
-    end
+  defp boxed_recipients(socket, chosen) do
+    chosen
+    |> List.wrap()
+    |> Enum.filter(&is_binary/1)
+    |> Kernel.++([socket.assigns.self_id])
+    |> Enum.uniq()
   end
 
   # The mention popup's candidates: follows first (already sorted as

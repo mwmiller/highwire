@@ -68,6 +68,37 @@ defmodule HighWireWeb.PostLiveTest do
     assert render(view) =~ "seedkeep"
   end
 
+  test "a reply is held down while the engine takes it", %{conn: conn} do
+    key = Base.url_encode64("%reply-held=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    root = %{
+      "key" => "%reply-held=.sha256",
+      "value" => %{
+        "author" => "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519",
+        "timestamp" => 1_700_000_000_000,
+        "content" => %{"type" => "post", "text" => "the thing"}
+      }
+    }
+
+    seed_thread(view, root, [], status: :ok, self_id: "@me=.ed25519")
+    render_change(view, "reply-draft", %{"body" => "the answer"})
+
+    # The press is answered by the button taking the hold: the answer
+    # is on its way, and a second press in the meantime is a duplicate
+    # rather than a second reply.
+    html = view |> form("#reply-form", %{}) |> render_submit()
+    assert html =~ ~r/disabled=""\s*>\s*Replying…/
+
+    # The engine is off under test, so the publish refuses: the box
+    # keeps what was written, the reason is said, and the button is
+    # back in reach for a retry.
+    html = render(view)
+    assert html =~ "Still connecting. Try again in a moment."
+    assert html =~ "the answer"
+    refute html =~ ~r/disabled=""\s*>\s*Replying…/
+  end
+
   test "the reply box opens the mention popup", %{conn: conn} do
     alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
     key = Base.url_encode64("%reply-mentions=.sha256", padding: false)

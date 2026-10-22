@@ -87,6 +87,33 @@ defmodule HighWireWeb.PostLive do
     {:noreply, if(socket.assigns.raw_key, do: load(socket, socket.assigns.raw_key), else: socket)}
   end
 
+  # The reply itself, behind the held button: the press has already
+  # been shown the box in flight, and this reply is the one that says
+  # whether the answer went out.
+  def handle_info({:publish_reply, root, body}, socket) do
+    # A reply from this view answers the thread root; branch points
+    # at the same root (there is no per-reply addressing here).
+    # A private thread's reply is boxed for its participants so the
+    # answer never leaves the box the thread arrived in.
+    result =
+      if private_thread?(root) do
+        Timeline.reply_private(root["key"], root["key"], body, private_recipients(socket))
+      else
+        Timeline.reply(root["key"], root["key"], body)
+      end
+
+    socket =
+      case result do
+        {:ok, _key} ->
+          assign(socket, reply_body: "", reply_error: nil)
+
+        {:error, reason} ->
+          assign(socket, reply_error: reply_error(reason))
+      end
+
+    {:noreply, assign(socket, reply_pending: false)}
+  end
+
   # The like itself, behind the filled pill. A refusal re-reads the
   # thread so the heart goes back to what the store holds, and says so
   # under the post: a like that undid itself in silence reads as a press
@@ -270,32 +297,13 @@ defmodule HighWireWeb.PostLive do
     {:noreply, assign(socket, :mention_suggestions, [])}
   end
 
-  # The reply itself, with the button held down while it waits: a
-  # second press on the same body is a duplicate, not a second reply.
+  # The press is answered by the button taking the hold, and the
+  # publish waits behind it: the render that goes out now carries
+  # "Replying…" with the button dead under it, so the answer is on its
+  # way while the thread keeps answering.
   defp reply_now(socket, root, body) do
-    socket = assign(socket, reply_pending: true)
-
-    # A reply from this view answers the thread root; branch points
-    # at the same root (there is no per-reply addressing here).
-    # A private thread's reply is boxed for its participants so the
-    # answer never leaves the box the thread arrived in.
-    result =
-      if private_thread?(root) do
-        Timeline.reply_private(root["key"], root["key"], body, private_recipients(socket))
-      else
-        Timeline.reply(root["key"], root["key"], body)
-      end
-
-    socket =
-      case result do
-        {:ok, _key} ->
-          assign(socket, reply_body: "", reply_error: nil)
-
-        {:error, reason} ->
-          assign(socket, reply_error: reply_error(reason))
-      end
-
-    assign(socket, reply_pending: false)
+    send(self(), {:publish_reply, root, body})
+    assign(socket, reply_pending: true)
   end
 
   defp mention_candidates(socket, q) do

@@ -251,6 +251,27 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "Publishing is turned off in this configuration."
   end
 
+  test "a publish is held down while the engine takes it", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    notify(view, feed_payload([], self_id: "@me=.ed25519"))
+    render_change(view, "compose-draft", %{"body" => "hello world"})
+
+    # The press is answered by the button taking the hold: the post is
+    # on its way, and a second press in the meantime is a duplicate
+    # rather than a second post.
+    html = view |> form("#compose", %{"body" => "hello world"}) |> render_submit()
+
+    assert html =~ ~r/disabled=""\s*>\s*Publishing…/
+
+    # The engine is off under test, so the publish refuses: the box
+    # keeps what was written, the reason is said, and the button is
+    # back in reach for a retry.
+    html = render(view)
+    assert html =~ "Not connected yet. Try again in a moment."
+    assert html =~ "hello world"
+    refute html =~ ~r/disabled=""\s*>\s*Publishing…/
+  end
+
   describe "private composer" do
     # Stand up the Private tab with a follow to address, since the
     # engine is off under test and the sidebar would be empty.
