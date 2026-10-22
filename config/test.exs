@@ -1,11 +1,22 @@
 import Config
 
 # Tests must be hermetic: never read or write the user's real ~/.highwire.
-# Each run gets its own store directory — test_helper.exs mints one under
-# the system temp dir and points HIGHWIRE_TEST_HOME here — so a stale run
-# or two suites at once cannot read each other's files. The default stays
-# the shared ~/.highwire-test for anyone invoking ExUnit some other way.
-test_home = System.get_env("HIGHWIRE_TEST_HOME") || Path.expand("~/.highwire-test")
+# Each run gets its own store directory under the system temp dir, so a
+# stale run or two suites at once cannot read each other's files. The run
+# home is minted here — config evaluates before `mix test` starts the
+# app, and the message and search indexes open their files in init, so
+# they must already point at this run's home. test_helper.exs removes the
+# directory when the suite exits.
+test_home =
+  System.get_env("HIGHWIRE_TEST_HOME") ||
+    Path.join(
+      System.tmp_dir!(),
+      "highwire-test-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}"
+    )
+
+# Pin the minted name, so every later read — the app, the helper, a
+# re-read of this config — agrees on one directory for the run.
+System.put_env("HIGHWIRE_TEST_HOME", test_home)
 
 config :highwire,
   application_dir: test_home,

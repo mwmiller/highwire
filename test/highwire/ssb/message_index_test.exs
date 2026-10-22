@@ -9,6 +9,10 @@ defmodule HighWire.SSB.MessageIndexTest do
 
   setup do
     MessageIndex.clear()
+    # …and clear on the way out: whatever the last case advanced would
+    # otherwise outlive this module and reach a later reader — the
+    # timeline's drains read these cursors on reload.
+    on_exit(&MessageIndex.clear/0)
     :ok
   end
 

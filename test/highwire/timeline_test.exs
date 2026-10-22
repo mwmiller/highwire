@@ -1,7 +1,13 @@
 defmodule HighWire.TimelineTest do
   @moduledoc false
 
-  use ExUnit.Case, async: true
+  # These drive Timeline's callbacks as plain function calls on fixture
+  # state, and several of those paths broadcast on the shared timeline
+  # topic and write the shared profile/contact tables — payloads that a
+  # concurrently-mounted live view would take for real updates. The
+  # broadcast-asserting cases subscribe to that same topic and need it
+  # quiet, so: never async.
+  use ExUnit.Case, async: false
 
   alias HighWire.SSB.Client
   alias HighWire.SSB.Profile
