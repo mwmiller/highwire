@@ -218,6 +218,66 @@ defmodule HighWireWeb.ProfileLiveTest do
     refute html =~ "Blocking…"
   end
 
+  test "the about info is edited and published from the profile", %{conn: conn} do
+    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+    # The engine is off: nothing is offered that cannot answer a press.
+    refute render(view) =~ "edit-about"
+
+    seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
+
+    assert render(view) =~ ~r/phx-click="edit-about"/
+
+    html = render_click(view, "edit-about", %{})
+    assert html =~ ~r/id="about-form"/
+    assert html =~ ~r/id="about-name"/
+    assert html =~ ~r/id="about-bio"/
+
+    # The press is answered by holding Save down the way Follow and
+    # Block hold theirs: the verb in flight, the button dead under it.
+    held =
+      render_submit(view, "save-about", %{"name" => "Our alias", "description" => "short bio"})
+
+    assert held =~ "Saving…"
+    assert held =~ ~r/type="submit"[^>]*disabled/
+
+    # The engine is off under test, so the publish comes back refused:
+    # the line lands, the press is let go, and the form stays up with
+    # what was typed so the save can be pressed again.
+    html = render(view)
+    assert html =~ "Not connected yet. Try again in a moment."
+    refute html =~ "Saving…"
+    assert html =~ ~r/id="about-name"[^>]*value="Our alias"/
+    assert html =~ "short bio"
+  end
+
+  test "a save with nothing changed sends nothing and closes the form", %{conn: conn} do
+    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+    seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
+
+    render_click(view, "edit-about", %{})
+
+    # The page shows no name or bio for this feed, so submitting the
+    # fields as they stand changes nothing: the press is answered by
+    # the form closing, with no publish behind it — the engine being
+    # off would otherwise have refused, and no refusal line appears.
+    html = render_submit(view, "save-about", %{"name" => "", "description" => ""})
+
+    refute html =~ "about-form"
+    refute html =~ "Saving…"
+    refute html =~ "Not connected yet"
+
+    # Cancel answers the same way when the reader walks back out.
+    html = render_click(view, "edit-about", %{})
+    assert html =~ "about-form"
+
+    html = render_click(view, "cancel-about", %{})
+    refute html =~ "about-form"
+  end
+
   # Engine off under test, so relationship state is seeded straight into
   # the assigns; __changed__ records the old values so the next render
   # computes a diff instead of serving the cached tree.

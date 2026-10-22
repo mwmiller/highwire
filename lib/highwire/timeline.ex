@@ -541,6 +541,18 @@ defmodule HighWire.Timeline do
   @spec unblock(binary()) :: {:ok, binary() | nil} | {:error, term()}
   def unblock(id) when is_binary(id), do: publish_content(block_content(id, false))
 
+  @doc """
+  Publish our word for a feed — the name and bio the profile page
+  edits. `fields` carries the `"name"` and/or `"description"` to send;
+  an emptied field takes that name or bio back, and the read falls to
+  the feed's own word. The ack folds the message into the read model,
+  so the alias applies as soon as the publish lands.
+  """
+  @spec about(binary(), map()) :: {:ok, binary() | nil} | {:error, term()}
+  def about(id, fields) when is_binary(id) and is_map(fields) do
+    publish_content(about_content(id, fields))
+  end
+
   # -- publish content (pure; the RPC only serializes these maps) -------
 
   @doc false
@@ -569,6 +581,11 @@ defmodule HighWire.Timeline do
 
   def block_content(id, false) do
     %{"type" => "contact", "contact" => id, "blocking" => false}
+  end
+
+  @doc false
+  def about_content(id, fields) when is_binary(id) and is_map(fields) do
+    Map.merge(%{"type" => "about", "about" => id}, fields)
   end
 
   # Single chokepoint for every outbound message (posts, replies, votes,
@@ -850,7 +867,14 @@ defmodule HighWire.Timeline do
       }
     }
 
-    finalize(%{state | acc: [envelope | state.acc]})
+    # An about is our word for its target the moment it publishes: fold
+    # it into the read model here, before the finalize broadcasts, so
+    # this ack's payload carries the new name and the pages read it
+    # without waiting out the drain's live tail. The tail delivers the
+    # same message later; the second fold writes the same slot.
+    {state, _wrote?} = fold_about(%{state | acc: [envelope | state.acc]}, envelope)
+
+    finalize(state)
   end
 
   defp inject_published(state, _key, _content), do: state
@@ -2591,9 +2615,10 @@ defmodule HighWire.Timeline do
   end
 
   # Fold one about into the rail's id set and, when its author is the
-  # feed itself or us, its name and bio into the read model. Returns
-  # whether display fields were written, so a live tail can republish
-  # just when something changed.
+  # feed itself or us, its name and bio into the read model — the feed's
+  # word and ours into their separate slots, so ours stands over the
+  # feed's later names. Returns whether display fields were written, so
+  # a live tail can republish just when something changed.
   defp fold_about(state, msg) do
     case about_fields(msg) do
       nil ->
@@ -2602,8 +2627,10 @@ defmodule HighWire.Timeline do
       {id, author, fields} ->
         state = %{state | about_ids: MapSet.put(state.about_ids || MapSet.new(), id)}
 
-        if map_size(fields) > 0 and trusted_about?(author, id, state.self_id) do
-          Profile.put_about(id, fields)
+        source = about_source(author, id, state.self_id)
+
+        if source != nil and map_size(fields) > 0 do
+          Profile.put_about(id, fields, source)
           {state, true}
         else
           {state, false}
@@ -2727,12 +2754,18 @@ defmodule HighWire.Timeline do
     end
   end
 
-  # A feed's name is its own word for itself, or ours about it. Anyone
-  # can publish an about naming another feed, so a third party's name is
-  # not applied — that is how a target ends up wearing someone else's
-  # label.
-  defp trusted_about?(author, target, self_id) do
-    is_binary(author) and (author == target or author == self_id)
+  # Whose word an about carries: the feed's own when author and target
+  # are one, ours when the author is the identity using this store —
+  # and nothing at all from anyone else. Anyone can publish an about
+  # naming another feed, so a third party's name is not what that
+  # target wears; ours is ours, kept in its own slot so it holds over
+  # the feed's later names and can be taken back.
+  defp about_source(author, target, self_id) do
+    cond do
+      is_binary(author) and author == target -> :own
+      is_binary(author) and author == self_id -> :ours
+      true -> nil
+    end
   end
 
   # First-paint snapshot: same payload, nothing cleared — feeds are

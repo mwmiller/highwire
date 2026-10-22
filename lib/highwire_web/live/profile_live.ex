@@ -2,9 +2,11 @@ defmodule HighWireWeb.ProfileLive do
   @moduledoc """
   An identity's profile page: avatar, resolved name, about text and
   their threads — paged from the sidecar so the history scrolls without
-  bound. The same view renders for every feed id —
-  nothing here treats the viewer's own identity specially; `/profile`
-  without a param simply defaults to the signed-in feed.
+  bound. The name and bio are edited where they read: the edit
+  publishes our word for the feed, or the feed's own when the feed is
+  the signed-in identity, and an emptied field takes that name or bio
+  back. Nothing here treats the viewer's own identity specially;
+  `/profile` without a param simply defaults to the signed-in feed.
   """
 
   use HighWireWeb, :live_view
@@ -39,7 +41,13 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:loading_more, false)
      |> assign(:follow_pending, MapSet.new())
      |> assign(:block_pending, MapSet.new())
-     |> assign(:action_error, nil)}
+     |> assign(:action_error, nil)
+     |> assign(:about_editing?, false)
+     |> assign(:about_name, "")
+     |> assign(:about_bio, "")
+     |> assign(:about_base, nil)
+     |> assign(:about_pending?, false)
+     |> assign(:about_error, nil)}
   end
 
   @impl true
@@ -96,6 +104,29 @@ defmodule HighWireWeb.ProfileLive do
 
       _ok ->
         {:noreply, block_settled(socket, id, blocked?)}
+    end
+  end
+
+  # The about publish, behind the held-down Save. The ack lands the
+  # change: the read model has folded the message already, so the page
+  # reads what was just saved — and a refusal keeps the form up with
+  # what was typed under the line that says the press did not take.
+  def handle_info({:publish_about, id, fields}, socket) do
+    result = Timeline.about(id, fields)
+
+    socket = assign(socket, :about_pending?, false)
+
+    case result do
+      {:error, reason} ->
+        Logger.warning("profile: about publish failed: #{inspect(reason)}")
+        {:noreply, assign(socket, :about_error, about_error(reason))}
+
+      _ok ->
+        {:noreply,
+         socket
+         |> assign(:profile, Timeline.profile(id))
+         |> assign(:about_editing?, false)
+         |> assign(:about_error, nil)}
     end
   end
 
@@ -185,6 +216,58 @@ defmodule HighWireWeb.ProfileLive do
     end
   end
 
+  # The about info — the name and bio this page shows — is edited where
+  # it reads. Opening prefills both fields with what the page shows;
+  # saving publishes our word for this feed (its own, when the feed is
+  # the signed-in identity), and only what changed rides along — an
+  # untouched bio must not be pinned as ours behind the copy. An
+  # emptied field is the clear: it takes that name or bio back, and the
+  # page falls to the other side's word.
+  def handle_event("edit-about", _params, socket) do
+    name = (socket.assigns.profile && socket.assigns.profile.name) || ""
+    bio = (socket.assigns.profile && socket.assigns.profile.description) || ""
+
+    {:noreply,
+     socket
+     |> assign(:about_editing?, true)
+     |> assign(:about_name, name)
+     |> assign(:about_bio, bio)
+     |> assign(:about_base, %{name: name, bio: bio})
+     |> assign(:about_error, nil)}
+  end
+
+  def handle_event("cancel-about", _params, socket) do
+    {:noreply, socket |> assign(:about_editing?, false) |> assign(:about_error, nil)}
+  end
+
+  def handle_event("save-about", %{"name" => name, "description" => bio}, socket) do
+    # The typed values join the assigns here, so even a full re-render —
+    # a refusal landing on a fresh tree — shows what was written.
+    socket = assign(socket, about_name: name, about_bio: bio)
+
+    fields = about_changes(socket.assigns.about_base, %{name: name, bio: bio})
+
+    cond do
+      socket.assigns.about_pending? ->
+        # Save is already down. A second press is a duplicate, not a
+        # second publish.
+        {:noreply, socket}
+
+      fields == %{} ->
+        # Nothing changed, so nothing was sent: the press is answered
+        # by the form closing over what the page already shows.
+        {:noreply, socket |> assign(:about_editing?, false) |> assign(:about_error, nil)}
+
+      true ->
+        send(self(), {:publish_about, socket.assigns.id, fields})
+
+        {:noreply,
+         socket
+         |> assign(:about_pending?, true)
+         |> assign(:about_error, nil)}
+    end
+  end
+
   # Clicking a post opens its thread — the same journey as the timeline
   # row: PostLive carries the reply composer and the like toggle.
   def handle_event("open-post", %{"key" => key}, socket) when is_binary(key) do
@@ -236,6 +319,9 @@ defmodule HighWireWeb.ProfileLive do
       follow_pending: MapSet.new(),
       block_pending: MapSet.new(),
       action_error: nil,
+      about_editing?: false,
+      about_pending?: false,
+      about_error: nil,
       loading_more: false
     )
   end
@@ -248,6 +334,22 @@ defmodule HighWireWeb.ProfileLive do
 
   defp block_error(:offline), do: "Not connected yet. Try again in a moment."
   defp block_error(_reason), do: "Block didn't go through. Try again."
+
+  defp about_error(:offline), do: "Not connected yet. Try again in a moment."
+  defp about_error(_reason), do: "The change didn't go through. Try again."
+
+  # Only what changed is published. An emptied field rides along as
+  # "": that is the clear — take the name or bio back — while a field
+  # left as it was sends nothing, so the feed's own later updates stay
+  # visible behind a copy we never made.
+  defp about_changes(base, sent) do
+    %{}
+    |> changed("name", sent.name, base.name)
+    |> changed("description", sent.bio, base.bio)
+  end
+
+  defp changed(fields, _key, value, value), do: fields
+  defp changed(fields, key, value, _base), do: Map.put(fields, key, value)
 
   # Guarded: private messages carry an encrypted binary `content`.
   defp post?(msg) do
@@ -383,18 +485,95 @@ defmodule HighWireWeb.ProfileLive do
             </div>
 
             <div class="min-w-0 flex-1">
-              <h1 class="text-xl font-bold text-paper">
-                {heading(@profile) || fallback_name(@id)}
-              </h1>
+              <div class="flex items-start justify-between gap-3">
+                <h1 class="min-w-0 text-xl font-bold text-paper">
+                  {heading(@profile) || fallback_name(@id)}
+                </h1>
+
+                <%!-- The about info is edited where it reads: the press
+                opens the two fields this header shows, and saving
+                publishes our word for this feed. --%>
+                <button
+                  :if={@status != :disabled and not @about_editing?}
+                  type="button"
+                  phx-click="edit-about"
+                  class="btn shrink-0 text-xs"
+                >
+                  Edit
+                </button>
+              </div>
 
               <p class="mt-1 break-all font-mono text-xs text-dim">{@id}</p>
 
               <div
-                :if={@profile && @profile.description}
+                :if={@profile && @profile.description && !@about_editing?}
                 class="md-body mt-3 text-sm text-ink"
               >
                 {raw(Markdown.to_html(@profile.description, blob_rev: @blob_rev))}
               </div>
+
+              <form
+                :if={@about_editing?}
+                id="about-form"
+                phx-submit="save-about"
+                class="mt-3 space-y-3"
+              >
+                <div>
+                  <label
+                    for="about-name"
+                    class="block text-xs font-semibold uppercase tracking-wide text-sub"
+                  >
+                    Name
+                  </label>
+                  <input
+                    id="about-name"
+                    type="text"
+                    name="name"
+                    value={@about_name}
+                    placeholder={fallback_name(@id)}
+                    class="mt-1 w-full rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    for="about-bio"
+                    class="block text-xs font-semibold uppercase tracking-wide text-sub"
+                  >
+                    Bio
+                  </label>
+                  <textarea
+                    id="about-bio"
+                    name="description"
+                    rows="3"
+                    class="mt-1 w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
+                  >{@about_bio}</textarea>
+                </div>
+
+                <%!-- Both controls hold themselves down by rendering the
+                pending state, the way Follow and Block do: the verb in
+                flight is the answer the press gets. --%>
+                <div class="flex gap-2">
+                  <button type="submit" class="btn btn-primary" disabled={@about_pending?}>
+                    {(@about_pending? && "Saving…") || "Save"}
+                  </button>
+
+                  <button
+                    type="button"
+                    phx-click="cancel-about"
+                    class="btn"
+                    disabled={@about_pending?}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+
+              <%!-- The refusal stands outside the form, where a
+              cancelled form cannot hide it. --%>
+              <p :if={@about_error} role="alert" class="mt-2 text-xs text-bad">
+                {@about_error}
+              </p>
 
               <%!-- The relationship, not the engine: an engine status
               here read as a personal status ("alanz — Ok"), and the

@@ -17,7 +17,14 @@ defmodule HighWire.SSB.Profile do
   third party's label for the feed rather than the feed's own word for
   itself, so it is never applied here. A name is written only from an
   about message the feed itself (or we) published, which is why
-  `put_all/1` leaves the name alone and `put_about/2` writes it.
+  `put_all/1` leaves the name alone and `put_about/3` writes it.
+
+  The feed's word for itself and ours about it live in separate slots,
+  and a read answers with ours first. An alias this store published
+  therefore applies no matter what the feed names itself later — the
+  order the messages arrived in does not decide — and taking the alias
+  back (an about carrying `""` for the field) falls to the feed's own
+  name again.
 
   A read degrades to nil: a feed whose own about has not been read has
   no name, and `HighWire.Avatar.display_name/2` then falls back to the
@@ -50,17 +57,18 @@ defmodule HighWire.SSB.Profile do
 
   The name the payload carries is not written: it is whatever the
   engine's profile call resolved, which may be a third party's label.
-  Names come from the about drain through `put_about/2`.
+  Names come from the about drain through `put_about/3`, in both name
+  slots, which this merge carries along untouched.
   """
   @spec put_all(map()) :: :ok
   def put_all(profiles) when is_map(profiles) do
     entries =
       Enum.map(profiles, fn
         {id, profile} when is_map(profile) ->
-          {id, payload_entry(get(id), profile)}
+          {id, payload_entry(raw(id), profile)}
 
         {id, _other} ->
-          {id, payload_entry(get(id), %{})}
+          {id, payload_entry(raw(id), %{})}
       end)
 
     true = :ets.insert(ensure_table(), entries)
@@ -72,14 +80,25 @@ defmodule HighWire.SSB.Profile do
   the bio the profile page shows. The store-wide about drain already
   reads every about message, but only the feed's own word for itself
   (or ours about it) arrives here — that is what makes this the one
-  source of names. The profile page then reads a bio from the read
-  model instead of waiting on a sidecar round-trip through the Timeline.
+  source of names.
+
+  The source decides which slot the fields land in: `:own` is the
+  feed's own word for itself, `:ours` the identity using this store
+  speaking about the feed. Each field the message carries replaces its
+  slot; a field it does not carry leaves the slot alone; a field
+  carrying `""` clears it — the way a name or bio is taken back, the
+  other side's slot then standing for the feed.
   """
-  @spec put_about(binary(), map()) :: :ok
-  def put_about(id, fields) when is_binary(id) and is_map(fields) do
-    true = :ets.insert(ensure_table(), {id, about_entry(get(id), fields)})
+  @spec put_about(binary(), map(), :own | :ours) :: :ok
+  def put_about(id, fields, source)
+      when is_binary(id) and is_map(fields) and source in [:own, :ours] do
+    true = :ets.insert(ensure_table(), {id, about_entry(raw(id), fields, source)})
     :ok
   end
+
+  @doc "The feed's own word for itself — `put_about/3` with `:own` as the source."
+  @spec put_about(binary(), map()) :: :ok
+  def put_about(id, fields), do: put_about(id, fields, :own)
 
   @doc "Record the blob revision avatar URLs cache-bust on."
   @spec put_rev(integer()) :: :ok
@@ -99,31 +118,71 @@ defmodule HighWire.SSB.Profile do
     ArgumentError -> nil
   end
 
-  # A payload speaks for the window it covers: its image is the answer,
-  # so a present key wins even when it is nil — a feed whose avatar went
-  # away must lose the stale one. Its name is not the feed's own word for
-  # itself, so the name already known (from an about) is carried over.
-  defp payload_entry(existing, profile) do
+  # The stored entry, before resolution: the feed's own word for itself
+  # beside ours, and the payload's image. Entries written before the
+  # split carry only the feed's own name and bio; the slots the split
+  # added read as nil.
+  defp raw(id) when is_binary(id) do
+    case :ets.lookup(@table, id) do
+      [{^id, entry}] -> entry(entry)
+      [] -> entry(%{})
+    end
+  rescue
+    ArgumentError -> entry(%{})
+  end
+
+  defp entry(entry) when is_map(entry) do
     %{
-      name: existing_name(existing),
-      image: value(profile, "image") || value(profile, :image),
-      description: existing_description(existing)
+      name: Map.get(entry, :name),
+      ours_name: Map.get(entry, :ours_name),
+      image: Map.get(entry, :image),
+      description: Map.get(entry, :description),
+      ours_description: Map.get(entry, :ours_description)
     }
   end
 
-  # An about message is the feed's own word for itself (or ours about
-  # it), so the name and bio it carries are the answer. Fields it does
-  # not carry are left as they are: an about that only revises the bio
-  # must not take the name away.
-  defp about_entry(existing, fields) do
-    %{
-      name: value(fields, "name") || value(fields, :name) || existing_name(existing),
-      image: existing_image(existing),
-      description:
-        value(fields, "description") || value(fields, :description) ||
-          existing_description(existing)
-    }
+  defp entry(_entry), do: entry(%{})
+
+  # A payload speaks for the window it covers: its image is the answer,
+  # so a present key wins even when it is nil — a feed whose avatar went
+  # away must lose the stale one. Its name is not the feed's own word for
+  # itself, so both name slots (the feed's word and ours) are carried
+  # over as they are.
+  defp payload_entry(existing, profile) do
+    %{existing | image: value(profile, "image") || value(profile, :image)}
   end
+
+  # An about message is the feed's own word for itself (or ours about
+  # it), so the fields it carries are the answer — for its source's
+  # slot. Fields it does not carry leave their slot as it is: an about
+  # that only revises the bio must not take the name away.
+  defp about_entry(existing, fields, source) do
+    case source do
+      :own ->
+        %{
+          existing
+          | name: written(existing.name, about_name(fields)),
+            description: written(existing.description, about_description(fields))
+        }
+
+      :ours ->
+        %{
+          existing
+          | ours_name: written(existing.ours_name, about_name(fields)),
+            ours_description: written(existing.ours_description, about_description(fields))
+        }
+    end
+  end
+
+  # A field the message carries replaces the slot; an empty field
+  # clears it — "" is how a name or bio is taken back; a field the
+  # message does not carry leaves the slot alone.
+  defp written(current, nil), do: current
+  defp written(_current, ""), do: nil
+  defp written(_current, value), do: value
+
+  defp about_name(fields), do: value(fields, "name") || value(fields, :name)
+  defp about_description(fields), do: value(fields, "description") || value(fields, :description)
 
   defp value(map, key) when is_map(map) do
     case Map.get(map, key) do
@@ -134,27 +193,21 @@ defmodule HighWire.SSB.Profile do
 
   defp value(_map, _key), do: nil
 
-  defp existing_name(%{name: name}), do: name
-  defp existing_name(_), do: nil
+  # What a reader sees: our word for the feed when we have one — the
+  # alias this store published, standing until it is taken back — over
+  # the feed's own name and bio. The slots behind this are the writes';
+  # `get/1` is the only shape callers ever read.
+  defp normalize(%{} = entry) do
+    entry = entry(entry)
 
-  defp existing_image(%{image: image}), do: image
-  defp existing_image(_), do: nil
-
-  defp existing_description(%{description: description}), do: description
-  defp existing_description(_), do: nil
-
-  # Entries written before the bio joined the model carry only name and
-  # image; read them as a bio-less profile rather than crashing on the
-  # missing key.
-  defp normalize(%{} = profile) do
     %{
-      name: Map.get(profile, :name),
-      image: Map.get(profile, :image),
-      description: Map.get(profile, :description)
+      name: entry.ours_name || entry.name,
+      image: entry.image,
+      description: entry.ours_description || entry.description
     }
   end
 
-  defp normalize(_), do: %{name: nil, image: nil, description: nil}
+  defp normalize(_entry), do: %{name: nil, image: nil, description: nil}
 
   @doc "Presentations for the given ids, dropping the unresolved ones."
   @spec take([binary()]) :: profiles()

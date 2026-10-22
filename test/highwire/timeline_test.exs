@@ -117,6 +117,31 @@ defmodule HighWire.TimelineTest do
                "blocking" => false
              }
     end
+
+    test "about content names the feed and carries only the fields sent" do
+      id = "@peer.ed25519"
+
+      assert Timeline.about_content(id, %{"name" => "Our alias"}) == %{
+               "type" => "about",
+               "about" => id,
+               "name" => "Our alias"
+             }
+
+      # An emptied field rides along — it is the take-back, not a
+      # missing key.
+      assert Timeline.about_content(id, %{"name" => ""}) == %{
+               "type" => "about",
+               "about" => id,
+               "name" => ""
+             }
+
+      assert Timeline.about_content(id, %{"description" => "short bio", "name" => "n"}) == %{
+               "type" => "about",
+               "about" => id,
+               "name" => "n",
+               "description" => "short bio"
+             }
+    end
   end
 
   describe "private content" do
@@ -1022,6 +1047,46 @@ defmodule HighWire.TimelineTest do
 
       # Both ids are still feeds the store can speak for.
       assert st.about_ids == MapSet.new([ours, labelled])
+    end
+
+    test "our alias stands over the feed's own later name, and can be taken back" do
+      st = drain_state(about_ref: :about_ref, status: :ok)
+      target = "@b-pin-#{:erlang.unique_integer([:positive])}=.ed25519"
+
+      # The feed names itself first…
+      from_them =
+        msg(target, "%them=.sha256", 9_000, %{
+          "type" => "about",
+          "about" => target,
+          "name" => "Their word"
+        })
+
+      # …then we alias it. Ours is ours: it stands over the feed's own
+      # name, whatever order the messages came in.
+      from_us =
+        msg("@me.ed25519", "%us=.sha256", 9_500, %{
+          "type" => "about",
+          "about" => target,
+          "name" => "Our alias"
+        })
+
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, from_them}}, st)
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, from_us}}, st)
+
+      assert Profile.display_name(target) == "Our alias"
+
+      # An emptied name from us is the take-back: the feed's own word,
+      # kept in its own slot all along, stands again.
+      clear =
+        msg("@me.ed25519", "%us2=.sha256", 10_000, %{
+          "type" => "about",
+          "about" => target,
+          "name" => ""
+        })
+
+      {:noreply, _st} = Timeline.handle_info({Client, :about_ref, {:item, clear}}, st)
+
+      assert Profile.display_name(target) == "Their word"
     end
 
     test "a completed about pass marks an empty store" do

@@ -113,4 +113,75 @@ defmodule HighWire.SSB.ProfileTest do
       assert Profile.rev() == 7
     end
   end
+
+  describe "our alias against the feed's own word" do
+    test "ours stands over the feed's later name, in either arrival order" do
+      late = "@profile-late-#{:erlang.unique_integer([:positive])}.ed25519"
+      early = "@profile-early-#{:erlang.unique_integer([:positive])}.ed25519"
+
+      # The feed names itself after we alias it.
+      :ok = Profile.put_about(late, %{"name" => "Our alias"}, :ours)
+      :ok = Profile.put_about(late, %{"name" => "Their word"}, :own)
+      assert Profile.display_name(late) == "Our alias"
+
+      # …and before: the order the messages arrived in does not decide.
+      :ok = Profile.put_about(early, %{"name" => "Their word"}, :own)
+      :ok = Profile.put_about(early, %{"name" => "Our alias"}, :ours)
+      assert Profile.display_name(early) == "Our alias"
+    end
+
+    test "taking our alias back falls to the feed's own name" do
+      id = "@profile-clear-#{:erlang.unique_integer([:positive])}.ed25519"
+
+      :ok = Profile.put_about(id, %{"name" => "Their word"}, :own)
+      :ok = Profile.put_about(id, %{"name" => "Our alias"}, :ours)
+      assert Profile.get(id).name == "Our alias"
+
+      # "" is the take-back: our slot clears and the feed's own name
+      # stands again.
+      :ok = Profile.put_about(id, %{"name" => ""}, :ours)
+      assert Profile.get(id).name == "Their word"
+
+      # With no name on either side the feed wears its short id.
+      :ok = Profile.put_about(id, %{"name" => ""}, :own)
+      assert Profile.get(id).name == nil
+      assert Profile.display_name(id) == Ident.short_id(id)
+    end
+
+    test "the bio answers the same way" do
+      id = "@profile-bio-#{:erlang.unique_integer([:positive])}.ed25519"
+
+      :ok = Profile.put_about(id, %{"description" => "their bio"}, :own)
+      :ok = Profile.put_about(id, %{"description" => "our note"}, :ours)
+      assert Profile.get(id).description == "our note"
+
+      :ok = Profile.put_about(id, %{"description" => ""}, :ours)
+      assert Profile.get(id).description == "their bio"
+    end
+
+    test "an about that carries no field writes nothing" do
+      id = "#{:erlang.unique_integer([:positive])}"
+      :ok = Profile.put_about(id, %{"name" => "Our alias"}, :ours)
+
+      :ok = Profile.put_about(id, %{"image" => "&x=.sha256"}, :ours)
+
+      assert Profile.get(id).name == "Our alias"
+    end
+
+    test "a payload merge carries both name slots along" do
+      id = "@profile-merge2-#{:erlang.unique_integer([:positive])}.ed25519"
+
+      :ok = Profile.put_about(id, %{"name" => "Their word"}, :own)
+      :ok = Profile.put_about(id, %{"name" => "Our alias"}, :ours)
+
+      Profile.put_all(%{id => %{name: "engine name", image: "&two=.sha256"}})
+
+      assert Profile.get(id) == %{name: "Our alias", image: "&two=.sha256", description: nil}
+
+      # And the take-back still falls through after the merge — the
+      # merge kept the feed's word in its own slot.
+      :ok = Profile.put_about(id, %{"name" => ""}, :ours)
+      assert Profile.get(id).name == "Their word"
+    end
+  end
 end
