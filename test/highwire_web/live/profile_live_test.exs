@@ -132,6 +132,50 @@ defmodule HighWireWeb.ProfileLiveTest do
     refute html =~ "toggle-follow"
   end
 
+  test "every publish control holds the press while the engine takes its time", %{conn: conn} do
+    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+    seed(view, status: :ok, self_id: "@me=.ed25519", follows: [peer], blocked: [])
+
+    # The engine can take seconds, and the reader has to see the press
+    # was taken before the engine answers it: the control names the verb
+    # in flight — the one it is undoing, since the label beside it
+    # already reads "Following" — and goes dead under the finger.
+    held = render_click(view, "toggle-follow", %{"id" => peer})
+
+    assert held =~ "Unfollowing…"
+    assert held =~ ~r/phx-click="toggle-follow"[^>]*disabled/
+
+    held = render_click(view, "toggle-block", %{"id" => peer})
+
+    assert held =~ "Blocking…"
+    assert held =~ ~r/phx-click="toggle-block"[^>]*disabled/
+  end
+
+  test "a publish the engine refuses says so under the buttons", %{conn: conn} do
+    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+    seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
+
+    # The engine is off under test, so the publish comes back refused.
+    # The refusal lands under the buttons and the press is let go, so a
+    # click that did not take says so instead of reading as one that did
+    # nothing at all.
+    assert render_click(view, "toggle-follow", %{"id" => peer}) =~ "Following…"
+
+    html = render(view)
+    assert html =~ "Not connected yet. Try again in a moment."
+    refute html =~ "Following…"
+
+    assert render_click(view, "toggle-block", %{"id" => peer}) =~ "Blocking…"
+
+    html = render(view)
+    assert html =~ "Not connected yet. Try again in a moment."
+    refute html =~ "Blocking…"
+  end
+
   # Engine off under test, so relationship state is seeded straight into
   # the assigns; __changed__ records the old values so the next render
   # computes a diff instead of serving the cached tree.

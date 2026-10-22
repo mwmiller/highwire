@@ -37,7 +37,8 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:self_id, nil)
      |> assign(:more, false)
      |> assign(:follow_pending, MapSet.new())
-     |> assign(:block_pending, MapSet.new())}
+     |> assign(:block_pending, MapSet.new())
+     |> assign(:action_error, nil)}
   end
 
   @impl true
@@ -61,6 +62,40 @@ defmodule HighWireWeb.ProfileLive do
        blocked: Map.get(payload, :blocked, socket.assigns.blocked),
        self_id: Map.get(payload, :self_id, socket.assigns.self_id)
      )}
+  end
+
+  # The publish itself, behind the held-down button. The render that
+  # comes out of this is the one the reader keeps: the relationship the
+  # rail now stands on, or the refusal under it. How long that takes is
+  # the engine's to say.
+  def handle_info({:publish_follow, id, followed?}, socket) do
+    result = if followed?, do: Timeline.unfollow(id), else: Timeline.follow(id)
+
+    socket = update(socket, :follow_pending, &MapSet.delete(&1, id))
+
+    case result do
+      {:error, reason} ->
+        Logger.warning("profile: follow publish failed: #{inspect(reason)}")
+        {:noreply, assign(socket, :action_error, follow_error(reason))}
+
+      _ok ->
+        {:noreply, follow_settled(socket, id, followed?)}
+    end
+  end
+
+  def handle_info({:publish_block, id, blocked?}, socket) do
+    result = if blocked?, do: Timeline.unblock(id), else: Timeline.block(id)
+
+    socket = update(socket, :block_pending, &MapSet.delete(&1, id))
+
+    case result do
+      {:error, reason} ->
+        Logger.warning("profile: block publish failed: #{inspect(reason)}")
+        {:noreply, assign(socket, :action_error, block_error(reason))}
+
+      _ok ->
+        {:noreply, block_settled(socket, id, blocked?)}
+    end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -89,51 +124,70 @@ defmodule HighWireWeb.ProfileLive do
     end
   end
 
+  # The press is answered by holding the button down, and the publish
+  # itself waits behind it: the render that goes out now carries the
+  # held-down state — the verb in flight, the button dead under it — so
+  # the reader sees the engine has the press before the engine answers.
   def handle_event("toggle-follow", %{"id" => id}, socket) do
-    socket =
-      socket
-      |> update(:follow_pending, &MapSet.put(&1, id))
-      |> update(:block_pending, &MapSet.delete(&1, id))
+    if MapSet.member?(socket.assigns.follow_pending, id) do
+      # The button is already down. A second press is a duplicate, not a
+      # second relationship.
+      {:noreply, socket}
+    else
+      socket =
+        socket
+        |> assign(:action_error, nil)
+        |> update(:follow_pending, &MapSet.put(&1, id))
+        |> update(:block_pending, &MapSet.delete(&1, id))
 
-    result = if id in socket.assigns.follows, do: Timeline.unfollow(id), else: Timeline.follow(id)
+      send(self(), {:publish_follow, id, id in socket.assigns.follows})
 
-    case result do
-      {:error, reason} ->
-        Logger.warning("profile: follow publish failed: #{inspect(reason)}")
-
-      _ok ->
-        :ok
+      {:noreply, socket}
     end
-
-    {:noreply, update(socket, :follow_pending, &MapSet.delete(&1, id))}
   end
 
   # Blocking publishes one contact message that carries both edges — the
   # block and the retracted follow — so a blocked feed also stops feeding
   # the timeline. Unblocking clears only the block.
   def handle_event("toggle-block", %{"id" => id}, socket) do
-    socket =
-      socket
-      |> update(:block_pending, &MapSet.put(&1, id))
-      |> update(:follow_pending, &MapSet.delete(&1, id))
+    if MapSet.member?(socket.assigns.block_pending, id) do
+      {:noreply, socket}
+    else
+      socket =
+        socket
+        |> assign(:action_error, nil)
+        |> update(:block_pending, &MapSet.put(&1, id))
+        |> update(:follow_pending, &MapSet.delete(&1, id))
 
-    result = if id in socket.assigns.blocked, do: Timeline.unblock(id), else: Timeline.block(id)
+      send(self(), {:publish_block, id, id in socket.assigns.blocked})
 
-    case result do
-      {:error, reason} ->
-        Logger.warning("profile: block publish failed: #{inspect(reason)}")
-
-      _ok ->
-        :ok
+      {:noreply, socket}
     end
-
-    {:noreply, update(socket, :block_pending, &MapSet.delete(&1, id))}
   end
 
   # Clicking a post opens its thread — the same journey as the timeline
   # row: PostLive carries the reply composer and the like toggle.
   def handle_event("open-post", %{"key" => key}, socket) when is_binary(key) do
     {:noreply, push_navigate(socket, to: "/post/" <> Base.url_encode64(key, padding: false))}
+  end
+
+  # The publish has landed, and the rail reads as the press. The payload
+  # that carries the new relationship comes back with the next index
+  # refresh — five seconds away at best — and until it does the button
+  # the reader pressed would still show the state the press undid, as if
+  # the click had done nothing. The next payload confirms this, or
+  # corrects it.
+  defp follow_settled(socket, id, true), do: update(socket, :follows, &List.delete(&1, id))
+  defp follow_settled(socket, id, false), do: update(socket, :follows, &Enum.uniq([id | &1]))
+
+  defp block_settled(socket, id, true), do: update(socket, :blocked, &List.delete(&1, id))
+
+  # A block arrives with the follow's retraction already in it, so the
+  # rail stops reading as following the moment the block lands.
+  defp block_settled(socket, id, false) do
+    socket
+    |> update(:blocked, &Enum.uniq([id | &1]))
+    |> update(:follows, &List.delete(&1, id))
   end
 
   defp load(socket, id) do
@@ -160,9 +214,19 @@ defmodule HighWireWeb.ProfileLive do
       self_id: viewer.self_id,
       blob_rev: viewer.blob_rev,
       follow_pending: MapSet.new(),
-      block_pending: MapSet.new()
+      block_pending: MapSet.new(),
+      action_error: nil
     )
   end
+
+  # A publish the engine refuses says so under the buttons: the working
+  # state goes with the reply, so without these lines a click that did
+  # not take reads as a click that did nothing.
+  defp follow_error(:offline), do: "Not connected yet. Try again in a moment."
+  defp follow_error(_reason), do: "Follow didn't go through. Try again."
+
+  defp block_error(:offline), do: "Not connected yet. Try again in a moment."
+  defp block_error(_reason), do: "Block didn't go through. Try again."
 
   # Guarded: private messages carry an encrypted binary `content`.
   defp post?(msg) do
@@ -231,12 +295,16 @@ defmodule HighWireWeb.ProfileLive do
           edges are independent in the protocol, but "following" a feed
           you block is a contradiction the reader should not have to
           resolve. Unblock first, then decide. --%>
+          <%!-- Both controls below hold themselves down by rendering the
+          pending state, not through phx-disable-with: that attribute
+          restores the pre-click label over the reply that carries the
+          outcome, and here the label is the outcome. --%>
           <button
             :if={@id != @self_id and @status != :disabled and @id not in @blocked}
             type="button"
             phx-click="toggle-follow"
             phx-value-id={@id}
-            phx-disabled={MapSet.member?(@follow_pending, @id)}
+            disabled={MapSet.member?(@follow_pending, @id)}
             class={["btn mt-3 w-full", @id in @follows and "btn-primary"]}
           >
             {cond do
@@ -256,7 +324,7 @@ defmodule HighWireWeb.ProfileLive do
             type="button"
             phx-click="toggle-block"
             phx-value-id={@id}
-            phx-disabled={MapSet.member?(@block_pending, @id)}
+            disabled={MapSet.member?(@block_pending, @id)}
             class={["btn mt-2 w-full", @id not in @blocked and "text-bad"]}
           >
             {cond do
@@ -270,6 +338,10 @@ defmodule HighWireWeb.ProfileLive do
                 "Block"
             end}
           </button>
+
+          <p :if={@action_error} role="alert" class="mt-2 text-xs text-bad">
+            {@action_error}
+          </p>
         </div>
 
         <p :if={@id == nil} class="px-4 pb-4 text-xs italic text-faint">
