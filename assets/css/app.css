@@ -375,19 +375,17 @@ html[data-participating="off"] [data-pref-tab] {
 
 /* Every control that publishes waits on a round trip that can take
    seconds, and the wait has to show: while the push is in flight
-   LiveView puts one of these classes on the pressed control, so the
-   control itself dims and carries a spinner for exactly as long as it
-   takes — and restores the moment the answer lands, whatever the
-   answer was. The wait also has a word beside the spinner: the
-   composers swap their label through `phx-disable-with` (Publishing…,
-   Replying…), and the follow and block controls render theirs from
-   the server, which also carries what the press did. */
-a.phx-click-loading,
-button.phx-click-loading,
-button.phx-submit-loading {
-  cursor: progress;
-}
+   LiveView puts one of these classes on the pressed control, which
+   dims it and carries a spinner for exactly as long as it takes — and
+   restores the moment the answer lands, whatever the answer was. The
+   wait also has a word beside the spinner: the composers swap their
+   label through `phx-disable-with` (Publishing…, Replying…), and the
+   follow and block controls render theirs from the server, which also
+   carries what the press did.
 
+   No cursor override: the OS cursor changing to its waiting glyph is
+   what reads as a hung page, not as a control mid-press, so the
+   pressed control keeps the pointer it always had. */
 button.phx-click-loading,
 button.phx-submit-loading {
   opacity: 0.6;
@@ -396,7 +394,6 @@ button.phx-submit-loading {
 /* A control holding a press in flight is dead under the reader's
    finger: the render disables it, and the dim says why. */
 button:disabled {
-  cursor: progress;
   opacity: 0.6;
 }
 
@@ -425,11 +422,6 @@ button.phx-submit-loading::after {
   .gossip-node-flare,
   .gossip-arrived,
   .msg-focus {
-    animation: none;
-  }
-
-  button.phx-click-loading::after,
-  button.phx-submit-loading::after {
     animation: none;
   }
 }
