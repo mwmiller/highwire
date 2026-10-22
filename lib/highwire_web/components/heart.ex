@@ -12,12 +12,17 @@ defmodule HighWireWeb.Components.Heart do
   attr :key, :string, required: true, doc: "the message key this pill likes"
   attr :liked, :boolean, default: false, doc: "whether the viewer has liked it"
 
+  attr :pending, :boolean,
+    default: false,
+    doc: "whether the like is on its way to the engine, which holds the press down"
+
   def pill(assigns) do
     ~H"""
     <button
       type="button"
       phx-click="like"
       phx-value-key={@key}
+      disabled={@pending}
       aria-pressed={if(@liked, do: "true", else: "false")}
       aria-label={if(@liked, do: "Unlike", else: "Like")}
       title={if(@liked, do: "Unlike", else: "Like")}

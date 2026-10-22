@@ -227,11 +227,18 @@ defmodule HighWireWeb.PostLiveTest do
     html = render(view)
     assert html =~ ~s(aria-label="Like")
 
-    # the engine is off under test, so the publish refuses: the
+    # The press fills the heart at once and holds the pill down: the
+    # reader's own like is shown before the engine has answered.
+    held = element(view, ~s(button[aria-label="Like"])) |> render_click()
+    assert held =~ ~s(aria-pressed="true")
+    assert held =~ ~r/phx-click="like"[^>]*disabled/
+
+    # The engine is off under test, so the publish refuses: the
     # optimistic fill must revert to the re-read thread instead of
-    # lingering as a heart that never happened
-    html = element(view, ~s(button[aria-label="Like"])) |> render_click()
+    # lingering as a heart that never happened, and the reader is told.
+    html = render(view)
     refute html =~ ~s(aria-pressed="true")
+    assert html =~ "That like didn&#39;t go through"
 
     # That re-read finds nothing in the engine-off test store; a nil
     # fetch must not blank a thread already on screen, so the reader

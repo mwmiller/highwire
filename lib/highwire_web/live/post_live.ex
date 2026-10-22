@@ -48,6 +48,8 @@ defmodule HighWireWeb.PostLive do
        reply_body: "",
        reply_error: nil,
        reply_pending: false,
+       like_pending: MapSet.new(),
+       like_error: nil,
        mention_suggestions: [],
        blob_rev: 0
      )}
@@ -83,6 +85,32 @@ defmodule HighWireWeb.PostLive do
     # Re-read the thread so a reply or like we just published appears
     # without a navigation — fetch_post scans the in-memory window.
     {:noreply, if(socket.assigns.raw_key, do: load(socket, socket.assigns.raw_key), else: socket)}
+  end
+
+  # The like itself, behind the filled pill. A refusal re-reads the
+  # thread so the heart goes back to what the store holds, and says so
+  # under the post: a like that undid itself in silence reads as a press
+  # that did nothing.
+  def handle_info({:publish_like, key, liked?}, socket) do
+    result =
+      if private_thread?(socket.assigns.root) do
+        value = if liked?, do: 0, else: 1
+        Timeline.like_private(key, private_recipients(socket), value)
+      else
+        if liked?, do: Timeline.unlike(key), else: Timeline.like(key)
+      end
+
+    socket = update(socket, :like_pending, &MapSet.delete(&1, key))
+
+    case result do
+      {:error, reason} ->
+        Logger.warning("post: like publish failed: #{inspect(reason)}")
+        socket = if socket.assigns.raw_key, do: load(socket, socket.assigns.raw_key), else: socket
+        {:noreply, assign(socket, :like_error, like_error(reason))}
+
+      _ok ->
+        {:noreply, socket}
+    end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -213,28 +241,24 @@ defmodule HighWireWeb.PostLive do
     end
   end
 
+  # The press is answered by the pill filling, and the publish waits
+  # behind it: the pill holds down while it runs, so a second press is a
+  # duplicate rather than a second like.
   def handle_event("like", %{"key" => key}, socket) do
-    # The pill fills on the click itself; the publish's ack rebroadcast
-    # reconciles it with the store, and a refusal re-reads the thread so
-    # a failed like never lingers on screen.
-    liked? = key in socket.assigns.my_likes
-    socket = assign(socket, Heart.toggle(socket.assigns, key))
+    if MapSet.member?(socket.assigns.like_pending, key) do
+      {:noreply, socket}
+    else
+      liked? = key in socket.assigns.my_likes
 
-    result =
-      if private_thread?(socket.assigns.root) do
-        value = if liked?, do: 0, else: 1
-        Timeline.like_private(key, private_recipients(socket), value)
-      else
-        if liked?, do: Timeline.unlike(key), else: Timeline.like(key)
-      end
+      socket =
+        socket
+        |> assign(:like_error, nil)
+        |> update(:like_pending, &MapSet.put(&1, key))
+        |> assign(Heart.toggle(socket.assigns, key))
 
-    case result do
-      {:error, reason} ->
-        Logger.warning("post: like publish failed: #{inspect(reason)}")
-        {:noreply, load(socket, socket.assigns.raw_key)}
+      send(self(), {:publish_like, key, liked?})
 
-      _ok ->
-        {:noreply, socket}
+      {:noreply, socket}
     end
   end
 
@@ -282,6 +306,13 @@ defmodule HighWireWeb.PostLive do
   defp reply_error(:offline), do: "Still connecting. Try again in a moment."
 
   defp reply_error(_reason), do: "Reply failed."
+
+  # A like the engine refused is the one action here that undoes itself,
+  # so it names what happened beside the thread it emptied.
+  defp like_error(:offline),
+    do: "That like didn't go through: not connected yet. Try again in a moment."
+
+  defp like_error(_reason), do: "That like didn't go through. Try again."
 
   # A thread is private when its root arrived boxed; the badge already
   # keys off the same flag.
@@ -530,7 +561,11 @@ defmodule HighWireWeb.PostLive do
                       {length(@replies)} {if length(@replies) == 1, do: "reply", else: "replies"}
                     </span>
                     <div class="flex items-center gap-1.5">
-                      <Heart.pill key={@root["key"]} liked={@root_liked} />
+                      <Heart.pill
+                        key={@root["key"]}
+                        liked={@root_liked}
+                        pending={MapSet.member?(@like_pending, @root["key"])}
+                      />
                       <span
                         :for={liker <- @root_likers}
                         title={Ident.display_name(liker, @profiles)}
@@ -548,6 +583,13 @@ defmodule HighWireWeb.PostLive do
                 </div>
               </div>
             </article>
+
+            <%!-- The one action here that undoes itself also says so:
+            the pill fills on the press, and a refusal empties it with
+            this line under the post. --%>
+            <p :if={@like_error} role="alert" class="mt-3 text-xs text-bad">
+              {@like_error}
+            </p>
 
             <h2
               :if={@replies != []}
@@ -607,7 +649,11 @@ defmodule HighWireWeb.PostLive do
                 />
 
                 <div class="mt-1.5 flex items-center gap-1.5">
-                  <Heart.pill key={reply["key"]} liked={reply["key"] in @my_likes} />
+                  <Heart.pill
+                    key={reply["key"]}
+                    liked={reply["key"] in @my_likes}
+                    pending={MapSet.member?(@like_pending, reply["key"])}
+                  />
                   <span
                     :for={liker <- Enum.take(Map.get(@likes_by, reply["key"], []), 4)}
                     title={Ident.display_name(liker, @profiles)}

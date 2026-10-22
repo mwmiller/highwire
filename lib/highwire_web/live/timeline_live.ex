@@ -100,6 +100,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(contacts_expanded: false)
       |> assign(max_sidebar_contacts: Contacts.subset_size())
       |> assign(compose: "", compose_error: nil)
+      |> assign(like_pending: MapSet.new(), like_error: nil)
       |> assign(private_recipients: MapSet.new())
       |> assign(compose_pending: false)
       |> assign(mention_suggestions: [])
@@ -273,6 +274,26 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
+  # The like itself, behind the filled heart. The heart already shows
+  # the state the press asked for; this reply is the one that says
+  # whether it took, and a refusal puts the heart back and says so
+  # rather than leaving the reader to notice it empty again.
+  def handle_info({:publish_like, key, liked?}, socket) do
+    result = if liked?, do: Timeline.unlike(key), else: Timeline.like(key)
+
+    socket = update(socket, :like_pending, &MapSet.delete(&1, key))
+
+    case result do
+      {:error, reason} ->
+        Logger.warning("timeline: like publish failed: #{inspect(reason)}")
+        {_status, payload} = Timeline.snapshot()
+        {:noreply, socket |> assign_payload(payload) |> assign(:like_error, like_error(reason))}
+
+      _ok ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # A query goes out with the view marked pending: a fold of the store is
@@ -375,22 +396,25 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
+  # The press is answered by the heart filling, and the publish waits
+  # behind it: the pill holds down while it runs, so a second press is a
+  # duplicate rather than a second like. The reply that comes back is
+  # the one that says whether it took.
   def handle_event("like", %{"key" => key}, socket) do
-    # Same local-first flip as the post page: the heart fills on the
-    # click, and a refusal falls back to the last real payload.
-    liked? = key in socket.assigns.my_likes
-    socket = assign(socket, Heart.toggle(socket.assigns, key))
+    if MapSet.member?(socket.assigns.like_pending, key) do
+      {:noreply, socket}
+    else
+      liked? = key in socket.assigns.my_likes
 
-    result = if liked?, do: Timeline.unlike(key), else: Timeline.like(key)
+      socket =
+        socket
+        |> assign(:like_error, nil)
+        |> update(:like_pending, &MapSet.put(&1, key))
+        |> assign(Heart.toggle(socket.assigns, key))
 
-    case result do
-      {:error, reason} ->
-        Logger.warning("timeline: like publish failed: #{inspect(reason)}")
-        {_status, payload} = Timeline.snapshot()
-        {:noreply, assign_payload(socket, payload)}
+      send(self(), {:publish_like, key, liked?})
 
-      _ok ->
-        {:noreply, socket}
+      {:noreply, socket}
     end
   end
 
@@ -889,6 +913,14 @@ defmodule HighWireWeb.TimelineLive do
   defp publish_error(%{"message" => msg}) when is_binary(msg), do: msg
   defp publish_error(_reason), do: "Publish failed."
 
+  # A like the engine refused is the one action on this page that undoes
+  # itself, so it names what happened rather than leaving the reader to
+  # work it out from a heart that emptied again.
+  defp like_error(:offline),
+    do: "That like didn't go through: not connected yet. Try again in a moment."
+
+  defp like_error(_reason), do: "That like didn't go through. Try again."
+
   # The tail of the feed reads three ways: a page on its way back, more
   # rows still to ask for, or the true end. A reader used to have to
   # guess between them — an invisible load and the end of history looked
@@ -955,7 +987,8 @@ defmodule HighWireWeb.TimelineLive do
           profiles: assigns.profiles,
           rev: assigns.blob_rev,
           my_likes: assigns.my_likes,
-          likes_by: assigns.likes_by
+          likes_by: assigns.likes_by,
+          like_pending: assigns.like_pending
         }
       )
 
@@ -1297,6 +1330,13 @@ defmodule HighWireWeb.TimelineLive do
               </section>
             <% end %>
 
+            <%!-- The one action here that can undo itself also says so:
+            the heart fills on the press, and a refusal empties it with
+            this line under it. --%>
+            <p :if={@like_error} role="alert" class="px-4 py-3 text-xs text-bad">
+              {@like_error}
+            </p>
+
             <div
               :for={row <- @rows}
               :if={@local_rows?}
@@ -1375,6 +1415,10 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(:private?, Map.get(assigns.row, :private?, false))
       |> assign(:like_target, like_target(assigns.row))
       |> assign(:liked, like_target(assigns.row) in assigns.ctx.my_likes)
+      |> assign(
+        :like_pending,
+        MapSet.member?(assigns.ctx.like_pending, like_target(assigns.row))
+      )
       |> assign(:likers, Enum.take(likers, 4))
       |> assign(:liker_more, max(length(likers) - 4, 0))
       |> assign(
@@ -1462,7 +1506,7 @@ defmodule HighWireWeb.TimelineLive do
         <div class="mt-1.5 flex items-center gap-4 text-xs text-dim">
           <span :if={@row.replies > 0}>{@row.replies} replies</span>
           <div :if={@like_target} class="flex items-center gap-1.5">
-            <Heart.pill key={@like_target} liked={@liked} />
+            <Heart.pill key={@like_target} liked={@liked} pending={@like_pending} />
             <span :for={liker <- @likers} title={Ident.display_name(liker, @ctx)} class="inline-flex">
               <Avatar.avatar
                 id={liker}

@@ -527,10 +527,21 @@ defmodule HighWireWeb.TimelineLiveTest do
       html = notify(view, payload)
       assert html =~ ~s(aria-label="Like")
 
-      # the engine is off under test, so the publish refuses: the
-      # optimistic fill must not linger on a row the store never saw
-      html = element(view, ~s(button[aria-label="Like"])) |> render_click()
+      # The press fills the heart at once and holds the pill down: the
+      # reader's own like is shown before the engine has answered, and a
+      # second press in the meantime is a duplicate.
+      held = element(view, ~s(button[aria-label="Like"])) |> render_click()
+
+      assert held =~ ~s(aria-pressed="true")
+      assert held =~ ~r/phx-click="like"[^>]*disabled/
+
+      # The engine is off under test, so the publish refuses: the
+      # optimistic fill must not linger on a row the store never saw,
+      # and the reader is told what happened rather than left to notice
+      # the heart empty again.
+      html = render(view)
       refute html =~ ~s(aria-pressed="true")
+      assert html =~ "That like didn&#39;t go through"
     end
 
     test "channel subscriptions say which channel and which way", %{conn: conn} do
