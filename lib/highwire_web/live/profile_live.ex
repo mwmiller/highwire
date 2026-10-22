@@ -2,10 +2,10 @@ defmodule HighWireWeb.ProfileLive do
   @moduledoc """
   An identity's profile page: avatar, resolved name, about text and
   their threads — paged from the sidecar so the history scrolls without
-  bound. The name and bio are edited where they read: the edit
+  bound. The name, bio and picture are edited where they read: the edit
   publishes our word for the feed, or the feed's own when the feed is
-  the signed-in identity, and an emptied field takes that name or bio
-  back. Nothing here treats the viewer's own identity specially;
+  the signed-in identity, and an emptied field takes that name, bio or
+  picture back. Nothing here treats the viewer's own identity specially;
   `/profile` without a param simply defaults to the signed-in feed.
   """
 
@@ -45,7 +45,9 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:about_editing?, false)
      |> assign(:about_name, "")
      |> assign(:about_bio, "")
+     |> assign(:about_image, nil)
      |> assign(:about_base, nil)
+     |> assign(:avatar_busy?, false)
      |> assign(:about_pending?, false)
      |> assign(:about_error, nil)}
   end
@@ -216,28 +218,61 @@ defmodule HighWireWeb.ProfileLive do
     end
   end
 
-  # The about info — the name and bio this page shows — is edited where
-  # it reads. Opening prefills both fields with what the page shows;
-  # saving publishes our word for this feed (its own, when the feed is
-  # the signed-in identity), and only what changed rides along — an
-  # untouched bio must not be pinned as ours behind the copy. An
-  # emptied field is the clear: it takes that name or bio back, and the
-  # page falls to the other side's word.
+  # The about info — the name, bio and picture this page shows — is
+  # edited where it reads. Opening prefills both fields and the picture
+  # with what the page shows; saving publishes our word for this feed
+  # (its own, when the feed is the signed-in identity), and only what
+  # changed rides along — an untouched bio must not be pinned as ours
+  # behind the copy. An emptied field is the clear: it takes that name,
+  # bio or picture back, and the page falls to the other side's word.
   def handle_event("edit-about", _params, socket) do
     name = (socket.assigns.profile && socket.assigns.profile.name) || ""
     bio = (socket.assigns.profile && socket.assigns.profile.description) || ""
+    image = (socket.assigns.profile && socket.assigns.profile.image) || nil
 
     {:noreply,
      socket
      |> assign(:about_editing?, true)
      |> assign(:about_name, name)
      |> assign(:about_bio, bio)
-     |> assign(:about_base, %{name: name, bio: bio})
+     |> assign(:about_image, image)
+     |> assign(:about_base, %{name: name, bio: bio, image: image})
      |> assign(:about_error, nil)}
   end
 
   def handle_event("cancel-about", _params, socket) do
-    {:noreply, socket |> assign(:about_editing?, false) |> assign(:about_error, nil)}
+    {:noreply,
+     socket
+     |> assign(:about_editing?, false)
+     |> assign(:about_error, nil)
+     |> assign(:avatar_busy?, false)}
+  end
+
+  # The avatar the form shows is what the reader picked, held beside
+  # the name and bio it will be saved with — one save publishes all
+  # three, so the picture is staged here rather than published on its
+  # own. The upload itself is the JS hook's: it posts the file to
+  # /blob, and these three events answer the round-trip.
+  def handle_event("avatar-uploading", _params, socket) do
+    {:noreply, socket |> assign(:avatar_busy?, true) |> assign(:about_error, nil)}
+  end
+
+  def handle_event("avatar-picked", %{"ref" => ref}, socket) when is_binary(ref) do
+    {:noreply, socket |> assign(:avatar_busy?, false) |> assign(:about_image, ref)}
+  end
+
+  def handle_event("avatar-failed", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:avatar_busy?, false)
+     |> assign(:about_error, "That image didn't upload. Try again.")}
+  end
+
+  # The picture is taken back the way a name is: it clears here, and
+  # the save publishes the clear — the page then falls to the feed's
+  # own picture.
+  def handle_event("avatar-clear", _params, socket) do
+    {:noreply, assign(socket, :about_image, nil)}
   end
 
   def handle_event("save-about", %{"name" => name, "description" => bio}, socket) do
@@ -245,12 +280,18 @@ defmodule HighWireWeb.ProfileLive do
     # a refusal landing on a fresh tree — shows what was written.
     socket = assign(socket, about_name: name, about_bio: bio)
 
-    fields = about_changes(socket.assigns.about_base, %{name: name, bio: bio})
+    fields =
+      about_changes(socket.assigns.about_base, %{
+        name: name,
+        bio: bio,
+        image: socket.assigns.about_image
+      })
 
     cond do
-      socket.assigns.about_pending? ->
-        # Save is already down. A second press is a duplicate, not a
-        # second publish.
+      socket.assigns.about_pending? or socket.assigns.avatar_busy? ->
+        # Save is already down, or the picture is still uploading — the
+        # reader's pick has not landed yet. A second press is a
+        # duplicate, not a second publish.
         {:noreply, socket}
 
       fields == %{} ->
@@ -321,6 +362,7 @@ defmodule HighWireWeb.ProfileLive do
       action_error: nil,
       about_editing?: false,
       about_pending?: false,
+      avatar_busy?: false,
       about_error: nil,
       loading_more: false
     )
@@ -341,15 +383,22 @@ defmodule HighWireWeb.ProfileLive do
   # Only what changed is published. An emptied field rides along as
   # "": that is the clear — take the name or bio back — while a field
   # left as it was sends nothing, so the feed's own later updates stay
-  # visible behind a copy we never made.
+  # visible behind a copy we never made. A picture follows the same
+  # rule, in the shape an about's image travels in: the ref as a
+  # message link when it is set, null when it is taken back.
   defp about_changes(base, sent) do
     %{}
     |> changed("name", sent.name, base.name)
     |> changed("description", sent.bio, base.bio)
+    |> image_changed(sent.image, base.image)
   end
 
   defp changed(fields, _key, value, value), do: fields
   defp changed(fields, key, value, _base), do: Map.put(fields, key, value)
+
+  defp image_changed(fields, image, image), do: fields
+  defp image_changed(fields, nil, _base), do: Map.put(fields, "image", nil)
+  defp image_changed(fields, ref, _base), do: Map.put(fields, "image", %{"link" => ref})
 
   # Guarded: private messages carry an encrypted binary `content`.
   defp post?(msg) do
@@ -518,6 +567,46 @@ defmodule HighWireWeb.ProfileLive do
                 phx-submit="save-about"
                 class="mt-3 space-y-3"
               >
+                <div class="flex items-center gap-3">
+                  <Avatar.avatar id={@id} size={56} image={@about_image} rev={@blob_rev} />
+
+                  <div class="flex flex-col gap-1">
+                    <%!-- The picture is staged, not published: the file
+                    goes to /blob through the hook, and the save below
+                    publishes the ref with the name and bio — or the
+                    clear, when Remove pressed it out. Remove sits
+                    outside the ignored div so it re-renders with the
+                    staged picture: the control goes with the picture it
+                    takes back. --%>
+                    <div
+                      id="avatar-attach"
+                      phx-hook="AvatarAttach"
+                      phx-update="ignore"
+                      class="flex flex-wrap items-center gap-2"
+                    >
+                      <label class="btn cursor-pointer text-xs">
+                        Choose image
+                        <input type="file" accept="image/*" data-avatar-input class="hidden" />
+                      </label>
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-2">
+                      <button
+                        :if={@about_image != nil}
+                        type="button"
+                        phx-click="avatar-clear"
+                        class="btn text-xs text-bad"
+                      >
+                        Remove
+                      </button>
+
+                      <p :if={@avatar_busy?} role="status" class="text-xs text-dim">
+                        Uploading…
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
                 <div>
                   <label
                     for="about-name"

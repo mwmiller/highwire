@@ -26,6 +26,16 @@ defmodule HighWire.SSB.Profile do
   back (an about carrying `""` for the field) falls to the feed's own
   name again.
 
+  The avatar follows the same split, with the payload as the floor: the
+  engine resolves a picture for every feed whose own about carries one,
+  so `image` is that answer, and an `about` folds its picture into
+  `own_image` (the feed's own word) or `ours_image` (our alias picture,
+  the picture we show for them). A read answers with ours first, the
+  feed's own about's second, the payload's last — so an avatar we set
+  stands over whatever the payload says, and taking it back falls to the
+  feed's picture again. An about carrying no picture leaves the slots
+  alone; carrying `""` (or a null) clears them.
+
   A read degrades to nil: a feed whose own about has not been read has
   no name, and `HighWire.Avatar.display_name/2` then falls back to the
   short id — what that feed shows its followers anyway.
@@ -76,18 +86,18 @@ defmodule HighWire.SSB.Profile do
   end
 
   @doc """
-  Fold one feed's `about` message into its entry: the display name and
-  the bio the profile page shows. The store-wide about drain already
-  reads every about message, but only the feed's own word for itself
-  (or ours about it) arrives here — that is what makes this the one
-  source of names.
+  Fold one feed's `about` message into its entry: the display name, the
+  bio and the avatar picture the profile page shows. The store-wide
+  about drain already reads every about message, but only the feed's
+  own word for itself (or ours about it) arrives here — that is what
+  makes this the one source of names.
 
   The source decides which slot the fields land in: `:own` is the
   feed's own word for itself, `:ours` the identity using this store
   speaking about the feed. Each field the message carries replaces its
   slot; a field it does not carry leaves the slot alone; a field
-  carrying `""` clears it — the way a name or bio is taken back, the
-  other side's slot then standing for the feed.
+  carrying `""` clears it — the way a name, bio or picture is taken
+  back, the other side's slot then standing for the feed.
   """
   @spec put_about(binary(), map(), :own | :ours) :: :ok
   def put_about(id, fields, source)
@@ -119,9 +129,11 @@ defmodule HighWire.SSB.Profile do
   end
 
   # The stored entry, before resolution: the feed's own word for itself
-  # beside ours, and the payload's image. Entries written before the
-  # split carry only the feed's own name and bio; the slots the split
-  # added read as nil.
+  # beside ours, and the two pictures — the feed's own about's and the
+  # engine payload's — held apart so an avatar we set stands over what
+  # the payload says. Entries written before the slots existed carry
+  # only the payload's image and the feed's own name and bio; the slots
+  # the split added read as nil.
   defp raw(id) when is_binary(id) do
     case :ets.lookup(@table, id) do
       [{^id, entry}] -> entry(entry)
@@ -136,6 +148,8 @@ defmodule HighWire.SSB.Profile do
       name: Map.get(entry, :name),
       ours_name: Map.get(entry, :ours_name),
       image: Map.get(entry, :image),
+      own_image: Map.get(entry, :own_image),
+      ours_image: Map.get(entry, :ours_image),
       description: Map.get(entry, :description),
       ours_description: Map.get(entry, :ours_description)
     }
@@ -147,7 +161,7 @@ defmodule HighWire.SSB.Profile do
   # so a present key wins even when it is nil — a feed whose avatar went
   # away must lose the stale one. Its name is not the feed's own word for
   # itself, so both name slots (the feed's word and ours) are carried
-  # over as they are.
+  # over as they are, as are the about-folded picture slots.
   defp payload_entry(existing, profile) do
     %{existing | image: value(profile, "image") || value(profile, :image)}
   end
@@ -155,21 +169,24 @@ defmodule HighWire.SSB.Profile do
   # An about message is the feed's own word for itself (or ours about
   # it), so the fields it carries are the answer — for its source's
   # slot. Fields it does not carry leave their slot as it is: an about
-  # that only revises the bio must not take the name away.
+  # that only revises the bio must not take the name or the picture
+  # away.
   defp about_entry(existing, fields, source) do
     case source do
       :own ->
         %{
           existing
           | name: written(existing.name, about_name(fields)),
-            description: written(existing.description, about_description(fields))
+            description: written(existing.description, about_description(fields)),
+            own_image: written_image(existing.own_image, fields)
         }
 
       :ours ->
         %{
           existing
           | ours_name: written(existing.ours_name, about_name(fields)),
-            ours_description: written(existing.ours_description, about_description(fields))
+            ours_description: written(existing.ours_description, about_description(fields)),
+            ours_image: written_image(existing.ours_image, fields)
         }
     end
   end
@@ -180,6 +197,41 @@ defmodule HighWire.SSB.Profile do
   defp written(current, nil), do: current
   defp written(_current, ""), do: nil
   defp written(_current, value), do: value
+
+  # A picture follows the same rule, with one more shape: an about's
+  # image is a bare blob ref (`&…sha256`) or the Excon message link
+  # (`%{"link" => &…}`), and both read the same ref. `""` or a null
+  # clears the picture; anything unreadable does too — a feed whose
+  # picture went away must lose the stale one, the same way a payload's
+  # nil does.
+  defp written_image(current, fields) do
+    case image_value(fields) do
+      :absent -> current
+      {:ref, ref} -> ref
+      :clear -> nil
+    end
+  end
+
+  defp image_value(fields) do
+    if Map.has_key?(fields, "image") or Map.has_key?(fields, :image) do
+      image_shape(Map.get(fields, "image") || Map.get(fields, :image))
+    else
+      :absent
+    end
+  end
+
+  # The shapes a carried image can take: a bare blob ref, the Excon
+  # message link, or the take-back — `""`, a null, or anything unreadable.
+  defp image_shape(raw) when is_binary(raw), do: image_ref(raw)
+  defp image_shape(raw) when is_map(raw), do: image_ref(image_link(raw))
+  defp image_shape(_raw), do: :clear
+
+  defp image_ref(ref) when is_binary(ref) and ref != "", do: {:ref, ref}
+  defp image_ref(_ref), do: :clear
+
+  defp image_link(%{"link" => link}), do: link
+  defp image_link(%{link: link}), do: link
+  defp image_link(_), do: nil
 
   defp about_name(fields), do: value(fields, "name") || value(fields, :name)
   defp about_description(fields), do: value(fields, "description") || value(fields, :description)
@@ -195,14 +247,16 @@ defmodule HighWire.SSB.Profile do
 
   # What a reader sees: our word for the feed when we have one — the
   # alias this store published, standing until it is taken back — over
-  # the feed's own name and bio. The slots behind this are the writes';
-  # `get/1` is the only shape callers ever read.
+  # the feed's own name and bio. The picture answers the same way: the
+  # alias picture, the feed's own about's picture, the payload's last.
+  # The slots behind this are the writes'; `get/1` is the only shape
+  # callers ever read.
   defp normalize(%{} = entry) do
     entry = entry(entry)
 
     %{
       name: entry.ours_name || entry.name,
-      image: entry.image,
+      image: entry.ours_image || entry.own_image || entry.image,
       description: entry.ours_description || entry.description
     }
   end

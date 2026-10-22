@@ -141,6 +141,21 @@ defmodule HighWire.TimelineTest do
                "name" => "n",
                "description" => "short bio"
              }
+
+      # The picture rides along the same way, in the shape an about's
+      # image carries — the ref as a message link, null when it is
+      # taken back.
+      assert Timeline.about_content(id, %{"image" => %{"link" => "&img=.sha256"}}) == %{
+               "type" => "about",
+               "about" => id,
+               "image" => %{"link" => "&img=.sha256"}
+             }
+
+      assert Timeline.about_content(id, %{"image" => nil}) == %{
+               "type" => "about",
+               "about" => id,
+               "image" => nil
+             }
     end
   end
 
@@ -1104,6 +1119,49 @@ defmodule HighWire.TimelineTest do
 
       # Both ids are still feeds the store can speak for.
       assert st.about_ids == MapSet.new([ours, labelled])
+    end
+
+    test "an about's picture lands only from the feed itself or from us" do
+      st = drain_state(about_ref: :about_ref, status: :ok)
+
+      own = "@b-img-own-#{:erlang.unique_integer([:positive])}=.ed25519"
+      ours = "@b-img-ours-#{:erlang.unique_integer([:positive])}=.ed25519"
+      labelled = "@b-img-labelled-#{:erlang.unique_integer([:positive])}=.ed25519"
+
+      # The feed sets its own picture.
+      from_them =
+        msg(own, "%them=.sha256", 9_000, %{
+          "type" => "about",
+          "about" => own,
+          "image" => %{"link" => "&own=.sha256"}
+        })
+
+      # We set an alias picture for a feed we follow.
+      from_us =
+        msg("@me.ed25519", "%us=.sha256", 9_000, %{
+          "type" => "about",
+          "about" => ours,
+          "image" => "&ours=.sha256"
+        })
+
+      # A third party's picture for a feed is not the feed's picture.
+      from_third_party =
+        msg("@stranger.ed25519", "%them=.sha256", 9_000, %{
+          "type" => "about",
+          "about" => labelled,
+          "image" => "&someone-elses=.sha256"
+        })
+
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, from_them}}, st)
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, from_us}}, st)
+      {:noreply, st} = Timeline.handle_info({Client, :about_ref, {:item, from_third_party}}, st)
+
+      assert Profile.image(own) == "&own=.sha256"
+      assert Profile.image(ours) == "&ours=.sha256"
+      assert Profile.get(labelled) == nil
+
+      # All three are still feeds the store can speak for.
+      assert st.about_ids == MapSet.new([own, ours, labelled])
     end
 
     test "our alias stands over the feed's own later name, and can be taken back" do

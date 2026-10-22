@@ -542,11 +542,12 @@ defmodule HighWire.Timeline do
   def unblock(id) when is_binary(id), do: publish_content(block_content(id, false))
 
   @doc """
-  Publish our word for a feed — the name and bio the profile page
-  edits. `fields` carries the `"name"` and/or `"description"` to send;
-  an emptied field takes that name or bio back, and the read falls to
-  the feed's own word. The ack folds the message into the read model,
-  so the alias applies as soon as the publish lands.
+  Publish our word for a feed — the name, bio and picture the profile
+  page edits. `fields` carries the `"name"`, `"description"` and/or
+  `"image"` to send; an emptied field takes that name, bio or picture
+  back, and the read falls to the feed's own word. The ack folds the
+  message into the read model, so the alias applies as soon as the
+  publish lands.
   """
   @spec about(binary(), map()) :: {:ok, binary() | nil} | {:error, term()}
   def about(id, fields) when is_binary(id) and is_map(fields) do
@@ -2615,10 +2616,10 @@ defmodule HighWire.Timeline do
   end
 
   # Fold one about into the rail's id set and, when its author is the
-  # feed itself or us, its name and bio into the read model — the feed's
-  # word and ours into their separate slots, so ours stands over the
-  # feed's later names. Returns whether display fields were written, so
-  # a live tail can republish just when something changed.
+  # feed itself or us, its name, bio and picture into the read model —
+  # the feed's word and ours into their separate slots, so ours stands
+  # over the feed's later words. Returns whether display fields were
+  # written, so a live tail can republish just when something changed.
   defp fold_about(state, msg) do
     case about_fields(msg) do
       nil ->
@@ -2732,15 +2733,16 @@ defmodule HighWire.Timeline do
   # when something says about *it*; a feed whose abouts only speak for
   # others still renders as a bare id.
   # The display fields an about message carries for its target: the name
-  # and the bio, and the author who wrote them. A name is only the feed's
-  # own word for itself, or ours about them — anyone can publish an about
-  # naming someone, and a third party's "documentary" for a target is not
-  # what that target goes by. An about carrying neither field is still a
-  # fact about the id (the store can speak for it) but nothing to write.
+  # and the bio, the picture, and the author who wrote them. A name is
+  # only the feed's own word for itself, or ours about them — anyone can
+  # publish an about naming someone, and a third party's "documentary"
+  # for a target is not what that target goes by. An about carrying
+  # none of the three is still a fact about the id (the store can speak
+  # for it) but nothing to write.
   defp about_fields(msg) do
     case content(msg) do
       %{"type" => "about", "about" => <<"@", _::binary>> = about} ->
-        {about, author_id(msg), Map.take(content(msg), ["name", "description"])}
+        {about, author_id(msg), Map.take(content(msg), ["name", "description", "image"])}
 
       _ ->
         nil

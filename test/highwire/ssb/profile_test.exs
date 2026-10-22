@@ -4,6 +4,96 @@ defmodule HighWire.SSB.ProfileTest do
   alias HighWire.Avatar, as: Ident
   alias HighWire.SSB.Profile
 
+  describe "the avatar picture" do
+    test "an about's image is the feed's own picture, ahead of the payload's" do
+      id = "@profile-img-own-#{:erlang.unique_integer([:positive])}.ed25519"
+
+      Profile.put_all(%{id => %{image: "&payload=.sha256"}})
+      :ok = Profile.put_about(id, %{"image" => "&own=.sha256"}, :own)
+
+      assert Profile.image(id) == "&own=.sha256"
+
+      # The payload is still the floor: it does not carry the about's
+      # picture, but the about's picture stands over what it does carry.
+      Profile.put_all(%{id => %{image: "&newer-payload=.sha256"}})
+      assert Profile.image(id) == "&own=.sha256"
+    end
+
+    test "our alias picture stands ahead of the feed's own, in either order" do
+      late = "@profile-img-late-#{:erlang.unique_integer([:positive])}.ed25519"
+      early = "@profile-img-early-#{:erlang.unique_integer([:positive])}.ed25519"
+
+      # The feed sets its picture after we alias it.
+      :ok = Profile.put_about(late, %{"image" => "&ours=.sha256"}, :ours)
+      :ok = Profile.put_about(late, %{"image" => "&theirs=.sha256"}, :own)
+      assert Profile.image(late) == "&ours=.sha256"
+
+      # …and before: the order the messages arrived in does not decide.
+      :ok = Profile.put_about(early, %{"image" => "&theirs=.sha256"}, :own)
+      :ok = Profile.put_about(early, %{"image" => "&ours=.sha256"}, :ours)
+      assert Profile.image(early) == "&ours=.sha256"
+    end
+
+    test "taking our alias picture back falls to the feed's own" do
+      id = "@profile-img-clear-#{:erlang.unique_integer([:positive])}.ed25519"
+
+      Profile.put_all(%{id => %{image: "&payload=.sha256"}})
+      :ok = Profile.put_about(id, %{"image" => "&theirs=.sha256"}, :own)
+      :ok = Profile.put_about(id, %{"image" => "&ours=.sha256"}, :ours)
+      assert Profile.image(id) == "&ours=.sha256"
+
+      # "" is the take-back: our slot clears and the feed's own picture
+      # stands again.
+      :ok = Profile.put_about(id, %{"image" => ""}, :ours)
+      assert Profile.image(id) == "&theirs=.sha256"
+
+      # With no picture on either side the payload's is the floor.
+      :ok = Profile.put_about(id, %{"image" => ""}, :own)
+      assert Profile.image(id) == "&payload=.sha256"
+    end
+
+    test "a picture reads as a bare ref or an Excon message link" do
+      bare = "@profile-img-bare-#{:erlang.unique_integer([:positive])}.ed25519"
+      link = "@profile-img-link-#{:erlang.unique_integer([:positive])}.ed25519"
+
+      :ok = Profile.put_about(bare, %{"image" => "&bare=.sha256"}, :ours)
+      assert Profile.image(bare) == "&bare=.sha256"
+
+      # The shape the protocol carries it in — %{"link" => &…} — reads
+      # the same ref.
+      :ok = Profile.put_about(link, %{"image" => %{"link" => "&linked=.sha256"}}, :ours)
+      assert Profile.image(link) == "&linked=.sha256"
+    end
+
+    test "an about carrying no picture leaves it alone" do
+      id = "@profile-img-none-#{:erlang.unique_integer([:positive])}.ed25519"
+
+      :ok = Profile.put_about(id, %{"image" => "&ours=.sha256"}, :ours)
+
+      # A later about that only revises the bio must not take the
+      # picture away with it.
+      :ok = Profile.put_about(id, %{"description" => "a new bio"}, :ours)
+
+      assert Profile.image(id) == "&ours=.sha256"
+      assert Profile.get(id).description == "a new bio"
+    end
+
+    test "a payload merge carries the picture slots along" do
+      id = "@profile-img-merge-#{:erlang.unique_integer([:positive])}.ed25519"
+
+      :ok = Profile.put_about(id, %{"image" => "&ours=.sha256"}, :ours)
+      Profile.put_all(%{id => %{image: "&payload=.sha256"}})
+
+      # The alias still stands: the payload merge wrote the floor, not
+      # the alias's slot.
+      assert Profile.image(id) == "&ours=.sha256"
+
+      # …and the take-back still falls through after the merge.
+      :ok = Profile.put_about(id, %{"image" => ""}, :ours)
+      assert Profile.image(id) == "&payload=.sha256"
+    end
+  end
+
   describe "the read model" do
     test "stores the payload's image, and takes the name from an about" do
       id = "@profile-case-#{:erlang.unique_integer([:positive])}.ed25519"

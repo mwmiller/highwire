@@ -813,6 +813,64 @@ let Attach = {
   }
 }
 
+// Profile avatar attach. The chosen file goes to POST /blob — the same
+// picture path the composer's Attach uses — and the answer's reference
+// is handed to the LiveView, which previews it and publishes it with the
+// next save of the name and bio. Images only, and one file at a time:
+// the button is a control, not a queue.
+let AvatarAttach = {
+  mounted() {
+    this.busy = false
+
+    this.onChange = e => {
+      const input = e.target
+      if (!input.matches("[data-avatar-input]")) return
+      const files = imageFiles(input)
+      input.value = ""
+      this.send(files)
+    }
+
+    this.el.addEventListener("change", this.onChange)
+  },
+
+  destroyed() {
+    this.el.removeEventListener("change", this.onChange)
+  },
+
+  async send(files) {
+    if (files.length === 0 || this.busy) return
+    this.busy = true
+    this.pushEventTo(this.el, "avatar-uploading", {})
+
+    try {
+      const ref = await this.upload(files[0])
+      this.pushEventTo(this.el, "avatar-picked", {ref: ref})
+    } catch (err) {
+      this.pushEventTo(this.el, "avatar-failed", {})
+    } finally {
+      this.busy = false
+    }
+  },
+
+  async upload(file) {
+    const token = document.querySelector("meta[name='csrf-token']")
+    const res = await fetch("/blob", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "content-type": file.type || "application/octet-stream",
+        "x-csrf-token": token ? token.content : ""
+      },
+      body: file
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.ref) {
+      throw new Error(data.error || "Upload failed (" + res.status + ")")
+    }
+    return data.ref
+  }
+}
+
 // A file dropped just off the composer would otherwise navigate the tab
 // to the image and strand the draft, so the whole document takes file
 // drops and hands them to the composer. Only file drags: dragging text
@@ -944,6 +1002,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     TabActivity,
     Mentions,
     Attach,
+    AvatarAttach,
     SkyScroll,
     FeedScroll,
     ClampRows,

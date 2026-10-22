@@ -278,6 +278,108 @@ defmodule HighWireWeb.ProfileLiveTest do
     refute html =~ "about-form"
   end
 
+  test "the avatar is staged in the form and published with the save", %{conn: conn} do
+    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+    seed(view,
+      status: :ok,
+      self_id: "@me=.ed25519",
+      follows: [],
+      blocked: [],
+      profile: %{name: "Their word", image: "&base=.sha256", description: "their bio"}
+    )
+
+    html = render_click(view, "edit-about", %{})
+
+    # The form carries the picture the page shows, and the controls to
+    # change it — the file input behind Choose image, and Remove, which
+    # is only offered when there is a picture to take back.
+    assert html =~ ~r/id="avatar-attach"/
+    assert html =~ "data-avatar-input"
+    assert html =~ "Choose image"
+    assert html =~ "Remove"
+
+    # The hook's answer lands the picked ref: the preview follows it,
+    # and the save below carries it. The hook lives on the ignored div
+    # (so a re-render cannot tear down the file input mid-pick), so the
+    # event is addressed to the view — the way it arrives from the
+    # client.
+    html = render_hook(view, "avatar-picked", %{"ref" => "&new=.sha256"})
+
+    # Under test the store has no blob for the ref, so the tile falls
+    # back — what matters here is that the ref is the one staged, which
+    # the Remove control's presence confirms.
+    assert html =~ "Remove"
+
+    # The press is held down while the engine takes it, the way Save
+    # always holds.
+    held =
+      render_submit(view, "save-about", %{"name" => "Their word", "description" => "their bio"})
+
+    assert held =~ "Saving…"
+
+    # The engine is off under test: the publish comes back refused, the
+    # line lands, the press is let go, and the form stays up with the
+    # picture still staged so the save can be pressed again.
+    html = render(view)
+    assert html =~ "Not connected yet. Try again in a moment."
+    refute html =~ "Saving…"
+    assert html =~ "Remove"
+  end
+
+  test "Remove takes the picture back, and the save publishes the clear", %{conn: conn} do
+    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+    seed(view,
+      status: :ok,
+      self_id: "@me=.ed25519",
+      follows: [],
+      blocked: [],
+      profile: %{name: nil, image: "&base=.sha256", description: nil}
+    )
+
+    render_click(view, "edit-about", %{})
+    assert render(view) =~ "Remove"
+
+    # Remove clears the staged picture: the control goes with it, since
+    # there is nothing left to take back.
+    html = render_click(view, "avatar-clear", %{})
+    refute html =~ "Remove"
+
+    # The save still goes through the held-down press — and the engine
+    # being off refuses it, so the clear can be pressed again.
+    held = render_submit(view, "save-about", %{"name" => "", "description" => ""})
+    assert held =~ "Saving…"
+
+    html = render(view)
+    assert html =~ "Not connected yet. Try again in a moment."
+    refute html =~ "Saving…"
+  end
+
+  test "an upload that fails says so and clears the working state", %{conn: conn} do
+    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+    seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
+    render_click(view, "edit-about", %{})
+
+    html = render_hook(view, "avatar-uploading", %{})
+    assert html =~ "Uploading…"
+
+    # Save holds while the picture is on its way: a press cannot publish
+    # a picture the reader has not landed yet.
+    held = render_submit(view, "save-about", %{"name" => "n", "description" => "b"})
+    refute held =~ "Saving…"
+
+    html = render_hook(view, "avatar-failed", %{})
+    # Phoenix escapes the apostrophe to &#39; in the rendered HTML, so
+    # match on the text around it rather than the raw string.
+    assert html =~ "didn&#39;t upload. Try again."
+    refute html =~ "Uploading…"
+  end
+
   # Engine off under test, so relationship state is seeded straight into
   # the assigns; __changed__ records the old values so the next render
   # computes a diff instead of serving the cached tree.
