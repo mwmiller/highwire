@@ -6,7 +6,9 @@ defmodule HighWireWeb.PostLive do
   back to the local window).
 
   The path segment is the message id as url-safe base64, because raw
-  message ids contain "/" and cannot ride in a route as-is.
+  message ids contain "/" and cannot ride in a route as-is. That segment
+  names the message the reader asked for, so a reply opened from the
+  feed is brought into view instead of the thread it belongs to.
   """
 
   use HighWireWeb, :live_view
@@ -42,6 +44,7 @@ defmodule HighWireWeb.PostLive do
        self_id: nil,
        status: :disabled,
        raw_key: nil,
+       focus_key: nil,
        reply_body: "",
        reply_error: nil,
        reply_pending: false,
@@ -96,6 +99,9 @@ defmodule HighWireWeb.PostLive do
       root: root,
       replies: replies,
       not_found: not_found,
+      # Which message of this thread the path named, so the anchor that
+      # carries the landing hook is rendered on it and nowhere else.
+      focus_key: post && post.focus,
       # Same accumulate as handle_info — snapshot payloads evict the same
       # way broadcasts do, and a reload here must not undo a fill-in.
       profiles:
@@ -123,6 +129,23 @@ defmodule HighWireWeb.PostLive do
   defp thread(nil, _assigns), do: {nil, [], true}
 
   defp thread(post, _assigns), do: {post.root, post.replies || [], false}
+
+  # The message the reader asked for carries the hook that brings it into
+  # view, so the landing stays with the element: the browser scrolls when
+  # that message enters the document, whether it is there in the first
+  # render or arrives with a later one. An event pushed from
+  # handle_params could not do this — mount is pruned before the first
+  # render, and the event would ride no diff at all.
+  defp focus_hook(key, focus_key), do: if(key == focus_key, do: "LandOn", else: nil)
+
+  # One message's place on this page: url-safe base64 of its key, the
+  # encoding the route takes — message ids carry "/" and "=", neither of
+  # which belongs in an id, and a url-safe base64 string survives being
+  # used as a selector.
+  defp message_dom_id(key) when is_binary(key),
+    do: "msg-" <> Base.url_encode64(key, padding: false)
+
+  defp message_dom_id(_key), do: nil
 
   # Whatever this thread renders that no payload ever shipped a profile
   # for goes back to the Timeline as an ensure — the same contract the
@@ -392,12 +415,6 @@ defmodule HighWireWeb.PostLive do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
       <Nav.rail gossip={@gossip}>
-        <div class="pb-1 pt-4">
-          <Nav.rail_link navigate="/" title="Back to the timeline">
-            Timeline
-          </Nav.rail_link>
-        </div>
-
         <Nav.rail_label>In this thread</Nav.rail_label>
 
         <div :if={@root}>
@@ -441,7 +458,11 @@ defmodule HighWireWeb.PostLive do
           </div>
 
           <div :if={@root}>
-            <article class="border-b border-edge pb-6">
+            <article
+              id={message_dom_id(@root["key"])}
+              phx-hook={focus_hook(@root["key"], @focus_key)}
+              class="border-b border-edge pb-6"
+            >
               <div class="flex items-start gap-3">
                 <Avatar.avatar
                   id={author_of(@root)}
@@ -537,6 +558,8 @@ defmodule HighWireWeb.PostLive do
 
             <div
               :for={reply <- @replies}
+              id={message_dom_id(reply["key"])}
+              phx-hook={focus_hook(reply["key"], @focus_key)}
               class="flex gap-3 border-b border-edge-soft py-4"
             >
               <Avatar.avatar

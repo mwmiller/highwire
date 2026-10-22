@@ -403,9 +403,12 @@ defmodule HighWire.Timeline do
   One message with its full thread, for the post viewer: the root
   (unboxed through `get` when it is private) and every reply in causal
   order (`patchwork.thread.sorted`, falling back to the local window).
-  nil when the message is not in the local store.
+  `focus` is the message of that thread the key named, for the viewer
+  to bring into view: an edit keys its own row, so the path can arrive
+  naming a message the thread holds under another key. nil when the
+  message is not in the local store.
   """
-  @spec post(binary()) :: %{root: map(), replies: [map()]} | nil
+  @spec post(binary()) :: %{root: map(), replies: [map()], focus: binary() | nil} | nil
   def post(key) when is_binary(key) do
     case Process.whereis(__MODULE__) do
       nil ->
@@ -1290,9 +1293,15 @@ defmodule HighWire.Timeline do
   defp fetch_post(state, key) do
     window = post_window(state)
 
-    case resolve_root(state, window, key) do
-      nil -> nil
-      root -> %{root: root, replies: post_replies(state, window, root["key"])}
+    case fetch_msg(state, window, key) do
+      nil ->
+        nil
+
+      named ->
+        root = resolve_root(state, window, key, named)
+        replies = post_replies(state, window, root["key"])
+
+        %{root: root, replies: replies, focus: thread_focus(root, replies, named)}
     end
   end
 
@@ -1313,12 +1322,39 @@ defmodule HighWire.Timeline do
     end
   end
 
-  defp resolve_root(state, window, key) do
-    case fetch_msg(state, window, key) do
-      nil -> nil
-      msg -> resolve_thread_root(state, window, key, msg, MapSet.new([key]), @thread_root_depth)
+  # Walk up from the message the path names to the thread's first
+  # message. `named` is that message, already fetched under `key`, so
+  # the walk starts without a second lookup.
+  defp resolve_root(state, window, key, named) do
+    resolve_thread_root(state, window, key, named, MapSet.new([key]), @thread_root_depth)
+  end
+
+  # Which message of the thread the path named, for the viewer to bring
+  # into view. The path can carry a message with no place in the thread
+  # as it stands — an edit keys its own row — so an edit is followed to
+  # the post it revises. The root names nothing: the page opens on it
+  # anyway, and so does a message nothing here holds.
+  defp thread_focus(root, replies, named) do
+    target = target_key(named)
+
+    if is_binary(target) and target != root["key"] and
+         Enum.any?(replies, &(&1["key"] == target)) do
+      target
     end
   end
+
+  # An edit carries the message it revises under revisionRoot, and that
+  # is the message on the page — the edit itself never renders there.
+  defp target_key(%{"value" => %{"content" => %{"type" => "post-edit"} = content}} = msg) do
+    case content do
+      %{"revisionRoot" => id} when is_binary(id) -> id
+      _ -> msg["key"]
+    end
+  end
+
+  defp target_key(%{"key" => key}) when is_binary(key), do: key
+
+  defp target_key(_msg), do: nil
 
   # Walk up to the thread's first message: a plain reply's root IS that
   # message, but a fork's root is the parent reply, so one hop lands on
@@ -1486,9 +1522,15 @@ defmodule HighWire.Timeline do
   defp message_value?(value),
     do: is_binary(value["author"]) or is_map(value["content"])
 
+  # The engine's thread.sorted is what this falls back to, so it holds
+  # to what holds there: a reply is a post. An edit keys its own row
+  # over the post it revises — it changed that post, it is not another
+  # message in the thread.
   defp window_replies(window, root_key) do
     window
-    |> Enum.filter(fn m -> m["key"] != root_key and content(m)["root"] == root_key end)
+    |> Enum.filter(fn m ->
+      m["key"] != root_key and post?(m) and content(m)["root"] == root_key
+    end)
     |> Enum.sort_by(fn m -> m["value"]["timestamp"] || 0 end)
   end
 

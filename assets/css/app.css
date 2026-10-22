@@ -355,10 +355,81 @@ html[data-participating="off"] [data-pref-tab] {
   }
 }
 
+/* The message a reader opened from the feed: brought into view and
+   washed once, so the eye lands on the one that was clicked rather than
+   on the thread around it. */
+.msg-focus {
+  animation: msg-focus 2.6s ease-out both;
+}
+
+@keyframes msg-focus {
+  from {
+    background-color: var(--bg-active);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  to {
+    background-color: transparent;
+    box-shadow: inset 2px 0 0 transparent;
+  }
+}
+
+/* Every control that publishes waits on a round trip that can take
+   seconds, and the wait has to show: while the push is in flight
+   LiveView puts one of these classes on the pressed control, so the
+   control itself dims and carries a spinner for exactly as long as it
+   takes — and restores the moment the answer lands, whatever the
+   answer was. The wait also has a word beside the spinner: the
+   composers swap their label through `phx-disable-with` (Publishing…,
+   Replying…), and the follow and block controls render theirs from
+   the server, which also carries what the press did. */
+a.phx-click-loading,
+button.phx-click-loading,
+button.phx-submit-loading {
+  cursor: progress;
+}
+
+button.phx-click-loading,
+button.phx-submit-loading {
+  opacity: 0.6;
+}
+
+/* A control holding a press in flight is dead under the reader's
+   finger: the render disables it, and the dim says why. */
+button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+button.phx-click-loading::after,
+button.phx-submit-loading::after {
+  animation: loading-spin 0.75s linear infinite;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  border-right-color: transparent;
+  content: "";
+  display: inline-block;
+  height: 0.7em;
+  margin-left: 0.3em;
+  vertical-align: -0.05em;
+  width: 0.7em;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .gossip-dot,
   .gossip-node-flare,
-  .gossip-arrived {
+  .gossip-arrived,
+  .msg-focus {
+    animation: none;
+  }
+
+  button.phx-click-loading::after,
+  button.phx-submit-loading::after {
     animation: none;
   }
 }

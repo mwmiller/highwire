@@ -1475,8 +1475,15 @@ defmodule HighWireWeb.TimelineLive do
           </div>
         </div>
 
+        <%!-- A preview is a reply in its own right, so it opens that
+        reply and not the row it previews: the post view lands on the
+        message it was opened with. --%>
         <div :if={@row.recent != []} class="mt-2 space-y-1.5 border-l border-edge pl-3">
-          <div :for={reply <- Enum.reverse(@row.recent)} class="flex items-baseline gap-2">
+          <.link
+            :for={reply <- Enum.reverse(@row.recent)}
+            navigate={post_href(reply["key"])}
+            class="flex items-baseline gap-2"
+          >
             <Avatar.avatar
               id={author_of(reply)}
               size={16}
@@ -1491,7 +1498,7 @@ defmodule HighWireWeb.TimelineLive do
             <span class="ml-auto shrink-0 text-[11px] text-faint">
               <.age ts={ts(reply)} />
             </span>
-          </div>
+          </.link>
         </div>
 
         <p
@@ -1962,6 +1969,13 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   # Author names open that feed's neutral identity view.
+  # The path a message is read at: its key as url-safe base64, because
+  # raw message ids contain "/" and cannot ride in a route as-is.
+  defp post_href(key) when is_binary(key),
+    do: "/post/" <> Base.url_encode64(key, padding: false)
+
+  defp post_href(_key), do: nil
+
   defp profile_href("@" <> _ = id), do: "/profile?id=" <> URI.encode_www_form(id)
   defp profile_href(_id), do: nil
 

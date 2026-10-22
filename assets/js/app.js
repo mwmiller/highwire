@@ -318,6 +318,58 @@ let TabActivity = {
   }
 }
 
+// A message opened from the feed lands on that message, not the head of
+// its thread. The message carries a hook (see PostLive) whose mounted is
+// the arrival: the first pass is an instant jump, and the later ones only
+// re-adjust — an image above the message takes its space when it finally
+// loads, which moves the message out from under the first scroll — and
+// they stay quiet once the message is already on screen.
+const FOCUS_PASSES = [0, 250, 800, 1600]
+
+let focusTimers = []
+let focusMark = null
+
+function clearFocusMark() {
+  if (!focusMark) return
+  clearTimeout(focusMark.timer)
+  focusMark.el.classList.remove("msg-focus")
+  focusMark = null
+}
+
+function landOnMessage(id) {
+  focusTimers.forEach(clearTimeout)
+  focusTimers = []
+  clearFocusMark()
+
+  const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+  FOCUS_PASSES.forEach((delay, pass) => {
+    focusTimers.push(
+      setTimeout(() => {
+        const el = document.getElementById(id)
+        if (!el) return
+
+        const box = el.getBoundingClientRect()
+        if (pass > 0 && box.top < window.innerHeight && box.bottom > 0) return
+
+        el.scrollIntoView({block: "center", behavior: pass > 0 && smooth ? "smooth" : "auto"})
+
+        if (focusMark || pass > 0) return
+        el.classList.add("msg-focus")
+        focusMark = {el, timer: setTimeout(clearFocusMark, 2600)}
+      }, delay)
+    )
+  })
+}
+
+// The one control this page adds of its own: the message named in the
+// path, brought into view the moment it is in the document.
+const LandOn = {
+  mounted() {
+    landOnMessage(this.el.id)
+  },
+}
+
 // The constellation's selected peer: when the server-side selection
 // changes, bring the matching list row into view. The row is found by
 // its data-sky-key (same string the SVG nodes carry), scoped to the
@@ -894,7 +946,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
     Attach,
     SkyScroll,
     FeedScroll,
-    ClampRows
+    ClampRows,
+    LandOn
   }
 })
 

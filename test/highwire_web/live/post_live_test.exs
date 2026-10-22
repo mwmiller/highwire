@@ -311,4 +311,123 @@ defmodule HighWireWeb.PostLiveTest do
     # the reply is a textless post, so it describes itself too
     assert html =~ "posted in #drama"
   end
+
+  test "the rail opens on the thread; the way back is the control beside the post",
+       %{conn: conn} do
+    key = Base.url_encode64("%rail=.sha256", padding: false)
+    {:ok, _view, html} = live(conn, "/post/" <> key)
+
+    assert html =~ "In this thread"
+
+    # A Timeline row of its own sat above the thread here: a second way
+    # back, on top of the app icon in the top bar. Two links to the
+    # timeline are left and not a third — the icon and the content
+    # column's control — and the rail opens where the timeline's first
+    # label opens.
+    assert html =~ ~s(id="post-back")
+    assert length(:binary.matches(html, ~s(href="/"))) == 2
+  end
+
+  test "every message on the page has a place of its own", %{conn: conn} do
+    alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    key = Base.url_encode64("%anchors=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    seed_thread(
+      view,
+      msg(alice, "%anchors=.sha256", "the post"),
+      [msg(alice, "%anchor-reply=.sha256", "the answer")]
+    )
+
+    html = render(view)
+
+    # The anchor is the message key as url-safe base64 — the encoding
+    # the route takes — because raw ids carry "/" and "=" and belong in
+    # neither a DOM id nor a path segment.
+    assert html =~ ~s(id=") <> dom_id("%anchors=.sha256") <> ~s(")
+    assert html =~ ~s(id=") <> dom_id("%anchor-reply=.sha256") <> ~s(")
+  end
+
+  test "the message the feed opened is the one brought into view", %{conn: conn} do
+    alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    key = Base.url_encode64("%land-on=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    seed_thread(
+      view,
+      msg(alice, "%land-on=.sha256", "the post"),
+      [
+        msg(alice, "%land-reply-one=.sha256", "the answer", 1_700_000_060_000),
+        msg(alice, "%land-reply-two=.sha256", "the other answer", 1_700_000_120_000)
+      ],
+      focus_key: "%land-reply-one=.sha256"
+    )
+
+    html = render(view)
+
+    # The hook that brings a message into view rides that message and no
+    # other, so the browser scrolls to the one the reader clicked — not
+    # to the head of the thread it belongs to.
+    assert html =~ ~r/id="#{dom_id("%land-reply-one=.sha256")}"[^>]*phx-hook="LandOn"/
+    refute html =~ ~r/id="#{dom_id("%land-reply-two=.sha256")}"[^>]*phx-hook/
+    refute html =~ ~r/id="#{dom_id("%land-on=.sha256")}"[^>]*phx-hook/
+  end
+
+  test "a page opened at the thread head brings nothing into view", %{conn: conn} do
+    alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    key = Base.url_encode64("%head-on=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    # The root opens at the top, where every post has always opened:
+    # nothing is dragged into view for a reader who has not asked.
+    seed_thread(
+      view,
+      msg(alice, "%head-on=.sha256", "the post"),
+      [msg(alice, "%head-reply=.sha256", "the answer")],
+      focus_key: nil
+    )
+
+    refute render(view) =~ ~s(phx-hook="LandOn")
+  end
+
+  # Engine off under test, so a thread mounts empty and no focus
+  # resolves. These tests are about what the page does with a thread it
+  # already has, so they seed root, replies and focus straight into the
+  # assigns, recording their old values in __changed__ so the next
+  # render computes a diff instead of serving the cached tree.
+  defp seed_thread(view, root, replies, extra \\ []) do
+    :sys.replace_state(view.pid, fn state ->
+      socket = state.socket
+      assigns = socket.assigns
+      values = [root: root, replies: replies, not_found: false] ++ extra
+
+      changed =
+        Enum.reduce(values, assigns.__changed__, fn {key, _value}, acc ->
+          Map.put(acc, key, Map.get(assigns, key))
+        end)
+
+      assigns =
+        values
+        |> Enum.reduce(assigns, fn {key, value}, acc -> Map.put(acc, key, value) end)
+        |> Map.put(:__changed__, changed)
+
+      %{state | socket: %{socket | assigns: assigns}}
+    end)
+
+    send(view.pid, :nudge)
+    view
+  end
+
+  defp msg(author, key, text, at \\ 1_700_000_000_000) do
+    %{
+      "key" => key,
+      "value" => %{
+        "author" => author,
+        "timestamp" => at,
+        "content" => %{"type" => "post", "text" => text}
+      }
+    }
+  end
+
+  defp dom_id(key), do: "msg-" <> Base.url_encode64(key, padding: false)
 end

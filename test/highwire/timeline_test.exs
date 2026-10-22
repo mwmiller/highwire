@@ -1340,6 +1340,58 @@ defmodule HighWire.TimelineTest do
       assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
     end
 
+    test "a message the path names is the page's focus" do
+      # The reader clicked that reply in the feed, so the page opens on
+      # it instead of on the thread's first message.
+      post = post_call(nil, "%f=.sha256")
+
+      assert post.focus == "%f=.sha256"
+    end
+
+    test "the thread head names nothing: the page opens on it" do
+      post = post_call(nil, "%r=.sha256")
+
+      assert post.root["key"] == "%r=.sha256"
+      assert post.focus == nil
+    end
+
+    test "an edit names the post it revises, never itself" do
+      # An edit keys its own feed row, so the path can arrive naming a
+      # message the thread does not hold — and the message on the page
+      # is the one the edit revised.
+      edit =
+        msg("@b=.ed25519", "%e=.sha256", 4_000, %{
+          "type" => "post-edit",
+          "root" => "%r=.sha256",
+          "revisionRoot" => "%f=.sha256",
+          "revisionBranch" => ["%a=.sha256"],
+          "text" => "second, revised"
+        })
+
+      st = %{client: nil, messages: %{messages: [edit | fork_window()]}}
+      {:reply, post, _st} = Timeline.handle_call({:post, "%e=.sha256"}, {self(), make_ref()}, st)
+
+      assert post.focus == "%f=.sha256"
+      # the edit itself never joins the thread it revised
+      refute "%e=.sha256" in Enum.map(post.replies, & &1["key"])
+    end
+
+    test "an edit that names no revision names nothing" do
+      # Nothing here says which message such an edit revised, so the
+      # page opens at the top rather than guessing at a reply.
+      edit =
+        msg("@b=.ed25519", "%e=.sha256", 4_000, %{
+          "type" => "post-edit",
+          "root" => "%r=.sha256",
+          "text" => "second, revised"
+        })
+
+      st = %{client: nil, messages: %{messages: [edit | fork_window()]}}
+      {:reply, post, _st} = Timeline.handle_call({:post, "%e=.sha256"}, {self(), make_ref()}, st)
+
+      assert post.focus == nil
+    end
+
     test "the settled acc window feeds the page even when the payload copy is empty" do
       st = %{client: nil, acc: fork_window(), pending: %{}, messages: %{messages: []}}
       {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)

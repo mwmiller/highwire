@@ -1227,6 +1227,45 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ "the bumping reply"
     end
 
+    test "each reply preview opens the reply it previews", %{conn: conn} do
+      base = 1_700_000_000_000
+
+      root =
+        ssb_msg("%root-a.sha256", "@alice.ed25519", base - 10_000, %{
+          "type" => "post",
+          "text" => "the thread"
+        })
+
+      one =
+        ssb_msg("%reply-one.sha256", "@bob.ed25519", base - 5_000, %{
+          "type" => "post",
+          "text" => "the first answer",
+          "root" => "%root-a.sha256"
+        })
+
+      two =
+        ssb_msg("%reply-two.sha256", "@carol.ed25519", base, %{
+          "type" => "post",
+          "text" => "the second answer",
+          "root" => "%root-a.sha256"
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload([root, one, two]))
+
+      one_path = "/post/" <> Base.url_encode64("%reply-one.sha256", padding: false)
+      two_path = "/post/" <> Base.url_encode64("%reply-two.sha256", padding: false)
+      head_path = "/post/" <> Base.url_encode64("%root-a.sha256", padding: false)
+
+      # A preview is a reply in its own right, so it carries the path of
+      # that reply: the reader clicks the answer they want to read, and
+      # the post view opens on it.
+      assert html =~ ~s(href="#{one_path}")
+      assert html =~ ~s(href="#{two_path}")
+      # and not the thread's head, which the row itself opens
+      refute html =~ ~s(href="#{head_path}")
+    end
+
     test "the window's rows are capped so first paint isn't a wall of rows", %{conn: conn} do
       now = 1_700_000_000_000
 
