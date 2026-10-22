@@ -49,6 +49,12 @@ defmodule HighWireWeb.TimelineLive do
     {:mentions, "Mentions"}
   ]
 
+  # How long "Show another set" holds the button down waiting for the
+  # Suggester. The Timeline gives its ranking 25 tries at 400ms; this
+  # ends sooner, so a ranking with nothing new to offer cannot leave
+  # the reader staring at a dead button for ten seconds.
+  @suggestions_hold_ms 6_000
+
   @left_views [:public, :private, :participating]
   @right_views [:mentions]
 
@@ -103,6 +109,7 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(like_pending: MapSet.new(), like_error: nil)
       |> assign(private_recipients: MapSet.new())
       |> assign(compose_pending: false)
+      |> assign(suggestions_pending: false)
       |> assign(mention_suggestions: [])
       |> assign(paged: %{}, page_inflight: MapSet.new(), page_retries: %{})
       |> assign(active: true, peers_timer: peers_timer)
@@ -157,6 +164,12 @@ defmodule HighWireWeb.TimelineLive do
   def handle_info(:transfer_clear, socket) do
     {:noreply,
      assign(socket, transfer: %{socket.assigns.transfer | active?: false}, transfer_timer: nil)}
+  end
+
+  # The other end of the "Show another set" hold: a payload carries the
+  # ranking's answer, and this ends the hold when no answer came at all.
+  def handle_info(:suggestions_hold_over, socket) do
+    {:noreply, assign(socket, :suggestions_pending, false)}
   end
 
   def handle_info(:peers_tick, socket) do
@@ -444,12 +457,20 @@ defmodule HighWireWeb.TimelineLive do
     {:noreply, assign(socket, contacts_expanded: !socket.assigns.contacts_expanded)}
   end
 
+  # Ranking runs in HighWire.Suggester off-process and comes back over
+  # the next payload broadcast, so there is no round trip for the click
+  # itself to wait in: the press is answered by taking the hold. It
+  # ends with the first answer, however long the ranking took, and the
+  # timer ends it even when there was nothing new to say.
   def handle_event("refresh-suggestions", _params, socket) do
-    # Ranking runs in HighWire.Suggester off-process; the fresh rows
-    # come back over the next payload broadcast, so the click itself
-    # never touches socket state.
-    Timeline.refresh_suggestions()
-    {:noreply, socket}
+    if socket.assigns.suggestions_pending do
+      {:noreply, socket}
+    else
+      Timeline.refresh_suggestions()
+      Process.send_after(self(), :suggestions_hold_over, @suggestions_hold_ms)
+
+      {:noreply, assign(socket, :suggestions_pending, true)}
+    end
   end
 
   # The post row's OpenPost hook ignores clicks on links/buttons, so a
@@ -1057,9 +1078,13 @@ defmodule HighWireWeb.TimelineLive do
           <button
             type="button"
             phx-click="refresh-suggestions"
-            class="w-full px-4 py-1 text-left text-[11px] text-faint transition hover:bg-raised hover:text-paper"
+            disabled={@suggestions_pending}
+            class={[
+              "w-full px-4 py-1 text-left text-[11px] text-faint transition",
+              unless(@suggestions_pending, do: "hover:bg-raised hover:text-paper")
+            ]}
           >
-            Show another set
+            {if @suggestions_pending, do: "Finding…", else: "Show another set"}
           </button>
         </div>
       </Nav.rail>
@@ -1742,6 +1767,9 @@ defmodule HighWireWeb.TimelineLive do
     |> assign(:sidebar_contacts, sidebar_contacts)
     |> assign(:all_contacts, contacts)
     |> assign(:suggestions, Map.get(payload, :suggestions, []))
+    # An answer ends the "Finding…" hold: a fresh set replaces the
+    # rows, and one that came back the same says there was nothing new.
+    |> assign(:suggestions_pending, false)
   end
 
   defp assign_payload(socket, _payload) do
@@ -1759,6 +1787,7 @@ defmodule HighWireWeb.TimelineLive do
     |> assign(:sidebar_contacts, Map.get(socket.assigns, :sidebar_contacts, []))
     |> assign(:all_contacts, Map.get(socket.assigns, :all_contacts, []))
     |> assign(:suggestions, @empty_payload.suggestions)
+    |> assign(:suggestions_pending, false)
   end
 
   # -- row selection ------------------------------------------------------

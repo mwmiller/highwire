@@ -103,10 +103,42 @@ defmodule HighWireWeb.TimelineLiveTest do
     # still ask for one.
     assert html =~ "Show another set"
 
-    # The click hands off to the Suggester off-process; the view keeps
-    # rendering either way.
+    # The ranking runs off-process, so there is no round trip for the
+    # press to wait in: it is answered by taking the hold, and the
+    # button stays down until an answer lands.
     html = element(view, ~s(button[phx-click="refresh-suggestions"])) |> render_click()
-    assert html =~ "Whom to follow"
+    assert html =~ "Finding…"
+    assert html =~ ~r/phx-click="refresh-suggestions"[^>]*disabled/
+
+    # A second press in the meantime has the same ranking to do again,
+    # so the handler holds the door shut as well as the button does.
+    html = render_click(view, "refresh-suggestions", %{})
+    assert html =~ "Finding…"
+
+    # The answer comes back over the next payload: the set is on the
+    # rail and the button is available again.
+    row = %{"id" => "@stranger=.ed25519", "followers" => 2}
+    html = notify(view, %{feed_payload([]) | suggestions: [row]})
+
+    assert html =~ "Show another set"
+    refute html =~ "Finding…"
+    assert html =~ "2 followers"
+  end
+
+  test "a set that never comes back lets go of the button", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    html = element(view, ~s(button[phx-click="refresh-suggestions"])) |> render_click()
+    assert html =~ "Finding…"
+
+    # The ranking went quiet: the hold ends of its own accord, so the
+    # rail is never left with a button that cannot be pressed.
+    send(view.pid, :suggestions_hold_over)
+    _ = render_click(view, "expand", %{"key" => "__notify__"})
+
+    html = render(view)
+    assert html =~ "Show another set"
+    refute html =~ "Finding…"
   end
 
   test "the header Profile link opens your own profile page", %{conn: conn} do
