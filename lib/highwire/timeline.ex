@@ -875,6 +875,24 @@ defmodule HighWire.Timeline do
     # same message later; the second fold writes the same slot.
     {state, _wrote?} = fold_about(%{state | acc: [envelope | state.acc]}, envelope)
 
+    # A follow is our word the moment it publishes too. Contact rows
+    # read the store-wide drain's collapse and drop the window's own
+    # contact messages, so without this fold the row would wait out the
+    # drain's next pass — up to @drain_refresh_ms, and only while a tab
+    # is open to heartbeat it. The envelope joins contact_msgs so the
+    # drain's later delivery of the same message is filtered as known
+    # and folds nothing twice.
+    state =
+      if contact?(envelope) do
+        %{
+          state
+          | contact_msgs: [envelope | state.contact_msgs],
+            collapsed_contacts: fold_contacts(state.collapsed_contacts, [envelope])
+        }
+      else
+        state
+      end
+
     finalize(state)
   end
 

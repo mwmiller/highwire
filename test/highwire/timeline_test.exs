@@ -1675,6 +1675,51 @@ defmodule HighWire.TimelineTest do
       assert st2.messages.like_counts == %{"%t=.sha256" => 1}
       assert st2.messages.likes_by == %{"%t=.sha256" => ["@me=.ed25519"]}
     end
+
+    # Contact rows are built from the store-wide drain's collapse, not
+    # the window — a follow published now would otherwise wait out the
+    # drain's next pass (up to 13 minutes, and only while a tab is
+    # open) before its row exists at all.
+    test "a published follow lands in the contact collapse before any drain" do
+      {:ok, client} = FakeClient.start_link(nil)
+
+      st = %{
+        client: client,
+        self_id: "@me=.ed25519",
+        follows: [],
+        contact_msgs: [],
+        collapsed_contacts: %{by_group: %{}, rows: %{}},
+        acc: [],
+        messages: %{profiles: %{}},
+        blob_rev: 0,
+        status: :ok,
+        gen: 0,
+        reload_timer: nil,
+        pending: %{},
+        done_count: 0,
+        profile_fetching?: false
+      }
+
+      follow = Timeline.contact_content("@ktorn=.ed25519", true)
+
+      {:reply, {:ok, key}, st2} =
+        Timeline.handle_call({:publish_content, follow}, {self(), make_ref()}, st)
+
+      assert is_binary(key)
+      # The collapse holds the row now, not on the drain's next pass.
+      assert %{rows: %{{"@me=.ed25519", :followed} => [%{contacts: ["@ktorn=.ed25519"]}]}} =
+               st2.collapsed_contacts
+
+      # And the payload carries the row.
+      assert Enum.any?(st2.messages.feed, fn row ->
+               row.kind == :contact and row.contact_action == :followed and
+                 row.followed == ["@ktorn=.ed25519"]
+             end)
+
+      # The envelope is filed as known, so the drain's later delivery of
+      # the same message folds nothing twice.
+      assert [%{"key" => ^key, "value" => %{"content" => ^follow}} | _] = st2.contact_msgs
+    end
   end
 
   describe "reload retry" do
