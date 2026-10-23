@@ -1428,6 +1428,122 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  # A stream exactly as scripted: the frames reach the subscriber in
+  # order, the way they would come off the wire, and a script that ends
+  # early leaves the stream open and silent.
+  defmodule ScriptClient do
+    @moduledoc false
+    use GenServer
+
+    def start(frames), do: GenServer.start_link(__MODULE__, frames)
+
+    @impl true
+    def init(frames), do: {:ok, frames}
+
+    @impl true
+    def handle_call({:stream, _name, _args, subscriber}, _from, frames) do
+      ref = make_ref()
+      Enum.each(frames, &send(subscriber, {HighWire.SSB.Client, ref, &1}))
+      {:reply, {:ok, ref}, frames}
+    end
+
+    def handle_call({:call, _name, _args}, _from, frames),
+      do: {:reply, {:error, :methodnotfound}, frames}
+  end
+
+  # A roots page either carries history or carries an error — never an
+  # empty final page dressed as one. Every failure arm here used to
+  # return `%{rows: [], resume: nil, more: false}` inside an `{:ok, …}`,
+  # which the view records as a loaded, finished page: a refused or
+  # quiet stream read as history spent, and the reader was told the feed
+  # had ended when the load had merely failed.
+  describe "a feed page that fails reports the failure, never an empty last page" do
+    defp feed_state(client) do
+      %{client: client, self_id: "@me=.ed25519", messages: %{}}
+    end
+
+    defp root_item(n) do
+      %{
+        "key" => "%root#{n}.sha256",
+        "timestamp" => 1_000 + n,
+        "value" => %{
+          "author" => "@a=.ed25519",
+          "timestamp" => 1_000 + n,
+          "content" => %{"type" => "post", "text" => "post #{n}"}
+        }
+      }
+    end
+
+    test "no engine behind the client is an offline error" do
+      {:reply, reply, _state} =
+        Timeline.handle_call({:feed, :public, nil}, {self(), make_ref()}, feed_state(nil))
+
+      assert reply == {:error, :offline}
+    end
+
+    test "a stream the engine refuses is a failure" do
+      {:ok, client} = ScriptClient.start([{:error, :methodnotfound}])
+
+      {:reply, reply, _state} =
+        Timeline.handle_call({:feed, :public, nil}, {self(), make_ref()}, feed_state(client))
+
+      assert reply == {:error, :failed}
+    end
+
+    test "the profile page reports a refused stream the same way" do
+      {:ok, client} = ScriptClient.start([{:error, :methodnotfound}])
+
+      {:reply, reply, _state} =
+        Timeline.handle_call(
+          {:profile_feed, "@a.ed25519", nil},
+          {self(), make_ref()},
+          feed_state(client)
+        )
+
+      assert reply == {:error, :failed}
+    end
+
+    test "a stream that opens and goes quiet is a timeout" do
+      {:ok, client} = ScriptClient.start([])
+
+      {:reply, reply, _state} =
+        Timeline.handle_call({:feed, :public, nil}, {self(), make_ref()}, feed_state(client))
+
+      assert reply == {:error, :timeout}
+    end
+
+    test "history spent without a marker is the true end: rows, no cursor, no more" do
+      {:ok, client} = ScriptClient.start([{:item, root_item(1)}, {:item, root_item(2)}, :done])
+
+      {:reply, reply, _state} =
+        Timeline.handle_call({:feed, :public, nil}, {self(), make_ref()}, feed_state(client))
+
+      assert length(reply.rows) == 2
+      refute reply.more
+      assert reply.resume == nil
+    end
+
+    test "a full page carries its cursor forward" do
+      marker = {:item, %{"marker" => true, "resume" => 77}}
+
+      {:ok, client} = ScriptClient.start([{:item, root_item(1)}, marker, :done])
+
+      {:reply, reply, _state} =
+        Timeline.handle_call({:feed, :public, nil}, {self(), make_ref()}, feed_state(client))
+
+      assert Enum.map(reply.rows, & &1.msg["key"]) == ["%root1.sha256"]
+      assert reply.more
+      assert reply.resume == 77
+    end
+
+    test "the public wrapper passes the failure through unwrapped" do
+      # The app's own Timeline runs engine-off under test; a failure
+      # arriving as {:error, …} is the contract the view's case stands
+      # on — wrapped in {:ok, …} it would read as a page.
+      assert {:error, :offline} = Timeline.feed(:public, nil)
+    end
+  end
+
   describe "fork replies (reply-to-a-reply)" do
     # The patchwork fork shape: the reply pins root to the message it
     # answers, with fork naming the thread (and one sibling leaving the

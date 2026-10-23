@@ -253,6 +253,13 @@ defmodule HighWireWeb.TimelineLive do
           %{more: true, resume: ^resume} ->
             {:noreply, request_page(socket, view, resume)}
 
+          # The first page never landed: its shell still stands with no
+          # cursor and `loaded?` false, and without this arm the retry
+          # would be dropped as "nothing outstanding" — the feed would
+          # sit with rows on screen, no sentinel, no end, and no ask.
+          %{loaded?: false, resume: ^resume} ->
+            {:noreply, request_page(socket, view, resume)}
+
           # Nothing outstanding for this cursor anymore. Drop the count,
           # or the reader would be told the feed is still loading long
           # after it stopped.
@@ -505,16 +512,23 @@ defmodule HighWireWeb.TimelineLive do
     {:noreply, push_navigate(socket, to: "/post/" <> Base.url_encode64(key, padding: false))}
   end
 
+  # Both the sentinel and the manual load ask through the same door. One
+  # request per cursor: the answer is keyed {view, resume}, so a second
+  # press while one is out would strand the first — the press is instead
+  # answered by the footer's own control taking the hold ("Loading…",
+  # dead under it) until the answer lands.
   def handle_event("load-more", _params, socket) do
     view = socket.assigns.view
 
     case Map.get(socket.assigns.paged, view) do
       %{more: true, resume: resume} when is_integer(resume) ->
-        if MapSet.member?(socket.assigns.page_inflight, {view, resume}) do
-          {:noreply, socket}
-        else
-          {:noreply, request_page(socket, view, resume)}
-        end
+        ask_page(socket, view, resume)
+
+      # The first page never arrived — or its retry is still owed: a
+      # feed whose shell stands unloaded is still a feed to ask for, and
+      # this is the manual way past a push the browser never delivered.
+      %{loaded?: false, resume: resume} ->
+        ask_page(socket, view, resume)
 
       _ ->
         {:noreply, socket}
@@ -627,20 +641,38 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
+  # Every request gets an answer. The feed call itself translates the
+  # engine's refusals, but a raise the public wrapper does not catch
+  # would leave the cursor in `page_inflight` forever — the tail would
+  # sit on "Loading more…" with nothing outstanding and no way to ask
+  # again. The catch turns that into the failure path, which retries and
+  # says so.
   defp request_page(socket, view, resume) do
     owner = self()
 
     spawn(fn ->
       message =
-        case Timeline.feed(view, resume) do
-          {:ok, page} -> {:page_loaded, view, resume, page}
-          {:error, _reason} -> {:page_failed, view, resume}
+        try do
+          case Timeline.feed(view, resume) do
+            {:ok, page} -> {:page_loaded, view, resume, page}
+            {:error, _reason} -> {:page_failed, view, resume}
+          end
+        catch
+          _kind, _reason -> {:page_failed, view, resume}
         end
 
       send(owner, message)
     end)
 
     assign(socket, :page_inflight, MapSet.put(socket.assigns.page_inflight, {view, resume}))
+  end
+
+  defp ask_page(socket, view, resume) do
+    if MapSet.member?(socket.assigns.page_inflight, {view, resume}) do
+      {:noreply, socket}
+    else
+      {:noreply, request_page(socket, view, resume)}
+    end
   end
 
   # Cursor pages append at the tail, deduped in favour of the page row:
@@ -952,12 +984,13 @@ defmodule HighWireWeb.TimelineLive do
 
   defp like_error(_reason), do: "That like didn't go through. Try again."
 
-  # The tail of the feed reads three ways: a page on its way back, more
-  # rows still to ask for, or the true end. A reader used to have to
-  # guess between them — an invisible load and the end of history looked
-  # identical. Both lines require rows on screen, so an empty feed keeps
-  # its own message and a feed that has not landed a page yet claims
-  # nothing about how far back it goes.
+  # The tail of the feed reads four ways: a page on its way back, more
+  # rows still to ask for, a page that failed to come back — which says
+  # so and offers the ask by hand — or the true end. A reader used to
+  # have to guess between them — an invisible load and the end of
+  # history looked identical. All of them require rows on screen, so an
+  # empty feed keeps its own message and a feed that has not landed a
+  # page yet claims nothing about how far back it goes.
   #
   # Search adds a second question: whose hits are the results? When the
   # index is caught up it is the whole truth, so its hits stand alone.
@@ -972,12 +1005,54 @@ defmodule HighWireWeb.TimelineLive do
     store_results? = assigns.q != "" and assigns.index_status == :live
     local_rows? = not store_results?
 
+    finished? = finished_rows?(assigns, page, rows)
+
+    # The page the reader would ask for next: the shell's nil cursor
+    # while the first fill is outstanding, the last page's cursor after
+    # it. A failure counts only when it belongs to THAT page — a stale
+    # attempt from a page already superseded must not hang a failure
+    # line under a feed that is paging fine.
+    next = {assigns.view, Map.get(page, :resume)}
+    failed? = load_failed?(assigns, rows, finished?, next)
+    pending? = MapSet.member?(assigns.page_inflight, next)
+
     %{
-      loading?: loading_rows?(assigns, rows),
-      finished?: finished_rows?(assigns, page, rows),
+      loading?: loading_rows?(assigns, rows) and not finished? and not failed?,
+      finished?: finished?,
+      load_failed?: failed?,
+      load_more?:
+        rows != [] and assigns.q == "" and not finished? and
+          (Map.get(page, :more, false) or failed?),
+      load_more_pending?: pending?,
+      load_more_label: load_more_label(pending?, failed?),
       local_rows?: local_rows?,
       empty_search?: empty_search?(assigns, rows, local_rows?)
     }
+  end
+
+  # A page failure is recognized under the rows it left behind: the line
+  # says the load did not land, and the control beside it asks again.
+  # The backoff keeps retrying on its own — the button is for the reader
+  # who is watching, and for a push the browser never delivered at all:
+  # a JS failure leaves no server signal, so the manual load stands
+  # whenever there is more to ask for. Rows gate the line as they gate
+  # the end — an empty feed keeps its own message rather than claiming
+  # failure over silence.
+  defp load_failed?(assigns, rows, finished?, next) do
+    rows != [] and assigns.q == "" and not finished? and
+      Map.has_key?(assigns.page_retries, next)
+  end
+
+  # The manual load reads from its own state: a press is answered with a
+  # hold, a failure with the ask again, and the rest of the time with the
+  # plain offer.
+  @doc false
+  def load_more_label(pending?, failed?) do
+    cond do
+      pending? -> "Loading…"
+      failed? -> "Try again"
+      true -> "Load more"
+    end
   end
 
   defp loading_rows?(assigns, rows) do
@@ -1010,6 +1085,10 @@ defmodule HighWireWeb.TimelineLive do
         more: page.more,
         loading?: ui.loading?,
         finished?: ui.finished?,
+        load_failed?: ui.load_failed?,
+        load_more?: ui.load_more?,
+        load_more_pending?: ui.load_more_pending?,
+        load_more_label: ui.load_more_label,
         local_rows?: ui.local_rows?,
         empty_search?: ui.empty_search?,
         as: %{
@@ -1398,8 +1477,31 @@ defmodule HighWireWeb.TimelineLive do
               Loading more…
             </p>
 
+            <p
+              :if={@load_failed?}
+              id="feed-page-error"
+              role="status"
+              class="px-4 py-3 text-sm text-bad"
+            >
+              Older posts did not load.
+            </p>
+
             <div :if={@more and @q == ""} id="feed-sentinel" phx-hook="InfiniteScroll" class="h-px">
             </div>
+
+            <button
+              :if={@load_more?}
+              id="feed-load-more"
+              type="button"
+              phx-click="load-more"
+              disabled={@load_more_pending?}
+              class={[
+                "px-4 py-3 text-left text-sm text-info transition",
+                unless(@load_more_pending?, do: "hover:text-paper")
+              ]}
+            >
+              {@load_more_label}
+            </button>
 
             <p :if={@finished?} id="feed-end" class="px-4 py-3 text-sm text-dim">
               End of feed.

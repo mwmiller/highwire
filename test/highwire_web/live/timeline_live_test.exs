@@ -1449,11 +1449,82 @@ defmodule HighWireWeb.TimelineLiveTest do
       html = render(view)
 
       # A failed load is not an empty last page. The rows already paged in
-      # survive, `more` still stands, and the sentinel stays — so the feed
-      # keeps its way into the past instead of quietly declaring itself
-      # finished for good.
+      # survive, `more` still stands, the sentinel stays — and the failure
+      # says so with a manual way past it — so the feed keeps its way into
+      # the past instead of quietly declaring itself finished for good.
       assert html =~ "deeper 1"
       assert html =~ "feed-sentinel"
+      assert html =~ "feed-page-error"
+      assert html =~ "Older posts did not load."
+      assert html =~ "feed-load-more"
+      assert html =~ "Try again"
+      refute html =~ "feed-end"
+    end
+
+    test "a first page that never comes back is recognized, not read as the end", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs =
+        for i <- 1..3 do
+          ssb_msg("%root-#{i}.sha256", "@bob:.ed25519", now - i * 1_000, %{
+            "type" => "post",
+            "text" => "words #{i}"
+          })
+        end
+
+      {:ok, view, _html} = live(conn, "/")
+      notify(view, feed_payload(msgs))
+
+      # The engine never answers the fill: this was the packaged app's
+      # report — window rows on screen, then a false "End of feed." while
+      # history still stood unasked. Now it reads as the failure it is,
+      # with the manual load beside it.
+      send(view.pid, {:page_failed, :public, nil})
+      html = render(view)
+      assert html =~ "words 1"
+      assert html =~ "feed-page-error"
+      assert html =~ "Older posts did not load."
+      assert html =~ "feed-load-more"
+      refute html =~ "feed-end"
+
+      # The backoff's own retry asks again: the shell never loaded, so
+      # the ask must not be dropped as "nothing outstanding" — the
+      # failure line stays either way, which is what a drop would erase.
+      send(view.pid, {:retry_page, :public, nil})
+      html = render(view)
+      assert html =~ "feed-page-error"
+      refute html =~ "feed-end"
+    end
+
+    test "the manual load stands whenever there is more to ask for", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs =
+        for i <- 1..3 do
+          ssb_msg("%root-#{i}.sha256", "@bob:.ed25519", now - i * 1_000, %{
+            "type" => "post",
+            "text" => "words #{i}"
+          })
+        end
+
+      {:ok, view, _html} = live(conn, "/")
+      notify(view, feed_payload(msgs))
+
+      page = %{rows: HighWire.Timeline.build_feed(msgs, nil, %{}), resume: 42, more: true}
+      send(view.pid, {:page_loaded, :public, nil, page})
+      html = render(view)
+
+      # A browser push that never reached the server leaves no failure
+      # signal at all — so the manual way past is on screen regardless,
+      # and a stale retry from the superseded first page cannot hang a
+      # failure line under a feed that is paging fine.
+      assert html =~ "feed-load-more"
+      assert html =~ "Load more"
+      refute html =~ "feed-page-error"
+
+      html = render_click(view, "load-more", %{})
+      assert html =~ "Loading more…"
+      refute html =~ "feed-end"
     end
 
     test "a failed page retries on a capped exponential backoff" do
@@ -1466,6 +1537,17 @@ defmodule HighWireWeb.TimelineLiveTest do
       # bound.
       assert delay.(10) == 30_000
       assert delay.(50) == 30_000
+    end
+
+    test "the manual load reads from its own state" do
+      label = &HighWireWeb.TimelineLive.load_more_label/2
+
+      # A press holds the control while its answer is on the way, a
+      # failure asks again, and otherwise the load is just offered.
+      assert label.(true, true) == "Loading…"
+      assert label.(true, false) == "Loading…"
+      assert label.(false, true) == "Try again"
+      assert label.(false, false) == "Load more"
     end
 
     test "the fill behind the window does not flash the loading bar", %{conn: conn} do

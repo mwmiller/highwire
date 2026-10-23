@@ -331,7 +331,7 @@ defmodule HighWire.Timeline do
   """
   @spec profile_feed(binary(), integer() | nil) ::
           {:ok, %{rows: [map()], resume: integer() | nil, more: boolean()}}
-          | {:error, :offline | :timeout}
+          | {:error, :offline | :timeout | :failed}
   def profile_feed(id, resume \\ nil) when is_binary(id) do
     case Process.whereis(__MODULE__) do
       nil ->
@@ -339,7 +339,10 @@ defmodule HighWire.Timeline do
 
       pid ->
         try do
-          {:ok, GenServer.call(pid, {:profile_feed, id, resume}, 15_000)}
+          case GenServer.call(pid, {:profile_feed, id, resume}, 15_000) do
+            {:error, _reason} = error -> error
+            page -> {:ok, page}
+          end
         catch
           :exit, _ -> {:error, :timeout}
         end
@@ -375,13 +378,15 @@ defmodule HighWire.Timeline do
 
   `resume` is the cursor from the previous page's marker. Returns
   `{:ok, %{rows, resume, more}}`; rows are shaped like feed rows. Returns
-  `{:error, reason}` when the timeline isn't running or the engine did
-  not answer in time — a page that never arrived is not an empty final
-  page, and the caller has to be able to tell the two apart.
+  `{:error, reason}` when the page could not be fetched: `:offline` (the
+  timeline isn't running or has no engine behind it), `:failed` (the
+  stream or view refused, or raised on the way), `:timeout` (the engine
+  did not answer in time) — a page that never arrived is not an empty
+  final page, and the caller has to be able to tell the two apart.
   """
   @spec feed(:public | :private | :participating | :profile | :mentions, integer() | nil) ::
           {:ok, %{rows: [map()], resume: integer() | nil, more: boolean()}}
-          | {:error, :offline | :timeout}
+          | {:error, :offline | :timeout | :failed}
   def feed(view, resume \\ nil)
       when view in [:public, :private, :participating, :profile, :mentions] do
     case Process.whereis(__MODULE__) do
@@ -390,7 +395,10 @@ defmodule HighWire.Timeline do
 
       pid ->
         try do
-          {:ok, GenServer.call(pid, {:feed, view, resume}, 15_000)}
+          case GenServer.call(pid, {:feed, view, resume}, 15_000) do
+            {:error, _reason} = error -> error
+            page -> {:ok, page}
+          end
         catch
           :exit, _ -> {:error, :timeout}
         end
@@ -1172,6 +1180,10 @@ defmodule HighWire.Timeline do
   # and return the messages. `order: "timestamp"` is the profile page's
   # chronological view — without it the engine pages by thread activity,
   # so a bumped thread jumps above more recent posts.
+  #
+  # A stream that would not open is a failed page, not an empty one: the
+  # reader is owed a refusal they can recognize and ask against, never
+  # history that quietly looks spent.
   defp fetch_profile(state, id, resume) do
     props = %{"id" => id, "limit" => @profile_page, "reverse" => true, "order" => "timestamp"}
     props = if is_integer(resume), do: Map.put(props, "resume", resume), else: props
@@ -1183,39 +1195,50 @@ defmodule HighWire.Timeline do
              [props],
              self()
            ) do
-        {:ok, ref} -> profile_page(ref)
-        _ -> %{rows: [], resume: nil, more: false}
+        {:ok, ref} -> settle_page("profile roots", profile_page(ref))
+        other -> page_error("profile roots", {:stream, other})
       end
     else
-      %{rows: [], resume: nil, more: false}
+      {:error, :offline}
     end
   catch
-    _, _ -> %{rows: [], resume: nil, more: false}
+    kind, reason -> page_raised("profile roots", kind, reason)
   end
 
   defp profile_page(ref) do
     # Drain the page plus the marker frame that follows it; the surplus
     # row the extra read may catch is trimmed — the page stays 60 wide.
-    {markers, rows} = drain_stream(ref, @profile_page) |> Enum.split_with(&(&1["marker"] == true))
-    rows = Enum.take(rows, @profile_page)
-    cursor = private_cursor(markers)
+    # How the stream ended travels with it: `:done` is the engine saying
+    # the history is spent, while a timeout or an error frame says only
+    # that this attempt failed — the rows alone cannot tell the two
+    # apart, and reporting the second as the first is what makes a
+    # failed load read as the end of the feed.
+    case drain_stream(ref, @profile_page) do
+      {status, frames} when status in [:ok, :done] ->
+        {markers, rows} = Enum.split_with(frames, &(&1["marker"] == true))
+        rows = Enum.take(rows, @profile_page)
+        cursor = private_cursor(markers)
 
-    %{
-      # Sorted here, not just requested: an engine that does not
-      # understand `order: "timestamp"` pages by thread activity, which
-      # interleaves a bumped thread above more recent posts. Every row
-      # carries the root timestamp either way, so the visible order is
-      # fixed regardless of what the engine did. The set is still the
-      # engine's window — this cannot recover a post that window
-      # dropped — but the two nearly coincide outside feeds where old
-      # threads stay busy.
-      rows:
-        rows
-        |> Enum.map(&Map.drop(&1, ["latestReplies", "bumps"]))
-        |> Enum.sort_by(& &1["timestamp"], :desc),
-      resume: cursor,
-      more: is_integer(cursor)
-    }
+        %{
+          # Sorted here, not just requested: an engine that does not
+          # understand `order: "timestamp"` pages by thread activity, which
+          # interleaves a bumped thread above more recent posts. Every row
+          # carries the root timestamp either way, so the visible order is
+          # fixed regardless of what the engine did. The set is still the
+          # engine's window — this cannot recover a post that window
+          # dropped — but the two nearly coincide outside feeds where old
+          # threads stay busy.
+          rows:
+            rows
+            |> Enum.map(&Map.drop(&1, ["latestReplies", "bumps"]))
+            |> Enum.sort_by(& &1["timestamp"], :desc),
+          resume: cursor,
+          more: is_integer(cursor)
+        }
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   # -- paged feed tabs -----------------------------------------------------
@@ -1245,6 +1268,11 @@ defmodule HighWire.Timeline do
   # The trailing {marker, resume} frame (only sent on a full page)
   # carries the integer cursor for the next one. Rows are shaped like
   # feed rows; private items arrive freshly decrypted from the view.
+  #
+  # Every way this can fail returns an error, never an empty page: an
+  # empty last page is a statement about history, and dressing a dead
+  # client or a refused stream in one is what reads a failed load as the
+  # end of the feed. The log keeps the reason the caller has no room for.
   defp fetch_roots(state, feed, extra, resume, private?) do
     props = Map.merge(%{"limit" => @roots_page, "reverse" => true}, extra)
     props = if is_integer(resume), do: Map.put(props, "resume", resume), else: props
@@ -1252,34 +1280,71 @@ defmodule HighWire.Timeline do
 
     if is_pid(state.client) and Process.alive?(state.client) do
       case Client.stream(state.client, ["patchwork", feed, "roots"], [props], self()) do
-        {:ok, ref} -> roots_page(ref, state, self_id, private?)
-        _ -> empty_page()
+        {:ok, ref} -> settle_page("#{feed} roots", roots_page(ref, state, self_id, private?))
+        other -> page_error("#{feed} roots", {:stream, other})
       end
     else
-      empty_page()
+      {:error, :offline}
     end
   catch
-    _, _ -> empty_page()
+    kind, reason -> page_raised("#{feed} roots", kind, reason)
   end
 
   defp roots_page(ref, state, self_id, private?) do
-    {markers, items} = drain_stream(ref, @roots_page) |> Enum.split_with(&(&1["marker"] == true))
-    items = Enum.take(items, @roots_page)
-    cursor = private_cursor(markers)
+    # How the stream ended travels with the frames: `:done` is the
+    # engine saying the history is spent, while a timeout or an error
+    # frame says only that this attempt failed — the rows alone cannot
+    # tell the two apart, and reporting the second as the first is what
+    # makes a failed load read as the end of the feed.
+    case drain_stream(ref, @roots_page) do
+      {status, frames} when status in [:ok, :done] ->
+        {markers, items} = Enum.split_with(frames, &(&1["marker"] == true))
+        items = Enum.take(items, @roots_page)
+        cursor = private_cursor(markers)
 
-    like_counts =
-      case state.messages do
-        %{like_counts: counts} when is_map(counts) -> counts
-        _ -> %{}
-      end
+        like_counts =
+          case state.messages do
+            %{like_counts: counts} when is_map(counts) -> counts
+            _ -> %{}
+          end
 
-    rows =
-      Enum.map(items, fn item ->
-        row = root_row(item, self_id, private?)
-        Map.put(row, :likes, Map.get(like_counts, item["key"], row.likes))
-      end)
+        rows =
+          Enum.map(items, fn item ->
+            row = root_row(item, self_id, private?)
+            Map.put(row, :likes, Map.get(like_counts, item["key"], row.likes))
+          end)
 
-    %{rows: rows, resume: cursor, more: is_integer(cursor)}
+        %{rows: rows, resume: cursor, more: is_integer(cursor)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The page came back or it did not: either way the log is owed the
+  # reason and the caller the state. `{:error, …}` stays `{:error, …}`
+  # through the reply — the public wrappers pass it on untouched.
+  defp settle_page(what, {:error, reason}), do: page_error(what, reason)
+  defp settle_page(_what, page), do: page
+
+  defp page_error(what, {:stream, reason}) do
+    Logger.warning("timeline: #{what} stream failed: #{inspect(reason)}")
+    {:error, :failed}
+  end
+
+  defp page_error(what, :timeout) do
+    Logger.warning("timeline: #{what} page timed out")
+    {:error, :timeout}
+  end
+
+  defp page_error(what, reason) do
+    Logger.warning("timeline: #{what} page failed: #{inspect(reason)}")
+    {:error, :failed}
+  end
+
+  defp page_raised(what, kind, reason) do
+    Logger.warning("timeline: #{what} page raised: #{inspect({kind, reason})}")
+    {:error, :failed}
   end
 
   defp private_cursor(markers) do
@@ -1296,24 +1361,30 @@ defmodule HighWire.Timeline do
   # the call runs inline on the GenServer, so an unbounded drain blocks
   # every mount behind it. The short timeout is the same guard for a
   # stream that goes quiet mid-page.
+  #
+  # How the stream ended is part of the answer: `:ok` means the page
+  # filled and its cursor is in hand, `:done` means the engine spent the
+  # history (the true, markerless end), and `{:error, …}` means only that
+  # this attempt failed — the rows on their own cannot tell a quiet end
+  # from a cut one.
   defp drain_stream(ref, page, acc \\ []) do
     receive do
       {Client, ^ref, {:item, msg}} ->
         acc = [msg | acc]
 
         if page_full?(acc, page) do
-          Enum.reverse(acc)
+          {:ok, Enum.reverse(acc)}
         else
           drain_stream(ref, page, acc)
         end
 
       {Client, ^ref, :done} ->
-        Enum.reverse(acc)
+        {:done, Enum.reverse(acc)}
 
-      {Client, ^ref, {:error, _}} ->
-        Enum.reverse(acc)
+      {Client, ^ref, {:error, reason}} ->
+        {:error, {:stream, reason}}
     after
-      2_000 -> Enum.reverse(acc)
+      2_000 -> {:error, :timeout}
     end
   end
 
