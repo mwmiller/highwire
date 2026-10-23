@@ -411,6 +411,44 @@ defmodule HighWireWeb.PostLiveTest do
     refute html =~ ~r/id="#{dom_id("%land-on=.sha256")}"[^>]*phx-hook/
   end
 
+  test "the thread marks the message it ends with", %{conn: conn} do
+    alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    key = Base.url_encode64("%thread-end=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    seed_thread(
+      view,
+      msg(alice, "%thread-end=.sha256", "the post"),
+      [
+        msg(alice, "%thread-end-one=.sha256", "the answer", 1_700_000_060_000),
+        msg(alice, "%thread-end-two=.sha256", "the other answer", 1_700_000_120_000)
+      ]
+    )
+
+    html = render(view)
+
+    # Exactly one message carries the mark — the last reply — and the
+    # landing takes it as the end of the thread: the scroll stops there
+    # and never shows what follows the thread.
+    assert html =~ ~r/id="#{dom_id("%thread-end-two=.sha256")}"[^>]*data-thread-end/
+    refute html =~ ~r/id="#{dom_id("%thread-end-one=.sha256")}"[^>]*data-thread-end/
+    refute html =~ ~r/id="#{dom_id("%thread-end=.sha256")}"[^>]*data-thread-end/
+    assert length(:binary.matches(html, "data-thread-end")) == 1
+  end
+
+  test "a thread without replies ends at the root", %{conn: conn} do
+    alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    key = Base.url_encode64("%root-end=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    seed_thread(view, msg(alice, "%root-end=.sha256", "the post"), [])
+
+    html = render(view)
+
+    assert html =~ ~r/id="#{dom_id("%root-end=.sha256")}"[^>]*data-thread-end/
+    assert length(:binary.matches(html, "data-thread-end")) == 1
+  end
+
   test "a page opened at the thread head brings nothing into view", %{conn: conn} do
     alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
     key = Base.url_encode64("%head-on=.sha256", padding: false)

@@ -443,12 +443,23 @@ defmodule HighWireWeb.PostLive do
         root -> Enum.uniq([author_of(root) | Enum.map(assigns.replies, &author_of/1)])
       end
 
+    # The landing reads this mark (see landScroll in app.js): the last
+    # reply, or the root itself when the thread has none — the point the
+    # scroll must never travel past.
+    thread_end_key =
+      case {assigns.root, assigns.replies} do
+        {nil, _} -> nil
+        {root, []} -> root["key"]
+        {_, replies} -> List.last(replies)["key"]
+      end
+
     assigns =
       assign(assigns,
         likes: likes,
         root_liked: root_liked,
         root_likers: Enum.take(root_likers, 4),
-        participants: participants
+        participants: participants,
+        thread_end_key: thread_end_key
       )
 
     ~H"""
@@ -500,6 +511,7 @@ defmodule HighWireWeb.PostLive do
             <article
               id={message_dom_id(@root["key"])}
               phx-hook={focus_hook(@root["key"], @focus_key)}
+              data-thread-end={@root["key"] == @thread_end_key}
               class="border-b border-edge pb-6"
             >
               <div class="flex items-start gap-3">
@@ -610,6 +622,7 @@ defmodule HighWireWeb.PostLive do
               :for={reply <- @replies}
               id={message_dom_id(reply["key"])}
               phx-hook={focus_hook(reply["key"], @focus_key)}
+              data-thread-end={reply["key"] == @thread_end_key}
               class="flex gap-3 border-b border-edge-soft py-4"
             >
               <Avatar.avatar

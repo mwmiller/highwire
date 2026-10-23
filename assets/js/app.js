@@ -336,6 +336,35 @@ function clearFocusMark() {
   focusMark = null
 }
 
+// The arrival travels inside the thread's own scroller, never the
+// window, and goes no further than the end of the thread. Centering a
+// message near the end would otherwise pull the viewport past the
+// thread and leave it staring at the composer below it: the landing
+// aims at the centered position but stops where the thread's last
+// message meets the bottom of the scroller, so what follows the thread
+// stays below the fold. The end of the thread is the message carrying
+// data-thread-end (the last reply, or the root when there is none).
+function landScroll(el, smooth) {
+  const scroller = el.closest("section")
+  const end = document.querySelector("[data-thread-end]")
+  const behavior = smooth ? "smooth" : "auto"
+
+  if (!scroller || !end) {
+    el.scrollIntoView({block: "center", behavior})
+    return
+  }
+
+  const view = scroller.getBoundingClientRect()
+  const box = el.getBoundingClientRect()
+  const tail = end.getBoundingClientRect()
+
+  const center = scroller.scrollTop + (box.top - view.top) - (view.height - box.height) / 2
+  const threadEnd = scroller.scrollTop + (tail.bottom - view.bottom)
+  const top = Math.max(0, Math.min(center, threadEnd))
+
+  if (top !== scroller.scrollTop) scroller.scrollTo({top, behavior})
+}
+
 function landOnMessage(id) {
   focusTimers.forEach(clearTimeout)
   focusTimers = []
@@ -352,7 +381,7 @@ function landOnMessage(id) {
         const box = el.getBoundingClientRect()
         if (pass > 0 && box.top < window.innerHeight && box.bottom > 0) return
 
-        el.scrollIntoView({block: "center", behavior: pass > 0 && smooth ? "smooth" : "auto"})
+        landScroll(el, pass > 0 && smooth)
 
         if (focusMark || pass > 0) return
         el.classList.add("msg-focus")
