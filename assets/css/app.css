@@ -92,8 +92,11 @@
 }
 
 @layer base {
+  /* The window itself never scrolls: every page is a fixed shell whose
+     contents scroll inside it. The document keeps no scrollbar of its
+     own, so the app window has nothing to draw on the outside. */
   html {
-    scrollbar-gutter: stable;
+    overflow: hidden;
   }
   h1 {
     @apply text-2xl;
@@ -131,9 +134,6 @@
     @apply border-l-2;
     @apply pl-2;
     @apply mb-2;
-  }
-  body {
-    scrollbar-gutter: stable;
   }
 }
 
