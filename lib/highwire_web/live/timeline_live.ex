@@ -877,6 +877,18 @@ defmodule HighWireWeb.TimelineLive do
 
   # Thread identity is the root key — a window row whose root never
   # reached the window still carries it, while a cursor row IS the root.
+  defp row_uid(%{kind: :contact} = row) do
+    action = Map.get(row, :contact_action, :followed)
+    author = author_of(row.msg)
+    key = row.msg["key"]
+
+    case {author, key} do
+      {a, k} when is_binary(a) and is_binary(k) -> k <> ":" <> to_string(action) <> ":" <> a
+      {_, k} when is_binary(k) -> k <> ":" <> to_string(action)
+      _ -> nil
+    end
+  end
+
   defp row_uid(%{root_key: root}) when is_binary(root), do: root
   defp row_uid(%{msg: msg}), do: msg["key"]
 
@@ -895,6 +907,24 @@ defmodule HighWireWeb.TimelineLive do
   # moment the feed reorders and leaves the old row in the document.
   # Encode the uid rather than interpolating it: keys are base64 with
   # / and = in them, and an id has to survive being used as a selector.
+  defp dom_id(prefix, %{kind: :contact} = row) do
+    action = Map.get(row, :contact_action, :followed)
+    author = author_of(row.msg)
+    key = row.msg["key"]
+
+    case {author, key} do
+      {a, k} when is_binary(a) and is_binary(k) ->
+        id = :erlang.phash2({:contact, a, action, k})
+        prefix <> "c-" <> Integer.to_string(id)
+
+      {_, k} when is_binary(k) ->
+        prefix <> Base.url_encode64(k, padding: false) <> "-" <> to_string(action)
+
+      _ ->
+        prefix <> "anon-" <> Integer.to_string(:erlang.phash2(row))
+    end
+  end
+
   defp dom_id(prefix, row) do
     case row_uid(row) do
       uid when is_binary(uid) -> prefix <> Base.url_encode64(uid, padding: false)
