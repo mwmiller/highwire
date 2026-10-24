@@ -93,7 +93,7 @@ defmodule HighWireWeb.NetworkLiveTest do
       assert html =~ "The local service is not answering"
       assert html =~ "Connections ·"
       assert html =~ "No peers connected."
-      assert html =~ "Known peers · 0"
+      assert html =~ "All known peers (history) · 0"
       assert html =~ "The address book is empty"
       assert html =~ "Recent dials"
     end
@@ -145,7 +145,7 @@ defmodule HighWireWeb.NetworkLiveTest do
 
       # Known peers: host:port shown, full address in the title,
       # source and auto/manual badges.
-      assert html =~ "Known peers · 2"
+      assert html =~ "All known peers (history) · 2"
       assert html =~ "192.168.1.10:8008"
       assert html =~ ~s(title="net:192.168.1.10:8008~shs:bobkey")
       assert html =~ "pub"
@@ -211,11 +211,9 @@ defmodule HighWireWeb.NetworkLiveTest do
           "dialTry" => []
         })
 
-      assert html =~ "Known peers · 52"
-      assert html =~ "Showing first 50 of 52"
-      # Row 51's address is not rendered.
-      refute html =~ "10.0.0.51:8008"
-      refute html =~ "10.0.0.52:8008"
+      assert html =~ "All known peers (history) · 52"
+      assert html =~ "10.0.0.51:8008"
+      assert html =~ "10.0.0.52:8008"
     end
 
     test "marks known peers that never answered as no reply" do

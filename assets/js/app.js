@@ -755,6 +755,35 @@ let Attach = {
     this.el.addEventListener("dragleave", this.onDragLeave)
     this.el.addEventListener("drop", this.onDrop)
 
+    // Also handle drops/pastes directly on the textarea for better UX
+    this.textarea = this.el.querySelector("textarea")
+    if (this.textarea) {
+      this.textareaOnPaste = e => {
+        const images = imageFiles(e.clipboardData)
+        if (images.length === 0) return
+        e.preventDefault()
+        e.stopPropagation()
+        this.send(images)
+      }
+      this.textareaOnDragOver = e => {
+        if (!hasFileDrag(e.dataTransfer)) return
+        e.preventDefault()
+        e.stopPropagation()
+        e.dataTransfer.dropEffect = "copy"
+        this.el.classList.add("attach-over")
+      }
+      this.textareaOnDrop = e => {
+        if (!hasFileDrag(e.dataTransfer)) return
+        e.preventDefault()
+        e.stopPropagation()
+        this.el.classList.remove("attach-over")
+        this.send(imageFiles(e.dataTransfer))
+      }
+      this.textarea.addEventListener("paste", this.textareaOnPaste)
+      this.textarea.addEventListener("dragover", this.textareaOnDragOver)
+      this.textarea.addEventListener("drop", this.textareaOnDrop)
+    }
+
     // Delegated from the form, not bound to the input: a draft patch
     // re-renders the form's children, and a listener on the old input
     // node would go with it.
@@ -774,6 +803,11 @@ let Attach = {
     this.el.removeEventListener("dragleave", this.onDragLeave)
     this.el.removeEventListener("drop", this.onDrop)
     this.el.removeEventListener("change", this.onChange)
+    if (this.textarea) {
+      if (this.textareaOnPaste) this.textarea.removeEventListener("paste", this.textareaOnPaste)
+      if (this.textareaOnDragOver) this.textarea.removeEventListener("dragover", this.textareaOnDragOver)
+      if (this.textareaOnDrop) this.textarea.removeEventListener("drop", this.textareaOnDrop)
+    }
   },
 
   async send(files) {

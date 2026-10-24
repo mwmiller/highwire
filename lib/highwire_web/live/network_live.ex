@@ -45,9 +45,8 @@ defmodule HighWireWeb.NetworkLive do
   # come back (2s intervals), matching Settings' old 60-second window.
   @switch_polls 30
 
-  # The address book is read-only here; cap the rows so a large book
-  # never buries the dial attempts below it.
-  @known_peers_cap 50
+  # Show the full address book/history rather than capping it.
+  @known_peers_cap :all
 
   # Consecutive failed dials, with no handshake at all on record, before
   # an address is marked as one that never replies. A single failure is
@@ -877,76 +876,14 @@ defmodule HighWireWeb.NetworkLive do
                 id="known-peers"
                 class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint"
               >
-                Known peers · {length(@report["knownPeers"] || [])}
+                All known peers (history) · {length(@report["knownPeers"] || [])}
               </h2>
 
               <div :if={@report["knownPeers"] in [nil, []]} class="mt-2 text-sm text-dim">
                 The address book is empty. It fills as pubs announce themselves.
               </div>
 
-              <div
-                :if={@report["knownPeers"] not in [nil, []]}
-                id="known-peer-rows"
-                class="mt-2 space-y-1"
-              >
-                <div
-                  :for={{peer, id} <- known_rows(@report, @known_peers_cap)}
-                  data-sky-key={peer["address"]}
-                  phx-click="sky-select"
-                  phx-value-addr={peer["address"]}
-                  title={peer["address"]}
-                  class={[
-                    "flex cursor-pointer items-center gap-3 border-b border-edge-soft px-2 py-1.5 text-xs",
-                    @selected == peer["address"] && "bg-raised"
-                  ]}
-                >
-                  <Avatar.avatar
-                    :if={id}
-                    id={id}
-                    size={18}
-                    image={image_of(id, @profiles)}
-                    rev={blob_rev(@report)}
-                    class="shrink-0"
-                  />
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate text-sub">
-                      {if id,
-                        do: Ident.display_name(id, @profiles),
-                        else: addr_text(peer["address"])}
-                    </span>
-                    <span :if={id} class="block truncate font-mono text-[11px] text-faint">
-                      {addr_text(peer["address"])}
-                    </span>
-                  </span>
-                  <span
-                    :if={no_reply?(peer["address"], @peer_meta)}
-                    class="shrink-0 text-bad"
-                    data-no-reply={peer["address"]}
-                    title={no_reply_note(peer["address"], @peer_meta)}
-                  >
-                    no reply
-                  </span>
-                  <span :if={peer["source"]} class="w-16 shrink-0 text-right text-faint">
-                    {peer["source"]}
-                  </span>
-                  <span class={[
-                    "w-20 shrink-0 text-right",
-                    peer["autoconnect"] && "text-ok",
-                    !peer["autoconnect"] && "text-faint"
-                  ]}>
-                    {if peer["autoconnect"], do: "auto", else: "manual"}
-                  </span>
-                </div>
-
-                <p
-                  :if={length(@report["knownPeers"]) > @known_peers_cap}
-                  class="px-2 pt-1 text-[11px] text-faint"
-                >
-                  Showing first {@known_peers_cap} of {length(@report["knownPeers"])}.
-                </p>
-              </div>
-
-              <div class="mt-3 rounded border border-edge-soft bg-panel px-3 py-2">
+              <div class="mt-2 rounded border border-edge-soft bg-panel px-3 py-2">
                 <p class="text-xs text-dim">
                   Stop dialing addresses that can never answer: loopback and
                   private announce addresses, <code class="text-faint">.onion</code>,
@@ -1005,6 +942,88 @@ defmodule HighWireWeb.NetworkLive do
 
                 <p :if={@suppress_notice} role="status" class="mt-2 text-xs text-dim">
                   {@suppress_notice}
+                </p>
+              </div>
+
+              <div
+                :if={@report["knownPeers"] not in [nil, []]}
+                id="known-peer-rows"
+                class="mt-3 space-y-1"
+              >
+                <div
+                  :for={{peer, id} <- known_rows(@report, @known_peers_cap)}
+                  data-sky-key={peer["address"]}
+                  phx-click="sky-select"
+                  phx-value-addr={peer["address"]}
+                  title={peer["address"]}
+                  class={[
+                    "flex cursor-pointer items-center gap-3 border-b border-edge-soft px-2 py-1.5 text-xs",
+                    @selected == peer["address"] && "bg-raised"
+                  ]}
+                >
+                  <Avatar.avatar
+                    :if={id}
+                    id={id}
+                    size={18}
+                    image={image_of(id, @profiles)}
+                    rev={blob_rev(@report)}
+                    class="shrink-0"
+                  />
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate text-sub">
+                      {if id,
+                        do: Ident.display_name(id, @profiles),
+                        else: addr_text(peer["address"])}
+                    </span>
+                    <span :if={id} class="block truncate font-mono text-[11px] text-faint">
+                      {addr_text(peer["address"])}
+                    </span>
+                  </span>
+                  <span
+                    :if={no_reply?(peer["address"], @peer_meta)}
+                    class="shrink-0 text-bad"
+                    data-no-reply={peer["address"]}
+                    title={no_reply_note(peer["address"], @peer_meta)}
+                  >
+                    no reply
+                  </span>
+                  <span
+                    :if={ever_connected?(peer["address"], @peer_meta)}
+                    class="shrink-0 text-ok"
+                    title={ever_connected_note(peer["address"], @peer_meta)}
+                  >
+                    connected
+                  </span>
+                  <span
+                    :if={
+                      ever_ok?(peer["address"], @peer_meta) and
+                        !ever_connected?(peer["address"], @peer_meta)
+                    }
+                    class="shrink-0 text-info"
+                    title={ever_ok_note(peer["address"], @peer_meta)}
+                  >
+                    ok
+                  </span>
+                  <span :if={peer["source"]} class="w-16 shrink-0 text-right text-faint">
+                    {peer["source"]}
+                  </span>
+                  <span class={[
+                    "w-20 shrink-0 text-right",
+                    peer["autoconnect"] && "text-ok",
+                    !peer["autoconnect"] && "text-faint"
+                  ]}>
+                    {if peer["autoconnect"], do: "auto", else: "manual"}
+                  </span>
+                </div>
+
+                <p
+                  :if={
+                    is_integer(@known_peers_cap) and
+                      length(@report["knownPeers"] || []) > @known_peers_cap
+                  }
+                  class="px-2 pt-1 text-[11px] text-faint"
+                >
+                  Showing first {@known_peers_cap} of {length(@report["knownPeers"] || [])}.
                 </p>
               </div>
             </section>
@@ -1108,8 +1127,13 @@ defmodule HighWireWeb.NetworkLive do
   # shs key in the address, which is the same key in its bare form. The
   # id is what the identicon and the alias-aware name hang on; a row
   # with none falls back to showing its address as the name.
-  defp known_rows(report, cap) do
-    report["knownPeers"]
+  defp known_rows(report, :all) do
+    (report["knownPeers"] || [])
+    |> Enum.map(fn peer -> {peer, peer_id(peer)} end)
+  end
+
+  defp known_rows(report, cap) when is_integer(cap) do
+    (report["knownPeers"] || [])
     |> Enum.take(cap)
     |> Enum.map(fn peer -> {peer, peer_id(peer)} end)
   end
@@ -1146,6 +1170,47 @@ defmodule HighWireWeb.NetworkLive do
   defp no_reply_note(addr, peer_meta) do
     m = HighWire.PeersMeta.get(peer_meta, addr)
     "dialed #{m["dial_attempts"]} times, never completed a handshake"
+  end
+
+  defp ever_ok?(addr, peer_meta) when is_binary(addr) do
+    m = HighWire.PeersMeta.get(peer_meta, addr)
+    (m["dial_ok_at"] || 0) > 0
+  end
+
+  defp ever_ok?(_addr, _peer_meta), do: false
+
+  defp ever_ok_note(addr, peer_meta) do
+    m = HighWire.PeersMeta.get(peer_meta, addr)
+    ts = m["dial_ok_at"]
+
+    if is_integer(ts) and ts > 0 do
+      "handshake succeeded at least once (#{DateTime.from_unix!(div(ts, 1000))})"
+    else
+      "handshake succeeded at least once"
+    end
+  rescue
+    _ -> "handshake succeeded at least once"
+  end
+
+  defp ever_connected?(addr, peer_meta) when is_binary(addr) do
+    m = HighWire.PeersMeta.get(peer_meta, addr)
+    c = m["last_connected_at"] || m["last_activity_at"]
+    is_integer(c) and c > 0
+  end
+
+  defp ever_connected?(_addr, _peer_meta), do: false
+
+  defp ever_connected_note(addr, peer_meta) do
+    m = HighWire.PeersMeta.get(peer_meta, addr)
+    ts = m["last_connected_at"] || m["last_activity_at"]
+
+    if is_integer(ts) and ts > 0 do
+      "connected at least once (#{DateTime.from_unix!(div(ts, 1000))})"
+    else
+      "connected at least once"
+    end
+  rescue
+    _ -> "connected at least once"
   end
 
   # "12 loopback · 30 private · 4 onion · 260 no reply" — the labels the
@@ -1285,7 +1350,50 @@ defmodule HighWireWeb.NetworkLive do
     |> Enum.map(fn {_key, row} -> row end)
   end
 
-  defp sky_ok_rows(report), do: Enum.filter(sky_dial_rows(report), &(&1["attempts"] in [0, nil]))
+  defp sky_ok_rows(report) do
+    dial_ok =
+      Enum.filter(sky_dial_rows(report), &(&1["attempts"] in [0, nil]))
+
+    peer_meta = report["peer_meta"] || %{}
+    connected = MapSet.new(report["connections"] || [])
+
+    tried_keys =
+      (report["dialTry"] || [])
+      |> Enum.map(fn row -> sky_key(row["addr"]) end)
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    hist_ok =
+      peer_meta
+      |> Enum.flat_map(fn {k, v} ->
+        cond do
+          is_binary(k) and String.starts_with?(k, "net:") and is_map(v) ->
+            key = sky_key(k)
+            dial_ok_at = v["dial_ok_at"] || 0
+            last_connected_at = v["last_connected_at"] || v["last_activity_at"] || 0
+
+            if is_binary(key) and not MapSet.member?(connected, key) and
+                 not MapSet.member?(tried_keys, key) and
+                 (dial_ok_at > 0 or last_connected_at > 0) do
+              [
+                %{
+                  "addr" => k,
+                  "attempts" => 0,
+                  "lastTry" => max(dial_ok_at, last_connected_at)
+                }
+              ]
+            else
+              []
+            end
+
+          true ->
+            []
+        end
+      end)
+
+    (dial_ok ++ hist_ok)
+    |> Enum.uniq_by(fn row -> sky_key(row["addr"]) end)
+  end
 
   defp sky_retry_rows(report),
     do: Enum.filter(sky_dial_rows(report), &(is_integer(&1["attempts"]) and &1["attempts"] > 0))
@@ -1294,15 +1402,42 @@ defmodule HighWireWeb.NetworkLive do
   defp sky_book_rows(report) do
     connected = MapSet.new(report["connections"] || [])
     tried = MapSet.new(Enum.map(sky_dial_rows(report), &sky_key(&1["addr"])))
+    known = known_peers_for_sky(report)
+    peer_meta = report["peer_meta"] || %{}
 
-    (report["knownPeers"] || [])
-    |> Enum.take(@known_peers_cap)
+    known
     |> Enum.map(fn peer -> {sky_key(peer["address"]), peer} end)
-    |> Enum.reject(fn {key, _peer} ->
-      is_nil(key) or MapSet.member?(connected, key) or MapSet.member?(tried, key)
+    |> Enum.reject(fn {key, peer} ->
+      addr = peer["address"]
+
+      cond do
+        is_nil(key) ->
+          true
+
+        MapSet.member?(connected, key) ->
+          true
+
+        MapSet.member?(tried, key) ->
+          true
+
+        is_binary(addr) ->
+          m = HighWire.PeersMeta.get(peer_meta, addr)
+          (m["dial_ok_at"] || 0) > 0 or (m["last_connected_at"] || m["last_activity_at"] || 0) > 0
+
+        true ->
+          false
+      end
     end)
     |> Enum.uniq_by(fn {key, _peer} -> key end)
     |> Enum.map(fn {_key, peer} -> peer end)
+  end
+
+  defp known_peers_for_sky(report) do
+    case @known_peers_cap do
+      :all -> report["knownPeers"] || []
+      cap when is_integer(cap) -> Enum.take(report["knownPeers"] || [], cap)
+      _ -> report["knownPeers"] || []
+    end
   end
 
   # "net:host:port~shs:KEY" → "@KEY.ed25519" — the same id the
