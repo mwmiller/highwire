@@ -12,6 +12,12 @@ defmodule HighWire.SSB.Sidecar do
     3. spawn failures and unexpected exits retry with backoff instead of
        going `:down` forever
 
+    An attached engine is not this VM's child, so no `exit_status` ever
+    arrives for it. While attached, the sidecar checks the engine it
+    holds — its pid, or the port when the engine is foreign — and
+    re-probes when that check fails, rather than reporting `:ready` at
+    a dead port.
+
     The spawn's OS pid and port are recorded in `<home>/sidecar.json` so
     a crashed boot can find (and attach to) its own leftover engine on
     the next start instead of stacking another one — and a shutdown
@@ -32,6 +38,12 @@ defmodule HighWire.SSB.Sidecar do
   require Logger
 
   alias HighWire.SSB.{Admin, Client, ConnSuppress, Identities, Import, Keys, Network}
+
+  # How often an attached engine is checked. An attached engine answers
+  # no exit_status here, and a reader polling status/0 should not keep
+  # seeing :ready long after the port stopped answering; a few seconds
+  # is both cheap (one kill -0 or TCP connect) and quick to recover.
+  @health_check_ms 5_000
 
   def config, do: Application.get_env(:highwire, :ssb, [])
 
@@ -339,6 +351,7 @@ defmodule HighWire.SSB.Sidecar do
       os_pid: nil,
       buf: "",
       attempts: 0,
+      health: 0,
       import: nil,
       import_port: nil,
       import_pid: nil,
@@ -432,6 +445,15 @@ defmodule HighWire.SSB.Sidecar do
     {:noreply, %{state | status: :starting}}
   end
 
+  # A probe that started before our own spawn can only finish after the
+  # new engine answers. Attaching to it now would drop the port of the
+  # engine we own — no exit_status would follow, and os_pid would be
+  # lost on shutdown. The engine we spawned is the one to keep.
+  def handle_info({:probe_result, {:attach, _port, _owner}}, %{os_port: os_port} = state)
+      when is_port(os_port) do
+    {:noreply, state}
+  end
+
   def handle_info({:probe_result, {:attach, port, owner}}, state) do
     Logger.info("sidecar: attached to existing erlbutt on 127.0.0.1:#{port}")
     ensure_dialer()
@@ -439,7 +461,19 @@ defmodule HighWire.SSB.Sidecar do
     # Take ownership when the pidfile names this engine: terminate/2
     # kills state.os_pid, so an attached leftover we spawned earlier is
     # stopped on shutdown instead of living on forever.
-    {:noreply, %{state | status: :ready, listen_port: port, os_pid: owner, attempts: 0}}
+    state = %{state | status: :ready, listen_port: port, os_pid: owner, attempts: 0}
+    {:noreply, schedule_health_check(state)}
+  end
+
+  # Likewise, a stale spawn result must not stack a second engine beside
+  # the one already starting or ready.
+  def handle_info({:probe_result, {:spawn, _mode}}, %{os_port: os_port} = state)
+      when is_port(os_port) do
+    {:noreply, state}
+  end
+
+  def handle_info({:probe_result, {:spawn, _mode}}, %{status: :ready} = state) do
+    {:noreply, state}
   end
 
   def handle_info({:probe_result, {:spawn, mode}}, state) do
@@ -486,6 +520,24 @@ defmodule HighWire.SSB.Sidecar do
     Logger.warning("erlbutt sidecar exited (status #{code})")
     {:noreply, retry(%{state | os_port: nil, os_pid: nil})}
   end
+
+  # An attached engine has no port here to report its exit, so readiness
+  # is only as current as this check. The token makes a timer left over
+  # from an earlier attachment a no-op instead of a second polling loop.
+  def handle_info({:check_attached, token}, %{health: token, os_port: nil} = state)
+      when state.status == :ready do
+    if attached_alive?(state) do
+      {:noreply, schedule_health_check(state)}
+    else
+      Logger.warning(
+        "sidecar: attached erlbutt on 127.0.0.1:#{state.listen_port} is gone; re-probing"
+      )
+
+      {:noreply, retry(%{state | os_pid: nil})}
+    end
+  end
+
+  def handle_info({:check_attached, _token}, state), do: {:noreply, state}
 
   # -- import port --------------------------------------------------------
   # A second OS process, only while a conversion runs: it binds no
@@ -667,6 +719,20 @@ defmodule HighWire.SSB.Sidecar do
     Logger.info("sidecar: retrying spawn/attach in #{div(delay, 1_000)}s (attempt #{attempts})")
     %{state | status: :starting, attempts: attempts}
   end
+
+  defp schedule_health_check(state) do
+    token = state.health + 1
+    Process.send_after(self(), {:check_attached, token}, @health_check_ms)
+    %{state | health: token}
+  end
+
+  # A recorded pid is the precise signal: an engine whose port stopped
+  # answering but whose VM is alive is wedged, not gone, and spawning
+  # beside it would put two writers on the store. A foreign engine has
+  # no pid to us, so the open port is all there is to watch.
+  defp attached_alive?(%{os_pid: pid}) when is_integer(pid), do: os_alive?(pid)
+  defp attached_alive?(%{listen_port: port}) when is_integer(port), do: tcp_open?(port)
+  defp attached_alive?(_state), do: false
 
   # -- spawning ----------------------------------------------------------
 

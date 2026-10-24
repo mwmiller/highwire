@@ -197,6 +197,20 @@ defmodule HighWire.SSB.EngineTest do
     # second writer beside the leftover.
     assert engine_pid!(ctx.home) == engine
     assert whoami_id(engine_client(ctx, ctx.keys)) == ctx.keys.id
+
+    # That engine is not our OS child, so no exit_status arrives here.
+    # The sidecar's own check must notice it died and replace it rather
+    # than keep reporting :ready at a dead port.
+    System.cmd("kill", ["-KILL", to_string(engine)], stderr_to_stdout: true)
+
+    assert wait_until(20_000, fn -> Sidecar.status() != :ready end) == :ok
+    await_ready!()
+
+    replacement = engine_pid!(ctx.home)
+    refute replacement == engine
+    assert os_alive?(replacement)
+    assert Sidecar.port() == ctx.port
+    assert whoami_id(engine_client(ctx, ctx.keys)) == ctx.keys.id
   end
 
   # -- helpers ------------------------------------------------------------
