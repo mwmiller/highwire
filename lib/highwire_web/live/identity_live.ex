@@ -319,18 +319,26 @@ defmodule HighWireWeb.IdentityLive do
             :if={@active}
             class="mt-4 flex items-start gap-4 rounded-lg border border-edge bg-panel p-4"
           >
-            <Avatar.avatar
-              id={@active["id"]}
-              size={48}
-              image={image_of(@active["id"], @profiles)}
-              rev={Profile.rev()}
-            />
+            <.link
+              navigate={"/profile?id=" <> URI.encode_www_form(@active["id"])}
+              class="shrink-0"
+            >
+              <Avatar.avatar
+                id={@active["id"]}
+                size={48}
+                image={image_of(@active["id"], @profiles)}
+                rev={Profile.rev()}
+              />
+            </.link>
             <div class="min-w-0">
               <div class="flex items-center gap-2">
-                <span class="font-semibold text-paper">
+                <.link
+                  navigate={"/profile?id=" <> URI.encode_www_form(@active["id"])}
+                  class="font-semibold text-paper hover:underline"
+                >
                   {Ident.display_name(@active["id"], @profiles)}
                   <span class="ml-1 font-normal text-faint">({@active["label"]})</span>
-                </span>
+                </.link>
                 <span class="rounded bg-raised px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-paper">
                   Active
                 </span>
@@ -356,18 +364,26 @@ defmodule HighWireWeb.IdentityLive do
           <div class="mt-4 space-y-3">
             <div :for={row <- @identities} class="rounded-lg border border-edge bg-panel p-4">
               <div class="flex items-center gap-3">
-                <Avatar.avatar
-                  id={row["id"]}
-                  size={32}
-                  image={image_of(row["id"], @profiles)}
-                  rev={Profile.rev()}
-                />
+                <.link
+                  navigate={"/profile?id=" <> URI.encode_www_form(row["id"])}
+                  class="shrink-0"
+                >
+                  <Avatar.avatar
+                    id={row["id"]}
+                    size={32}
+                    image={image_of(row["id"], @profiles)}
+                    rev={Profile.rev()}
+                  />
+                </.link>
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2">
-                    <span class="truncate font-medium text-paper">
+                    <.link
+                      navigate={"/profile?id=" <> URI.encode_www_form(row["id"])}
+                      class="truncate font-medium text-paper hover:underline"
+                    >
                       {Ident.display_name(row["id"], @profiles)}
                       <span class="ml-1 font-normal text-faint">({row["label"]})</span>
-                    </span>
+                    </.link>
                     <span
                       :if={row["active"]}
                       class="rounded bg-raised px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-paper"
