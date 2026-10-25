@@ -1350,49 +1350,58 @@ defmodule HighWireWeb.NetworkLive do
     |> Enum.map(fn {_key, row} -> row end)
   end
 
+  # Peers whose last handshake worked, from two sources: the dialer's own
+  # ledger, and the dial cache for anyone the dialer never tried this
+  # session. Either way the row is one per peer, minus anyone already on
+  # the connected ring.
   defp sky_ok_rows(report) do
     dial_ok =
       Enum.filter(sky_dial_rows(report), &(&1["attempts"] in [0, nil]))
 
-    peer_meta = report["peer_meta"] || %{}
     connected = MapSet.new(report["connections"] || [])
+    tried_keys = dialed_keys(report)
 
-    tried_keys =
-      (report["dialTry"] || [])
-      |> Enum.map(fn row -> sky_key(row["addr"]) end)
-      |> Enum.reject(&is_nil/1)
-      |> MapSet.new()
-
-    hist_ok =
-      peer_meta
-      |> Enum.flat_map(fn {k, v} ->
-        cond do
-          is_binary(k) and String.starts_with?(k, "net:") and is_map(v) ->
-            key = sky_key(k)
-            dial_ok_at = v["dial_ok_at"] || 0
-            last_connected_at = v["last_connected_at"] || v["last_activity_at"] || 0
-
-            if is_binary(key) and not MapSet.member?(connected, key) and
-                 not MapSet.member?(tried_keys, key) and
-                 (dial_ok_at > 0 or last_connected_at > 0) do
-              [
-                %{
-                  "addr" => k,
-                  "attempts" => 0,
-                  "lastTry" => max(dial_ok_at, last_connected_at)
-                }
-              ]
-            else
-              []
-            end
-
-          true ->
-            []
-        end
-      end)
-
-    (dial_ok ++ hist_ok)
+    (dial_ok ++ hist_ok_rows(report, connected, tried_keys))
     |> Enum.uniq_by(fn row -> sky_key(row["addr"]) end)
+  end
+
+  # Every address the dialer has tried this session, as peer ids.
+  defp dialed_keys(report) do
+    (report["dialTry"] || [])
+    |> Enum.map(fn row -> sky_key(row["addr"]) end)
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
+  end
+
+  # The dial cache's own account of peers we reached, for the peers the
+  # dialer has no row for.
+  defp hist_ok_rows(report, connected, tried_keys) do
+    (report["peer_meta"] || %{})
+    |> Enum.flat_map(fn {addr, meta} ->
+      hist_ok_row(addr, meta, connected, tried_keys)
+    end)
+  end
+
+  defp hist_ok_row(addr, meta, connected, tried_keys) do
+    key = if dial_cache_entry?(addr, meta), do: sky_key(addr)
+
+    if is_binary(key) and not MapSet.member?(connected, key) and
+         not MapSet.member?(tried_keys, key) and reached_at(meta) > 0 do
+      [%{"addr" => addr, "attempts" => 0, "lastTry" => reached_at(meta)}]
+    else
+      []
+    end
+  end
+
+  # The cache is keyed by address, and only the network addresses carry
+  # the times we are reading here.
+  defp dial_cache_entry?(addr, meta),
+    do: is_binary(addr) and String.starts_with?(addr, "net:") and is_map(meta)
+
+  # When the cache last had a working exchange with this peer — the
+  # handshake time, or the last activity of a session we did hold.
+  defp reached_at(meta) do
+    max(meta["dial_ok_at"] || 0, meta["last_connected_at"] || meta["last_activity_at"] || 0)
   end
 
   defp sky_retry_rows(report),
@@ -1402,34 +1411,33 @@ defmodule HighWireWeb.NetworkLive do
   defp sky_book_rows(report) do
     connected = MapSet.new(report["connections"] || [])
     tried = MapSet.new(Enum.map(sky_dial_rows(report), &sky_key(&1["addr"])))
-    known = known_peers_for_sky(report)
     peer_meta = report["peer_meta"] || %{}
 
-    known
+    known_peers_for_sky(report)
     |> Enum.map(fn peer -> {sky_key(peer["address"]), peer} end)
-    |> Enum.reject(fn {key, peer} ->
-      addr = peer["address"]
-
-      cond do
-        is_nil(key) ->
-          true
-
-        MapSet.member?(connected, key) ->
-          true
-
-        MapSet.member?(tried, key) ->
-          true
-
-        is_binary(addr) ->
-          m = HighWire.PeersMeta.get(peer_meta, addr)
-          (m["dial_ok_at"] || 0) > 0 or (m["last_connected_at"] || m["last_activity_at"] || 0) > 0
-
-        true ->
-          false
-      end
-    end)
+    |> Enum.reject(fn {key, peer} -> book_row_seen?(key, peer, connected, tried, peer_meta) end)
     |> Enum.uniq_by(fn {key, _peer} -> key end)
     |> Enum.map(fn {_key, peer} -> peer end)
+  end
+
+  # Whether a book row is already drawn elsewhere — or is drawn nowhere,
+  # having no peer id of its own.
+  defp book_row_seen?(nil, _peer, _connected, _tried, _peer_meta), do: true
+
+  defp book_row_seen?(key, peer, connected, tried, peer_meta) do
+    MapSet.member?(connected, key) or MapSet.member?(tried, key) or
+      history_reached?(peer, peer_meta)
+  end
+
+  # Whether the dial cache says we have reached this peer before.
+  defp history_reached?(peer, peer_meta) do
+    case peer["address"] do
+      addr when is_binary(addr) ->
+        reached_at(HighWire.PeersMeta.get(peer_meta, addr)) > 0
+
+      _ ->
+        false
+    end
   end
 
   defp known_peers_for_sky(report) do
