@@ -1847,8 +1847,20 @@ defmodule HighWireWeb.TimelineLive do
   attr :ctx, :map, required: true
 
   defp other_row(assigns) do
+    # A run of the same unknown type is one fact, not several: the row
+    # names the type once and says there were some of them. The newest
+    # message anchors it.
+    description =
+      if Map.get(assigns.row, :other_count, 1) > 1 do
+        MessageText.describe_spate(assigns.row.msg)
+      else
+        MessageText.describe(assigns.row.msg, assigns.ctx)
+      end
+
     assigns =
-      assign(assigns, :href, profile_href(author_of(assigns.row.msg)))
+      assigns
+      |> assign(:href, profile_href(author_of(assigns.row.msg)))
+      |> assign(:description, description)
 
     ~H"""
     <div class="flex items-center gap-3 px-4 py-2.5 text-sm italic text-faint hover:bg-panel">
@@ -1867,7 +1879,7 @@ defmodule HighWireWeb.TimelineLive do
           </.link>
           <span :if={@href == nil}>{Ident.display_name(author_of(@row.msg), @ctx)}</span>
         </span>
-        {MessageText.describe(@row.msg, @ctx)}
+        {@description}
       </p>
       <span class="ml-auto not-italic text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
     </div>

@@ -31,6 +31,36 @@ defmodule HighWireWeb.MessageText do
   end
 
   @doc """
+  One sentence for a spate of messages of the same family.
+
+  The timeline folds such a run into one row, so the row says the kind
+  repeated without claiming a count the reader cannot check.
+  """
+  @spec describe_spate(map()) :: binary()
+  def describe_spate(msg) do
+    case content(msg) do
+      %{"type" => type} when is_binary(type) ->
+        "sent some #{humanize_type(type_family(type))} messages"
+
+      _ ->
+        "sent some messages"
+    end
+  end
+
+  @doc """
+  The kind a message belongs to, named as a reader names it: the family
+  its protocol type sits under — `movieclub` for `movieclub/new`.
+
+  A reader who does not implement the protocol gains nothing from the
+  sub-type. Two movieclub messages are two movieclub messages whether
+  one adds a film and the other a review, so the sentence and the fold
+  both work from the family.
+  """
+  @spec type_family(binary()) :: binary() | nil
+  def type_family(type) when is_binary(type), do: type |> String.split("/", parts: 2) |> hd()
+  def type_family(_type), do: nil
+
+  @doc """
   Every message key `describe/2` may look up through the ctx's `:index`
   for `msg` — the targets its sentence can name.
 
@@ -96,6 +126,21 @@ defmodule HighWireWeb.MessageText do
     end
   end
 
+  # Types this module gives a sentence of their own. Anything else falls
+  # back to the generic phrase. The Timeline reads this to decide which
+  # events are opaque enough to fold into one row: a labelled type names
+  # its subject (a pub host, a channel, a profile), so two of them are two
+  # facts, while two unknown events in one sitting are one line.
+  @labelled_types ~w(contact about channel pub room/alias post-edit vote post)
+
+  @doc """
+  Whether `type` has a sentence of its own in `describe/2` rather than the
+  generic "sent a … message" fallback.
+  """
+  @spec labelled_type?(binary()) :: boolean()
+  def labelled_type?(type) when is_binary(type), do: type in @labelled_types
+  def labelled_type?(_type), do: false
+
   # Every type carries its own payload, so name the specific thing
   # rather than echoing the raw protocol type at the reader.
   defp typed_label("contact", c, _msg, ctx), do: contact_label(c, ctx)
@@ -106,7 +151,7 @@ defmodule HighWireWeb.MessageText do
   defp typed_label("post-edit", c, msg, ctx), do: edit_label(c, msg, ctx)
   defp typed_label("vote", c, _msg, ctx), do: vote_label(c, ctx)
   defp typed_label("post", c, _msg, _ctx), do: post_label(c)
-  defp typed_label(type, _c, _msg, _ctx), do: "sent a #{humanize_type(type)} message"
+  defp typed_label(type, _c, _msg, _ctx), do: "sent a #{humanize_type(type_family(type))} message"
 
   # A contact edit is the reader's social ledger: which way the
   # relationship went, and with whom. The edit may also carry a name for

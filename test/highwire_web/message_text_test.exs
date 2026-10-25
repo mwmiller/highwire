@@ -71,5 +71,35 @@ defmodule HighWireWeb.MessageTextTest do
       assert MessageText.describe(%{"key" => "%m.sha256", "value" => %{}}) ==
                "sent a private message"
     end
+
+    test "labelled_type?/1 separates named sentences from the generic fallback" do
+      assert MessageText.labelled_type?("pub")
+      assert MessageText.labelled_type?("room/alias")
+      assert MessageText.labelled_type?("channel")
+      refute MessageText.labelled_type?("movieclub/new")
+      refute MessageText.labelled_type?(nil)
+    end
+
+    test "the family is what a sentence names, not the sub-type" do
+      # A reader who does not implement the protocol has no use for the
+      # difference between adding a film and reviewing one.
+      assert MessageText.describe(msg(%{"type" => "movieclub/new"})) ==
+               "sent a movieclub message"
+
+      assert MessageText.describe(msg(%{"type" => "movieclub/review"})) ==
+               "sent a movieclub message"
+
+      # a type with no family of its own reads as it always has
+      assert MessageText.describe(msg(%{"type" => "secret-thing"})) ==
+               "sent a secret thing message"
+    end
+
+    test "describe_spate/1 says the family repeated, without a count" do
+      assert MessageText.describe_spate(msg(%{"type" => "movieclub/new"})) ==
+               "sent some movieclub messages"
+
+      assert MessageText.describe_spate(msg(%{"type" => "movieclub/review"})) ==
+               "sent some movieclub messages"
+    end
   end
 end

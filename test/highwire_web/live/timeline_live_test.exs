@@ -741,7 +741,7 @@ defmodule HighWireWeb.TimelineLiveTest do
 
       msgs = [
         ssb_msg("%weird.sha256", "@alice:.ed25519", now - 1_000, %{
-          "type" => "secret/thing"
+          "type" => "secret-thing"
         })
       ]
 
@@ -749,6 +749,34 @@ defmodule HighWireWeb.TimelineLiveTest do
       html = notify(view, feed_payload(msgs))
 
       assert html =~ "sent a secret thing message"
+    end
+
+    test "a run of unknown messages reads as one row, not an expandable stack", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs =
+        for {key, type, ago} <- [
+              {"%mc1.sha256", "movieclub/new", 3_000},
+              {"%mc2.sha256", "movieclub/review", 2_000},
+              {"%mc3.sha256", "movieclub/new", 1_000}
+            ] do
+          ssb_msg(key, "@alice:.ed25519", now - ago, %{
+            "type" => type,
+            "title" => "film"
+          })
+        end
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      # One line for the burst, anchored on the newest message: the
+      # family was repeated, and the sub-type is nothing to a reader who
+      # does not implement the protocol.
+      assert count(html, "sent some movieclub messages") == 1
+      refute html =~ "movieclub new"
+      refute html =~ "movieclub review"
+      refute html =~ "+2 more"
+      refute html =~ "show less"
     end
 
     test "rendered rows ask Timeline to profile authors no payload carried", %{conn: conn} do

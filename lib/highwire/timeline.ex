@@ -15,6 +15,9 @@ defmodule HighWire.Timeline do
     * contact (follow/block) messages collapse into one row per author
       per direction — who they followed, who they blocked, who they let
       go — positioned at the author's latest edit of that kind
+    * event messages of a type the views cannot name collapse into one
+      row per author per family per spate — a run in one sitting, opened
+      by the same cooloff — so a burst reads as one line
     * timestamps are clamped to now (Poncho's `min(arrival, claimed)`
       future-dated guard; arrival time itself is not exposed over muxrpc)
 
@@ -23,7 +26,7 @@ defmodule HighWire.Timeline do
   completes; LiveViews also read the current snapshot synchronously.
   The payload is a map:
 
-    * `:feed`         — activity-ordered rows (threads/posts/contacts),
+    * `:feed`         — activity-ordered rows (threads/posts/contacts/events),
                         capped at 200; each row carries `:kind`, `:msg`,
                         `:activity`, `:participants`, `:replies`, `:likes`,
                         `:recent` (newest replies) and `:self?`
@@ -100,6 +103,13 @@ defmodule HighWire.Timeline do
   # session that keeps clicking never splits just because it outran the
   # cooloff.
   @contact_cooloff_ms :timer.minutes(20)
+
+  # Event messages of a type the views cannot name — movieclub/new,
+  # chess_move, the long tail — follow the same shape: one client session
+  # emits several at once. They collapse into spates on the same cooloff,
+  # so a burst reads as one line instead of a wall of "sent a … message"
+  # rows.
+  @other_cooloff_ms :timer.minutes(20)
 
   # One page of a roots-shaped view — a profile's feed, a tab. The engine
   # honors this; the drain bounds itself to it too, because the drain runs
@@ -3168,21 +3178,34 @@ defmodule HighWire.Timeline do
     other_entries =
       standalone
       |> Enum.reject(&vote?/1)
-      |> Enum.map(fn msg ->
-        kind = if post?(msg), do: :post, else: :other
+      |> Enum.split_with(&post?/1)
+      |> then(fn {posts, events} ->
+        {unknown, labelled} = Enum.split_with(events, &unknown_type?/1)
 
-        build_entry(
-          kind,
-          msg,
-          bump_ts(msg),
-          [msg["value"]["author"]],
-          0,
-          Map.get(like_counts, msg["key"] || "", 0),
-          [],
-          self_id: self_id,
-          rooted: true,
-          mentioned?: mentions_self?(msg, self_id)
-        )
+        post_entries =
+          Enum.map(posts, fn msg ->
+            build_entry(
+              :post,
+              msg,
+              bump_ts(msg),
+              [msg["value"]["author"]],
+              0,
+              Map.get(like_counts, msg["key"] || "", 0),
+              [],
+              self_id: self_id,
+              rooted: true,
+              mentioned?: mentions_self?(msg, self_id)
+            )
+          end)
+
+        labelled_entries = Enum.map(labelled, &event_row(&1, like_counts, self_id))
+
+        event_entries =
+          unknown
+          |> collapse_events()
+          |> Enum.map(&event_entry(&1, like_counts, self_id))
+
+        post_entries ++ labelled_entries ++ event_entries
       end)
 
     (thread_entries ++ contact_entries ++ other_entries)
@@ -3354,15 +3377,77 @@ defmodule HighWire.Timeline do
     |> Map.put(:contact_action, action)
   end
 
+  # Event messages of a type the views cannot name arrive in runs the same
+  # way contact edits do. Folded into spates per author per family on the
+  # same cooloff, one client session reads as one line instead of a wall
+  # of "sent a … message" rows.
+  #
+  # The family is the key, not the protocol type: a reader who does not
+  # implement the protocol has no use for the sub-type, so a movieclub/new
+  # and a movieclub/review in the same minute are one thing done twice.
+  # The sentence that anchors the row names the family for the same
+  # reason.
+  #
+  # Only types with no sentence of their own are folded. A known type
+  # names its own subject (pub host, channel, about target), so two of
+  # them are two facts, not one repeated event.
+  defp collapse_events(msgs) do
+    msgs
+    |> Enum.group_by(fn msg ->
+      {msg["value"]["author"], MessageText.type_family(content(msg)["type"])}
+    end)
+    |> Enum.flat_map(fn {_group, group_msgs} ->
+      group_msgs
+      |> Enum.map(fn msg -> {bump_ts(msg), msg} end)
+      |> Enum.sort_by(&elem(&1, 0), :desc)
+      |> spates(@other_cooloff_ms)
+      |> Enum.map(fn [{_ts, anchor} | _] = spate ->
+        %{anchor: anchor, msgs: Enum.map(spate, &elem(&1, 1))}
+      end)
+    end)
+  end
+
+  # One collapsed event spate as a feed row. The newest message anchors
+  # the row; the count tells the view to say the type was repeated.
+  defp event_entry(%{anchor: anchor, msgs: msgs}, like_counts, self_id) do
+    event_row(anchor, like_counts, self_id)
+    |> Map.put(:other_count, length(msgs))
+  end
+
+  # One event message as its own row, for the types that already carry a
+  # sentence of their own.
+  defp event_row(msg, like_counts, self_id) do
+    build_entry(
+      :other,
+      msg,
+      bump_ts(msg),
+      [msg["value"]["author"]],
+      0,
+      Map.get(like_counts, msg["key"] || "", 0),
+      [],
+      self_id: self_id,
+      rooted: true,
+      mentioned?: mentions_self?(msg, self_id)
+    )
+  end
+
+  # A type with no sentence of its own is opaque to the reader, so its
+  # runs fold. `MessageText` owns the list, keeping the fold and the
+  # rendering from drifting apart.
+  defp unknown_type?(msg) do
+    type = content(msg)["type"]
+    is_binary(type) and not MessageText.labelled_type?(type)
+  end
+
   # Split one direction's edits — newest first — into spates: edits no
   # further apart than the cooloff belong to the same spate, a longer gap
   # opens the next line. Each spate comes back newest first, so its head
   # is the row's anchor and its timestamps are the row's activity.
-  defp spates(edits) do
+  defp spates(edits, cooloff \\ @contact_cooloff_ms) do
     {spates, current} =
       Enum.reduce(edits, {[], []}, fn {ts, _msg} = edit, {spates, current} ->
         case current do
-          [{oldest, _} | _] when oldest - ts <= @contact_cooloff_ms -> {spates, [edit | current]}
+          [{oldest, _} | _] when oldest - ts <= cooloff -> {spates, [edit | current]}
           [] -> {spates, [edit]}
           _ -> {[current | spates], [edit]}
         end

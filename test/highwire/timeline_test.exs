@@ -668,6 +668,57 @@ defmodule HighWire.TimelineTest do
       assert row.contact_action == :followed
       assert Map.get(row, :followed) == ["@frank.ed25519", "@eve.ed25519", "@dave.ed25519"]
     end
+
+    test "event messages bundle per author and family; a cooloff opens the next line" do
+      then = :timer.hours(24) * 365 * 3
+
+      events = [
+        msg("@alice", "%e1.sha256", then, %{"type" => "movieclub/new", "title" => "A"}),
+        msg("@alice", "%e2.sha256", then + 60_000, %{"type" => "movieclub/new", "title" => "B"}),
+        msg("@alice", "%e3.sha256", then + 120_000, %{
+          "type" => "movieclub/review",
+          "text" => "good"
+        }),
+        msg("@alice", "%e4.sha256", then + :timer.hours(2), %{
+          "type" => "movieclub/new",
+          "title" => "C"
+        }),
+        msg("@alice", "%e5.sha256", then + 150_000, %{
+          "type" => "bookclub/new",
+          "title" => "D"
+        })
+      ]
+
+      rows = Timeline.build_feed(events, "@me", %{})
+
+      # Newest first. The two `new` messages and the review made in one
+      # sitting are one movieclub line — the sub-type is nothing to a
+      # reader who does not implement the protocol — while the bookclub
+      # message beside them is another kind and keeps its own row, and
+      # the `new` made hours later opens the next movieclub line.
+      assert [
+               %{msg: %{"key" => "%e4.sha256"}, other_count: 1},
+               %{msg: %{"key" => "%e5.sha256"}, other_count: 1},
+               %{msg: %{"key" => "%e3.sha256"}, other_count: 3}
+             ] = rows
+    end
+
+    test "an event spate never swallows an in-window post" do
+      then = :timer.hours(24) * 365 * 3
+
+      events = [
+        post("@alice", "%p1.sha256", then),
+        msg("@alice", "%e1.sha256", then + 1_000, %{"type" => "movieclub/new"}),
+        msg("@alice", "%e2.sha256", then + 2_000, %{"type" => "movieclub/new"})
+      ]
+
+      rows = Timeline.build_feed(events, "@me", %{})
+
+      # The post keeps its own row (a rootless post heads its own thread);
+      # only the unknown run collapses above it.
+      assert Enum.map(rows, & &1.kind) == [:other, :thread]
+      assert hd(rows).other_count == 2
+    end
   end
 
   describe "contacts stream items" do
