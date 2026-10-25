@@ -2885,7 +2885,20 @@ defmodule HighWire.Timeline do
     # and would otherwise age out of every payload. The drain arrives as
     # one edit per relationship, so only the spate anchors — the edits the
     # rows actually render — merge in; the folded rows carry the rest.
-    contacts = state.collapsed_contacts.rows |> Map.values() |> List.flatten()
+    #
+    # The drain reads the whole store, which includes everyone the account
+    # does not follow. Those rows are not this timeline's business and
+    # there are enough of them to fill the 2000-row cap on their own —
+    # strangers' follow spates would push the reader's actual feed off the
+    # bottom. Only followed authors (and the account itself) keep rows.
+    visible = MapSet.new(state.follows) |> MapSet.put(state.self_id)
+
+    contacts =
+      state.collapsed_contacts.rows
+      |> Map.values()
+      |> List.flatten()
+      |> Enum.filter(&MapSet.member?(visible, &1.author))
+
     anchors = Enum.map(contacts, & &1.anchor)
     acc = Enum.uniq_by(state.acc ++ anchors, & &1["key"])
 

@@ -949,6 +949,31 @@ defmodule HighWire.TimelineTest do
       assert Enum.any?(st.messages.feed, &(&1.msg["key"] == "%p=.sha256"))
     end
 
+    test "contact rows from accounts this one does not follow stay out" do
+      st = drain_state(pending: %{123 => "@me.ed25519"})
+      {:noreply, st} = Timeline.handle_info({Client, 123, :done}, st)
+
+      stranger =
+        msg("@stranger.ed25519", "%s=.sha256", 2_000, %{
+          "type" => "contact",
+          "contact" => "@x=.ed25519",
+          "following" => true
+        })
+
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:item, st._follow}}, st)
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:item, stranger}}, st)
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, :done}, st)
+
+      # The drain reads the whole store, but a timeline shows the people
+      # its reader follows: a stranger's follow spates would otherwise
+      # fill the row cap and push the reader's own feed off the bottom.
+      authors =
+        for %{kind: :contact, msg: %{"value" => %{"author" => author}}} <- st.messages.feed,
+            do: author
+
+      assert authors == ["@a.ed25519"]
+    end
+
     test "a drain finishing mid-stream merges quietly; the feed's own finalize carries it" do
       st = drain_state(status: :ok, pending: %{123 => "@me.ed25519"})
 
