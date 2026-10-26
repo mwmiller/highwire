@@ -1879,6 +1879,8 @@ defmodule HighWire.TimelineTest do
         client: client,
         self_id: "@me=.ed25519",
         follows: [],
+        suggestions: [%{"id" => "@ktorn=.ed25519", "followers" => 7}],
+        active: %{},
         contact_msgs: [],
         collapsed_contacts: %{by_group: %{}, rows: %{}},
         acc: [],
@@ -1908,6 +1910,13 @@ defmodule HighWire.TimelineTest do
       # state they just undid and hold the feed back with it.
       assert st2.follows == ["@ktorn=.ed25519"]
 
+      # The rail goes with it: the feed just followed is the last row
+      # "Whom to follow" should be offering, and both the stored set and
+      # the payload this finalize just built say so without waiting out
+      # the network poll.
+      assert st2.suggestions == []
+      assert st2.messages.suggestions == []
+
       # And the payload carries the row.
       assert Enum.any?(st2.messages.feed, fn row ->
                row.kind == :contact and row.contact_action == :followed and
@@ -1932,6 +1941,8 @@ defmodule HighWire.TimelineTest do
         self_id: "@me=.ed25519",
         follows: [peer],
         blocked: [],
+        suggestions: [%{"id" => peer, "followers" => 7}],
+        active: %{},
         contact_msgs: [],
         collapsed_contacts: %{by_group: %{}, rows: %{}},
         acc: [],
@@ -1954,6 +1965,9 @@ defmodule HighWire.TimelineTest do
 
       assert st2.follows == []
       assert st2.blocked == [peer]
+      # A blocked feed is off the rail for the same reason a followed
+      # one is: it is not a suggestion the reader still needs.
+      assert st2.suggestions == []
 
       {:reply, {:ok, _}, st3} =
         Timeline.handle_call(

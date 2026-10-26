@@ -915,7 +915,21 @@ defmodule HighWire.Timeline do
         # the reader just pressed reads the old state back at them — and
         # the window waits on the same delta for the feed it was handed
         # a moment ago.
-        fold_relationship(state, content)
+        was = {state.follows, blocked_ids(state)}
+        state = fold_relationship(state, content)
+
+        if {state.follows, blocked_ids(state)} == was do
+          state
+        else
+          # A moved list answers the rail too: the feed just followed is
+          # still sitting in "Whom to follow" in front of the reader.
+          # The rows this list now covers leave at once, and the short
+          # sync starts so a replacement is drawn behind them rather
+          # than up to the 11s poll away.
+          state
+          |> drop_covered_suggestions()
+          |> schedule_suggestions_sync(@suggestions_sync_tries)
+        end
       else
         state
       end
@@ -950,6 +964,18 @@ defmodule HighWire.Timeline do
   end
 
   defp fold_relationship(state, _content), do: state
+
+  # The rows this list now covers leave the rail: they are answered
+  # already, and the reader is looking at the ones they just answered.
+  # The stored rows are what the next compare reads, so pruning them
+  # here is what keeps a stale row from coming back as "fresh" a poll
+  # later.
+  defp drop_covered_suggestions(state) do
+    stored = Map.get(state, :suggestions, [])
+    fresh = reject_covered(stored, state.follows, blocked_ids(state))
+
+    if fresh == stored, do: state, else: %{state | suggestions: fresh}
+  end
 
   @impl true
   def handle_cast({:set_activity, pid, true}, state) do
@@ -2285,9 +2311,15 @@ defmodule HighWire.Timeline do
   # which were ranked before the current block list was known. It also
   # keeps a block applied immediately — a refresh cannot offer back the
   # feed the reader just blocked, even if a re-rank has not run yet.
-  defp suggestions(state), do: reject_blocked(Suggester.get_suggestions(), blocked_ids(state))
+  defp suggestions(state),
+    do: reject_covered(Suggester.get_suggestions(), state.follows, blocked_ids(state))
 
-  defp reject_blocked(rows, blocked), do: Enum.reject(rows, &(&1["id"] in blocked))
+  # The rail's rows are "whom to follow": anyone this list now covers is
+  # answered already, whether the edge came from the graph, from a press
+  # a moment ago, or from the cache the rows were ranked against before
+  # either was known.
+  defp reject_covered(rows, follows, blocked),
+    do: Enum.reject(rows, &(&1["id"] in (follows ++ blocked)))
 
   defp blocked_ids(state), do: Map.get(state, :blocked, [])
 
@@ -2966,7 +2998,9 @@ defmodule HighWire.Timeline do
     # Suggestion rows need names/avatars too, or the sidebar shows bare
     # short ids for strangers — profile fetch covers them on top of the
     # usual participants + follows.
-    suggestions = state |> Map.get(:suggestions, []) |> reject_blocked(blocked_ids(state))
+    suggestions =
+      state |> Map.get(:suggestions, []) |> reject_covered(state.follows, blocked_ids(state))
+
     sugg_ids = for s <- suggestions, is_binary(s["id"]), do: s["id"]
 
     # Parked ensure_profiles ids ride along, so every finalize also
