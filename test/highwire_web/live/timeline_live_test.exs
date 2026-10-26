@@ -564,6 +564,40 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ "aria-pressed="
     end
 
+    test "every liker links to their profile, with none folded into a +N", %{conn: conn} do
+      now = 1_700_000_000_000
+      likers = for i <- 1..6, do: "@liker#{i}=.ed25519"
+
+      votes =
+        likers
+        |> Enum.with_index(1)
+        |> Enum.map(fn {id, i} ->
+          ssb_msg("%vote-#{i}.sha256", id, now - i * 1_000, %{
+            "type" => "vote",
+            "vote" => %{"link" => "%root-six.sha256", "value" => 1, "expression" => "like"}
+          })
+        end)
+
+      msgs =
+        [
+          ssb_msg("%root-six.sha256", "@alice:.ed25519", now - 9_000, %{
+            "type" => "post",
+            "text" => "the thing"
+          })
+        ] ++ votes
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      # Six voters, six faces, six ways to their profile: the list is
+      # the count, so the fifth and sixth are not cut off behind a "+N".
+      for id <- likers do
+        assert html =~ ~s(href="/profile?id=#{URI.encode_www_form(id)}")
+      end
+
+      refute html =~ ~s(text-faint">+2</span>)
+    end
+
     test "a refused like on the feed falls back to the last payload", %{conn: conn} do
       now = 1_700_000_000_000
 

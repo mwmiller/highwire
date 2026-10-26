@@ -30,6 +30,7 @@ defmodule HighWireWeb.TimelineLive do
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Heart
+  alias HighWireWeb.Components.Likers
   alias HighWireWeb.Components.Mentions
   alias HighWireWeb.Components.Nav
   alias HighWireWeb.MessageText
@@ -1586,8 +1587,7 @@ defmodule HighWireWeb.TimelineLive do
         :like_pending,
         MapSet.member?(assigns.ctx.like_pending, like_target(assigns.row))
       )
-      |> assign(:likers, Enum.take(likers, 4))
-      |> assign(:liker_more, max(length(likers) - 4, 0))
+      |> assign(:likers, likers)
       |> assign(
         :body_html,
         if(raw_text != "",
@@ -1674,15 +1674,9 @@ defmodule HighWireWeb.TimelineLive do
           <span :if={@row.replies > 0}>{@row.replies} replies</span>
           <div :if={@like_target} class="flex items-center gap-1.5">
             <Heart.pill key={@like_target} liked={@liked} pending={@like_pending} />
-            <span :for={liker <- @likers} title={Ident.display_name(liker, @ctx)} class="inline-flex">
-              <Avatar.avatar
-                id={liker}
-                size={16}
-                image={image_of(liker, @ctx.profiles)}
-                rev={@ctx.rev}
-              />
-            </span>
-            <span :if={@liker_more > 0} class="text-[11px] text-faint">+{@liker_more}</span>
+            <%!-- Every voter, each on their way to their profile: the
+            faces are the count, so nothing is folded into a "+N". --%>
+            <Likers.chips ids={@likers} profiles={@ctx.profiles} rev={@ctx.rev} />
           </div>
         </div>
 
@@ -1727,18 +1721,46 @@ defmodule HighWireWeb.TimelineLive do
   attr :ctx, :map, required: true
 
   defp vote_row(assigns) do
+    author = author_of(assigns.row.msg)
+
+    assigns =
+      assigns
+      |> assign(:author, author)
+      |> assign(:author_name, Ident.display_name(author, assigns.ctx))
+      |> assign(:author_href, profile_href(author))
+
     ~H"""
     <div class="flex items-center gap-3 px-4 py-2.5 text-sm text-sub hover:bg-panel">
-      <div class="w-10 shrink-0">
+      <%!-- The voter, not just the vote: their tile and their name both
+      open their profile, so a face in the feed leads where every other
+      face leads. --%>
+      <.link
+        :if={@author_href}
+        navigate={@author_href}
+        title={@author_name}
+        aria-label={@author_name}
+        class="block w-10 shrink-0"
+      >
         <Avatar.avatar
-          id={author_of(@row.msg)}
+          id={@author}
           size={24}
-          image={image_of(author_of(@row.msg), @ctx.profiles)}
+          image={image_of(@author, @ctx.profiles)}
+          rev={@ctx.rev}
+        />
+      </.link>
+      <div :if={@author_href == nil} class="w-10 shrink-0">
+        <Avatar.avatar
+          id={@author}
+          size={24}
+          image={image_of(@author, @ctx.profiles)}
           rev={@ctx.rev}
         />
       </div>
       <p class="min-w-0 flex-1">
-        <span class="text-ink">{Ident.display_name(author_of(@row.msg), @ctx)}</span>
+        <.link :if={@author_href} navigate={@author_href} class="text-ink hover:underline">
+          {@author_name}
+        </.link>
+        <span :if={@author_href == nil} class="text-ink">{@author_name}</span>
         liked <span class="text-ink">{vote_target_label(@row.msg, @ctx)}</span>
       </p>
       <span class="ml-auto text-xs text-faint"><.age ts={ts(@row.msg)} /></span>

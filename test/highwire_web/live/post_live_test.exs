@@ -386,6 +386,33 @@ defmodule HighWireWeb.PostLiveTest do
     assert html =~ ~s(id=") <> dom_id("%anchor-reply=.sha256") <> ~s(")
   end
 
+  test "every liker on the thread links to their profile", %{conn: conn} do
+    alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    likers = for i <- 1..6, do: "@liker#{i}=.ed25519"
+    key = Base.url_encode64("%many-likes=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    seed_thread(
+      view,
+      msg(alice, "%many-likes=.sha256", "the post"),
+      [msg(alice, "%many-likes-reply=.sha256", "the answer")],
+      likes_by: %{
+        "%many-likes=.sha256" => likers,
+        "%many-likes-reply=.sha256" => likers
+      }
+    )
+
+    html = render(view)
+
+    # The root and the reply each show every one of their likers — all
+    # six, not the first four with the rest cut off — and each face
+    # opens that person's profile.
+    for id <- likers do
+      href = ~s(href="/profile?id=#{URI.encode_www_form(id)}")
+      assert length(:binary.matches(html, href)) == 2, "expected #{id} on the root and the reply"
+    end
+  end
+
   test "the message the feed opened is the one brought into view", %{conn: conn} do
     alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
     key = Base.url_encode64("%land-on=.sha256", padding: false)

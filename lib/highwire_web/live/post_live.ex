@@ -20,6 +20,7 @@ defmodule HighWireWeb.PostLive do
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Heart
+  alias HighWireWeb.Components.Likers
   alias HighWireWeb.Components.Mentions
   alias HighWireWeb.Components.Nav
   alias HighWireWeb.MessageText
@@ -457,7 +458,7 @@ defmodule HighWireWeb.PostLive do
       assign(assigns,
         likes: likes,
         root_liked: root_liked,
-        root_likers: Enum.take(root_likers, 4),
+        root_likers: root_likers,
         participants: participants,
         thread_end_key: thread_end_key
       )
@@ -586,18 +587,9 @@ defmodule HighWireWeb.PostLive do
                         liked={@root_liked}
                         pending={MapSet.member?(@like_pending, @root["key"])}
                       />
-                      <span
-                        :for={liker <- @root_likers}
-                        title={Ident.display_name(liker, @profiles)}
-                        class="inline-flex"
-                      >
-                        <Avatar.avatar
-                          id={liker}
-                          size={16}
-                          image={image_of(liker, @profiles)}
-                          rev={@blob_rev}
-                        />
-                      </span>
+                      <%!-- Everyone who liked it, each linking through to
+                      their profile — the faces are the count. --%>
+                      <Likers.chips ids={@root_likers} profiles={@profiles} rev={@blob_rev} />
                     </div>
                   </div>
                 </div>
@@ -675,18 +667,11 @@ defmodule HighWireWeb.PostLive do
                     liked={reply["key"] in @my_likes}
                     pending={MapSet.member?(@like_pending, reply["key"])}
                   />
-                  <span
-                    :for={liker <- Enum.take(Map.get(@likes_by, reply["key"], []), 4)}
-                    title={Ident.display_name(liker, @profiles)}
-                    class="inline-flex"
-                  >
-                    <Avatar.avatar
-                      id={liker}
-                      size={16}
-                      image={image_of(liker, @profiles)}
-                      rev={@blob_rev}
-                    />
-                  </span>
+                  <Likers.chips
+                    ids={Map.get(@likes_by, reply["key"], [])}
+                    profiles={@profiles}
+                    rev={@blob_rev}
+                  />
                 </div>
               </div>
             </div>
