@@ -1241,6 +1241,46 @@ defmodule HighWireWeb.TimelineLiveTest do
     refute html =~ "whole store"
   end
 
+  test "a search hit's face and name lead to that person's profile", %{conn: conn} do
+    alice = "@alice:.ed25519"
+
+    {:ok, view, _html} = live(conn, "/")
+
+    notify(
+      view,
+      feed_payload([]) |> Map.put(:profiles, %{alice => %{name: "Alice", image: nil}})
+    )
+
+    render_change(view, "search", %{"q" => "needle"})
+    Process.sleep(50)
+
+    send(
+      view.pid,
+      {:search_results, "needle",
+       [
+         %{
+           key: "%needle-hit.sha256",
+           author: alice,
+           text: "a needle in the haystack",
+           ts: 1_700_000_000_000
+         }
+       ]}
+    )
+
+    html = render(view)
+    href = ~s(href="/profile?id=#{URI.encode_www_form(alice)}")
+    hit_id = "hit-" <> Base.url_encode64("%needle-hit.sha256", padding: false)
+
+    # The hit still opens its post — through the row's hook now, whose
+    # click handler steps aside for links, where a phx-click on the row
+    # would have raced the profile link for the same click. The face
+    # and the name go to the person.
+    assert html =~ ~s(phx-hook="OpenPost")
+    assert html =~ ~s(id="#{hit_id}")
+    assert html =~ ~s(aria-label="Alice")
+    assert count(html, href) == 2
+  end
+
   test "the composer steps aside while search results are up", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
     assert render(view) =~ ~s(id="compose")

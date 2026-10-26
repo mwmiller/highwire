@@ -945,6 +945,19 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
+  # A search hit opens the way a feed row does: through the OpenPost
+  # hook, whose click handler steps aside for links. A phx-click on the
+  # row would fire for a click on the byline too — the profile link and
+  # the row would race for the same click, and only one of them can win.
+  # Hooks need a DOM id of their own; only a message key can carry one.
+  defp hit_hook(key) when is_binary(key), do: "OpenPost"
+  defp hit_hook(_key), do: nil
+
+  defp hit_dom_id(key) when is_binary(key),
+    do: "hit-" <> Base.url_encode64(key, padding: false)
+
+  defp hit_dom_id(_key), do: nil
+
   # -- arrival shimmer ----------------------------------------------------
 
   # The identity of the top of the feed — what a wave can change.
@@ -1460,21 +1473,33 @@ defmodule HighWireWeb.TimelineLive do
                 </p>
                 <article
                   :for={h <- @search_hits}
-                  phx-click="open-post"
-                  phx-value-key={h.key}
+                  id={hit_dom_id(h.key)}
+                  phx-hook={hit_hook(h.key)}
+                  data-key={h.key}
                   class="flex cursor-pointer gap-3 border-b border-edge-soft px-4 py-3 transition last:border-b-0 hover:bg-raised"
                 >
-                  <Avatar.avatar
-                    :if={is_binary(h.author)}
-                    id={h.author}
-                    size={30}
-                    image={image_of(h.author, @profiles)}
-                    rev={@blob_rev}
-                    class="mt-0.5 shrink-0"
-                  />
+                  <div :if={is_binary(h.author)} class="shrink-0">
+                    <Avatar.face
+                      id={h.author}
+                      profiles={@profiles}
+                      rev={@blob_rev}
+                      size={30}
+                      class="mt-0.5"
+                    />
+                  </div>
                   <div class="min-w-0 flex-1">
                     <div class="flex items-baseline gap-2 text-xs">
-                      <span class="truncate font-medium text-paper">
+                      <.link
+                        :if={href = profile_href(h.author)}
+                        navigate={href}
+                        class="truncate font-medium text-paper hover:underline"
+                      >
+                        {Ident.display_name(h.author, @profiles)}
+                      </.link>
+                      <span
+                        :if={profile_href(h.author) == nil}
+                        class="truncate font-medium text-paper"
+                      >
                         {Ident.display_name(h.author, @profiles)}
                       </span>
                       <span class="shrink-0 text-faint">{format_ts(h.ts)}</span>
