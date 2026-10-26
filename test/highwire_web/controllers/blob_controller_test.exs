@@ -145,6 +145,23 @@ defmodule HighWireWeb.BlobControllerTest do
     assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
   end
 
+  test "an AVIF is served as a picture, its brand read from the box head", %{
+    conn: conn,
+    hex: hex,
+    cache: cache
+  } do
+    File.mkdir_p!(Path.dirname(cache))
+    # size(4) + "ftyp" + "avif" + minor + compatible brands carrying mif1
+    avif = <<24::32, "ftyp", "avif", 0::32, "miaf", "mif1">>
+    File.write!(cache, avif)
+
+    conn = get(conn, "/blob/#{hex}")
+
+    assert media_type(conn) == "image/avif"
+    assert response(conn, 200) == avif
+    assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+  end
+
   test "a player asking for part of a blob is answered with that part", %{
     conn: conn,
     hex: hex,

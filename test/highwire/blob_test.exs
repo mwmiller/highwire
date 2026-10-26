@@ -85,6 +85,12 @@ defmodule HighWire.BlobTest do
       assert Blob.media_type(ref_for(hex)) == :video
     end
 
+    test "an AVIF is a picture" do
+      hex = put_blob("avif", ftyp("avif", ["miaf", "mif1"]))
+
+      assert Blob.media_type(ref_for(hex)) == :image
+    end
+
     test "anything else is a file" do
       hex = put_blob("pdf", "%PDF-1.4 rest")
 
@@ -111,10 +117,66 @@ defmodule HighWire.BlobTest do
       assert Blob.content_type(path) == {:ok, "audio/mpeg"}
     end
 
+    test "an AVIF says image/avif from its brand at byte 8" do
+      hex = put_blob("avif-brand", ftyp("avif", ["miaf", "mif1"]))
+      path = Path.join(Blob.cache_root(), hex)
+
+      assert Blob.content_type(path) == {:ok, "image/avif"}
+    end
+
+    test "an AVIF sequence carries avis as its major brand" do
+      hex = put_blob("avis-brand", ftyp("avis", ["msf1", "avif"]))
+      path = Path.join(Blob.cache_root(), hex)
+
+      assert Blob.content_type(path) == {:ok, "image/avif"}
+    end
+
+    test "a structural brand is an AVIF when avif sits in the compatible brands" do
+      hex = put_blob("mif1-avif", ftyp("mif1", ["miaf", "mif1", "avif"]))
+      path = Path.join(Blob.cache_root(), hex)
+
+      assert Blob.content_type(path) == {:ok, "image/avif"}
+    end
+
+    test "a structural brand without avif in the compatible list is a file" do
+      hex = put_blob("mif1-heic", ftyp("mif1", ["miaf", "mif1", "heic"]))
+      path = Path.join(Blob.cache_root(), hex)
+
+      assert Blob.content_type(path) == {:ok, "application/octet-stream"}
+    end
+
+    test "a HEIC says file, not picture: no browser here draws it" do
+      hex = put_blob("heic-brand", ftyp("heic", ["mif1", "miaf"]))
+      path = Path.join(Blob.cache_root(), hex)
+
+      assert Blob.content_type(path) == {:ok, "application/octet-stream"}
+    end
+
+    test "an m4a says audio/mp4 from its brand at byte 8" do
+      hex = put_blob("m4a-brand", ftyp("M4A ", ["M4A ", "mp42"]))
+      path = Path.join(Blob.cache_root(), hex)
+
+      assert Blob.content_type(path) == {:ok, "audio/mp4"}
+    end
+
+    test "an mp4 says video/mp4 from its brand at byte 8" do
+      hex = put_blob("mp4-brand", ftyp("isom", ["iso2", "mp41"]))
+      path = Path.join(Blob.cache_root(), hex)
+
+      assert Blob.content_type(path) == {:ok, "video/mp4"}
+    end
+
     test "an unreadable file has no type" do
       assert Blob.content_type(Path.join(Blob.cache_root(), "nothing-here")) ==
                {:error, :unreadable}
     end
+  end
+
+  # A minimal ISOBMFF head: box size, "ftyp", the major brand, the
+  # minor version, then the compatible brands four bytes at a time.
+  defp ftyp(major, compatible) do
+    brands = Enum.map_join(compatible, & &1)
+    <<16 + byte_size(brands)::32, "ftyp", major::binary, 0::32, brands::binary>>
   end
 
   # A blob on disk, so the renderer and the route can see its bytes.

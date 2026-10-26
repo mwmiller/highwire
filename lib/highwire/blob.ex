@@ -124,7 +124,10 @@ defmodule HighWire.Blob do
   """
   @spec content_type(Path.t()) :: {:ok, binary()} | {:error, :unreadable}
   def content_type(path) do
-    case File.open(path, [:read], &IO.binread(&1, 16)) do
+    # 48 bytes: the ISOBMFF head runs size(4) + "ftyp"(4) + brand(4) +
+    # minor version(4), and the compatible brands that can carry `avif`
+    # start at byte 16 — the first eight of them fit here.
+    case File.open(path, [:read], &IO.binread(&1, 48)) do
       {:ok, head} -> {:ok, mime(head)}
       {:error, _} -> {:error, :unreadable}
     end
@@ -205,9 +208,39 @@ defmodule HighWire.Blob do
   defp mime(<<"OggS", _::binary>>), do: "audio/ogg"
   defp mime(<<"fLaC", _::binary>>), do: "audio/flac"
   defp mime(<<"RIFF", _::binary-size(4), "WAVE", _::binary>>), do: "audio/wav"
-  defp mime(<<"ftypM4A ", _::binary>>), do: "audio/mp4"
-  defp mime(<<"ftyp", _::binary>>), do: "video/mp4"
+
+  # ISOBMFF — the box format AVIF, HEIC, MP4 and M4A all share. The
+  # signature is never at byte 0: four bytes of box size come first,
+  # then "ftyp", then the brand that says what the file is. `avif` is a
+  # still image and `avis` an image sequence; encoders that file AVIF
+  # under a structural brand (`mif1`, `msf1`, `miaf`) name `avif` only
+  # among the compatible brands behind the minor version, so those are
+  # looked for there too. The HEIC family names a picture no browser
+  # here can draw, so it stays a file: an image that will not render is
+  # pulled from the post outright, while a file link still opens.
+  defp mime(<<_::32, "ftyp", brand::binary-size(4), _::binary>>) when brand in ["avif", "avis"],
+    do: "image/avif"
+
+  defp mime(<<_::32, "ftyp", brand::binary-size(4), _::binary-size(4), compatible::binary>>)
+       when brand in ["mif1", "msf1", "miaf"] do
+    if compatible_brand?(compatible), do: "image/avif", else: "application/octet-stream"
+  end
+
+  defp mime(<<_::32, "ftyp", brand::binary-size(4), _::binary>>)
+       when brand in ["heic", "heix", "heim", "heis", "hevc", "hevx"],
+       do: "application/octet-stream"
+
+  defp mime(<<_::32, "ftyp", "M4A ", _::binary>>), do: "audio/mp4"
+  defp mime(<<_::32, "ftyp", "qt", _::binary>>), do: "video/quicktime"
+  defp mime(<<_::32, "ftyp", _brand::binary-size(4), _::binary>>), do: "video/mp4"
   defp mime(<<0x1A, 0x45, 0xDF, 0xA3, _::binary>>), do: "video/webm"
   defp mime(<<"%PDF-", _::binary>>), do: "application/pdf"
   defp mime(_), do: "application/octet-stream"
+
+  # A compatible brand sits every four bytes from byte 16; the head
+  # read carries the first eight of them.
+  defp compatible_brand?(<<"avif", _::binary>>), do: true
+  defp compatible_brand?(<<"avis", _::binary>>), do: true
+  defp compatible_brand?(<<_::binary-size(4), rest::binary>>), do: compatible_brand?(rest)
+  defp compatible_brand?(_head), do: false
 end
