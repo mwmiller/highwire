@@ -902,11 +902,20 @@ defmodule HighWire.Timeline do
     # and folds nothing twice.
     state =
       if contact?(envelope) do
-        %{
+        state = %{
           state
           | contact_msgs: [envelope | state.contact_msgs],
             collapsed_contacts: fold_contacts(state.collapsed_contacts, [envelope])
         }
+
+        # The relationship itself, beside its row: follows and blocked
+        # are what the payload carries and what the next reload opens
+        # feeds from. Left to the engine's own delta, the press and the
+        # payload disagree for as long as that delta takes — the button
+        # the reader just pressed reads the old state back at them — and
+        # the window waits on the same delta for the feed it was handed
+        # a moment ago.
+        fold_relationship(state, content)
       else
         state
       end
@@ -915,6 +924,32 @@ defmodule HighWire.Timeline do
   end
 
   defp inject_published(state, _key, _content), do: state
+
+  # One edge of the graph, the way the press that wrote it meant it. The
+  # engine's stateStream says the same thing later and folds nothing
+  # twice; this is the read model agreeing with itself in between.
+  defp fold_relationship(state, %{"contact" => id} = content) when is_binary(id) do
+    case contact_action(content) do
+      :followed ->
+        %{state | follows: Enum.uniq([id | state.follows])}
+
+      :unfollowed ->
+        %{state | follows: List.delete(state.follows, id)}
+
+      # A block arrives with the follow's retraction already in it.
+      :blocked ->
+        %{
+          state
+          | follows: List.delete(state.follows, id),
+            blocked: Enum.uniq([id | blocked_ids(state)])
+        }
+
+      :unblocked ->
+        %{state | blocked: List.delete(blocked_ids(state), id)}
+    end
+  end
+
+  defp fold_relationship(state, _content), do: state
 
   @impl true
   def handle_cast({:set_activity, pid, true}, state) do

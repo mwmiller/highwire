@@ -1902,6 +1902,12 @@ defmodule HighWire.TimelineTest do
       assert %{rows: %{{"@me=.ed25519", :followed} => [%{contacts: ["@ktorn=.ed25519"]}]}} =
                st2.collapsed_contacts
 
+      # And so does the relationship itself: follows is what the payload
+      # carries and what the next reload opens feeds from, so a press
+      # that left it to the engine's delta would show the reader the
+      # state they just undid and hold the feed back with it.
+      assert st2.follows == ["@ktorn=.ed25519"]
+
       # And the payload carries the row.
       assert Enum.any?(st2.messages.feed, fn row ->
                row.kind == :contact and row.contact_action == :followed and
@@ -1911,6 +1917,63 @@ defmodule HighWire.TimelineTest do
       # The envelope is filed as known, so the drain's later delivery of
       # the same message folds nothing twice.
       assert [%{"key" => ^key, "value" => %{"content" => ^follow}} | _] = st2.contact_msgs
+    end
+
+    # The same fold, the other edges. A block retracts the follow with
+    # it — that is what the reader asked for — and an unblock is its own
+    # direction: reading it as a follow would claim the relationship the
+    # press just refused.
+    test "a published block and unfollow fold into follows and blocked" do
+      {:ok, client} = FakeClient.start_link(nil)
+      peer = "@ktorn=.ed25519"
+
+      st = %{
+        client: client,
+        self_id: "@me=.ed25519",
+        follows: [peer],
+        blocked: [],
+        contact_msgs: [],
+        collapsed_contacts: %{by_group: %{}, rows: %{}},
+        acc: [],
+        messages: %{profiles: %{}},
+        blob_rev: 0,
+        status: :ok,
+        gen: 0,
+        reload_timer: nil,
+        pending: %{},
+        done_count: 0,
+        profile_fetching?: false
+      }
+
+      {:reply, {:ok, _}, st2} =
+        Timeline.handle_call(
+          {:publish_content, Timeline.block_content(peer, true)},
+          {self(), make_ref()},
+          st
+        )
+
+      assert st2.follows == []
+      assert st2.blocked == [peer]
+
+      {:reply, {:ok, _}, st3} =
+        Timeline.handle_call(
+          {:publish_content, Timeline.block_content(peer, false)},
+          {self(), make_ref()},
+          st2
+        )
+
+      assert st3.blocked == []
+      assert st3.follows == []
+
+      {:reply, {:ok, _}, st4} =
+        Timeline.handle_call(
+          {:publish_content, Timeline.contact_content(peer, false)},
+          {self(), make_ref()},
+          st
+        )
+
+      assert st4.follows == []
+      assert st4.blocked == []
     end
   end
 

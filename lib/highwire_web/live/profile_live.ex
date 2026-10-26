@@ -316,11 +316,11 @@ defmodule HighWireWeb.ProfileLive do
   end
 
   # The publish has landed, and the rail reads as the press. The payload
-  # that carries the new relationship comes back with the next index
-  # refresh — five seconds away at best — and until it does the button
-  # the reader pressed would still show the state the press undid, as if
-  # the click had done nothing. The next payload confirms this, or
-  # corrects it.
+  # that carries the same relationship is built by that publish, so the
+  # two agree while the engine's own delta is still on its way — where a
+  # payload that knew only the delta would hand back the state the press
+  # just undid, as if the click had done nothing. If the delta ever
+  # disagrees, the payload it builds corrects this.
   defp follow_settled(socket, id, true), do: update(socket, :follows, &List.delete(&1, id))
   defp follow_settled(socket, id, false), do: update(socket, :follows, &Enum.uniq([id | &1]))
 
