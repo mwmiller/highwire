@@ -1672,7 +1672,10 @@ defmodule HighWireWeb.TimelineLive do
 
         <div class="mt-1.5 flex items-center gap-4 text-xs text-dim">
           <span :if={@row.replies > 0}>{@row.replies} replies</span>
-          <div :if={@like_target} class="flex items-center gap-1.5">
+          <%!-- A wrap, so a post the whole crowd liked adds lines under
+          it rather than pushing the row — and the column it sits in —
+          sideways off the screen. --%>
+          <div :if={@like_target} class="flex flex-wrap items-center gap-1.5">
             <Heart.pill key={@like_target} liked={@liked} pending={@like_pending} />
             <%!-- Every voter, each on their way to their profile: the
             faces are the count, so nothing is folded into a "+N". --%>

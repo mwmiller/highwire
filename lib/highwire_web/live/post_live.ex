@@ -581,7 +581,10 @@ defmodule HighWireWeb.PostLive do
                     <span :if={length(@replies) > 0}>
                       {length(@replies)} {if length(@replies) == 1, do: "reply", else: "replies"}
                     </span>
-                    <div class="flex items-center gap-1.5">
+                    <%!-- A wrap, so a post the whole crowd liked adds
+                    lines under it rather than running the row past the
+                    edge of the page. --%>
+                    <div class="flex flex-wrap items-center gap-1.5">
                       <Heart.pill
                         key={@root["key"]}
                         liked={@root_liked}
@@ -661,7 +664,9 @@ defmodule HighWireWeb.PostLive do
                   rev={@blob_rev}
                 />
 
-                <div class="mt-1.5 flex items-center gap-1.5">
+                <%!-- A wrap: the same reason as the root's line — many
+                voters add lines, never width. --%>
+                <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
                   <Heart.pill
                     key={reply["key"]}
                     liked={reply["key"] in @my_likes}
