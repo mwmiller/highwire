@@ -688,7 +688,7 @@ defmodule HighWireWeb.ProfileLive do
             id={post_dom_id(msg)}
             phx-hook="OpenPost"
             data-key={msg["key"]}
-            class="cursor-pointer border-b border-edge-soft py-3 text-sm hover:bg-panel"
+            class="cursor-pointer border-b border-edge-soft py-3 text-sm odd:bg-panel hover:bg-active"
           >
             <div class="md-body text-ink">
               {raw(Markdown.to_html(text(msg), blob_rev: @blob_rev))}
