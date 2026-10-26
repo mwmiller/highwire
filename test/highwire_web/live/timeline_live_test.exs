@@ -860,6 +860,22 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert MapSet.member?(wants, author)
     end
 
+    test "the rail asks Timeline to profile suggestion rows no payload carried", %{conn: conn} do
+      id = "@railsuggest=.ed25519"
+
+      {:ok, view, _html} = live(conn, "/")
+      # What a freshly drawn set looks like: the rows arrive, and the
+      # profiles map — built from window participants and follows —
+      # carries nothing for them.
+      notify(view, feed_payload([], suggestions: [%{"id" => id, "followers" => 7}]))
+
+      # Asked for on render, not on the next finalize: the feed id of a
+      # suggestion is neither followed nor in the window, so without
+      # this it would wait out the 13s heartbeat on its identicon.
+      wants = :sys.get_state(HighWire.Timeline).profile_wants
+      assert MapSet.member?(wants, id)
+    end
+
     test "an edited post is marked edited", %{conn: conn} do
       now = 1_700_000_000_000
 

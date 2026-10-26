@@ -710,19 +710,24 @@ defmodule HighWireWeb.TimelineLive do
     |> request_missing_profiles()
   end
 
-  # Cursor pages, chips and likers land outside the window payload's
-  # profile coverage, so whatever the rows now render that no payload
-  # ever shipped a profile for goes back to the Timeline as an ensure.
-  # Without this the older you page, the more rows sit on identicons.
+  # Cursor pages, chips, likers and the rail's suggestions land outside
+  # the window payload's profile coverage, so whatever the rows now
+  # render that no payload ever shipped a profile for goes back to the
+  # Timeline as an ensure. Without this the older you page, the more
+  # rows sit on identicons — and a suggestion never helps: its feed is
+  # not followed and not in the window, so no finalize sees it until
+  # some other traffic finalizes, up to 13s of bare short id away.
   defp request_missing_profiles(socket) do
     known = Map.get(socket.assigns, :profiles, %{})
     likes_by = Map.get(socket.assigns, :likes_by, %{})
+    suggestions = Map.get(socket.assigns, :suggestions, [])
 
     missing =
       socket.assigns.paged
       |> Map.values()
       |> Enum.flat_map(&Map.get(&1, :rows, []))
       |> Enum.flat_map(&row_profile_ids(&1, likes_by))
+      |> Enum.concat(rail_ids(suggestions))
       |> Enum.reject(&Map.has_key?(known, &1))
       |> Enum.uniq()
 
@@ -739,6 +744,13 @@ defmodule HighWireWeb.TimelineLive do
     [author_of(row.msg), Map.get(row, :participants, []), contact_people(row), likers]
     |> List.flatten()
     |> Enum.filter(&(is_binary(&1) and String.starts_with?(&1, "@")))
+  end
+
+  # The rail's subject, ranked off-process: rows dropped without a
+  # usable id are already gone, so what is left is exactly who the
+  # suggestion links are about.
+  defp rail_ids(suggestions) when is_list(suggestions) do
+    for s <- suggestions, is_binary(s["id"]), do: s["id"]
   end
 
   # Everyone a contact row is about — the lists are the row's action
