@@ -26,39 +26,8 @@ defmodule HighWireWeb.Components.Likers do
   def chips(assigns) do
     ~H"""
     <span :for={id <- @ids} title={Ident.display_name(id, @profiles)} class="inline-flex">
-      <.link
-        :if={href = profile_href(id)}
-        navigate={href}
-        aria-label={Ident.display_name(id, @profiles)}
-        class="block hover:opacity-80"
-      >
-        <Avatar.avatar id={id} size={@size} image={image_of(id, @profiles)} rev={@rev} />
-      </.link>
-      <Avatar.avatar
-        :if={profile_href(id) == nil}
-        id={id}
-        size={@size}
-        image={image_of(id, @profiles)}
-        rev={@rev}
-      />
+      <Avatar.face id={id} profiles={@profiles} rev={@rev} size={@size} />
     </span>
     """
   end
-
-  # Only a feed id has a profile page. Anything else ("unknown", from a
-  # row half-built out of an engine answer) keeps its tile unlinked
-  # rather than pointing at a page that cannot name it.
-  defp profile_href("@" <> _ = id), do: "/profile?id=" <> URI.encode_www_form(id)
-  defp profile_href(_id), do: nil
-
-  defp image_of(id, %{profiles: profiles}), do: image_of(id, profiles)
-
-  defp image_of(id, profiles) when is_map(profiles) do
-    case profiles do
-      %{^id => %{image: image}} -> image
-      _ -> nil
-    end
-  end
-
-  defp image_of(_id, _profiles), do: nil
 end

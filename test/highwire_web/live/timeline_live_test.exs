@@ -598,6 +598,32 @@ defmodule HighWireWeb.TimelineLiveTest do
       refute html =~ ~s(text-faint">+2</span>)
     end
 
+    test "a row's face opens that person's profile, like every other face", %{conn: conn} do
+      now = 1_700_000_000_000
+      alice = "@alice:.ed25519"
+
+      msgs = [
+        ssb_msg("%face-row.sha256", alice, now - 1_000, %{
+          "type" => "post",
+          "text" => "hello"
+        })
+      ]
+
+      payload =
+        feed_payload(msgs)
+        |> Map.put(:profiles, %{alice => %{name: "Alice", image: nil}})
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, payload)
+
+      href = ~s(href="/profile?id=#{URI.encode_www_form(alice)}")
+
+      # The tile and the byline are two ways to the same page — and the
+      # tile carries the name itself, so it says who it is on its own.
+      assert html =~ ~s(aria-label="Alice")
+      assert count(html, href) == 2
+    end
+
     test "a refused like on the feed falls back to the last payload", %{conn: conn} do
       now = 1_700_000_000_000
 

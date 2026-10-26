@@ -1609,11 +1609,11 @@ defmodule HighWireWeb.TimelineLive do
       data-key={@row.msg["key"]}
     >
       <div class="w-10 shrink-0">
-        <Avatar.avatar
+        <Avatar.face
           id={@author}
-          size={40}
-          image={image_of(@author, @ctx.profiles)}
+          profiles={@ctx}
           rev={@ctx.rev}
+          size={40}
           class="mt-0.5"
         />
       </div>
@@ -1802,12 +1802,7 @@ defmodule HighWireWeb.TimelineLive do
     ~H"""
     <div class="flex items-center gap-3 px-4 py-2.5 text-sm text-sub hover:bg-panel">
       <div class="w-10 shrink-0">
-        <Avatar.avatar
-          id={@author}
-          size={24}
-          image={image_of(@author, @ctx.profiles)}
-          rev={@ctx.rev}
-        />
+        <Avatar.face id={@author} profiles={@ctx} rev={@ctx.rev} size={24} />
       </div>
       <%!-- A div, not a p: each chip carries the avatar component's
       own div, and a div inside a p makes the HTML parser close the p —
@@ -1887,11 +1882,11 @@ defmodule HighWireWeb.TimelineLive do
     ~H"""
     <div class="flex items-center gap-3 px-4 py-2.5 text-sm italic text-faint hover:bg-panel">
       <div class="w-10 shrink-0">
-        <Avatar.avatar
+        <Avatar.face
           id={author_of(@row.msg)}
-          size={24}
-          image={image_of(author_of(@row.msg), @ctx.profiles)}
+          profiles={@ctx}
           rev={@ctx.rev}
+          size={24}
         />
       </div>
       <p class="min-w-0 flex-1">

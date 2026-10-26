@@ -43,4 +43,72 @@ defmodule HighWireWeb.Components.Avatar do
     </div>
     """
   end
+
+  @doc """
+  The tile for one person, on its way to that person's profile.
+
+  Every face in the app answers the same way — a face is a person, so
+  it opens their page — which is what makes a tile worth recognising
+  rather than decoration. The tile carries the name as its title and
+  its accessible label, so a face says who it is on hover and to a
+  screen reader even where the byline beside it does not.
+
+  An id that cannot have a profile page ("unknown", from a row
+  half-built out of an engine answer) keeps its tile unlinked rather
+  than pointing at a page that cannot name it.
+  """
+
+  attr :id, :string, required: true, doc: "the feed id the tile stands for"
+
+  attr :profiles, :map,
+    default: %{},
+    doc: "the payload's id → profile map (or a ctx carrying one)"
+
+  attr :size, :integer, default: 40
+  attr :rev, :any, default: nil, doc: "blob_rev — appends ?v=<n> when positive"
+  attr :class, :any, default: nil, doc: "extra classes for the tile"
+
+  def face(assigns) do
+    ~H"""
+    <.link
+      :if={href = profile_href(@id)}
+      navigate={href}
+      title={Ident.display_name(@id, @profiles)}
+      aria-label={Ident.display_name(@id, @profiles)}
+      class="block hover:opacity-80"
+    >
+      <.avatar
+        id={@id}
+        size={@size}
+        image={image_of(@id, @profiles)}
+        rev={@rev}
+        class={@class}
+      />
+    </.link>
+    <.avatar
+      :if={profile_href(@id) == nil}
+      id={@id}
+      size={@size}
+      image={image_of(@id, @profiles)}
+      rev={@rev}
+      class={@class}
+    />
+    """
+  end
+
+  # Only a feed id has a profile page. Anything else ("unknown") keeps
+  # its tile unlinked rather than pointing at a page that cannot name it.
+  defp profile_href("@" <> _ = id), do: "/profile?id=" <> URI.encode_www_form(id)
+  defp profile_href(_id), do: nil
+
+  defp image_of(id, %{profiles: profiles}), do: image_of(id, profiles)
+
+  defp image_of(id, profiles) when is_map(profiles) do
+    case profiles do
+      %{^id => %{image: image}} -> image
+      _ -> nil
+    end
+  end
+
+  defp image_of(_id, _profiles), do: nil
 end

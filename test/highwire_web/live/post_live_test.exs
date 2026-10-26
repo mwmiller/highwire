@@ -413,6 +413,34 @@ defmodule HighWireWeb.PostLiveTest do
     end
   end
 
+  test "the root and reply authors' faces open their profiles", %{conn: conn} do
+    alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    bob = "@bob:.ed25519"
+    key = Base.url_encode64("%face-thread=.sha256", padding: false)
+    {:ok, view, _html} = live(conn, "/post/" <> key)
+
+    seed_thread(
+      view,
+      msg(alice, "%face-thread=.sha256", "the post"),
+      [msg(bob, "%face-reply=.sha256", "the answer")],
+      profiles: %{
+        alice => %{name: "Alice", image: nil},
+        bob => %{name: "Bob", image: nil}
+      }
+    )
+
+    html = render(view)
+
+    # Each author's face leads where their name already led. The thread
+    # rail lists them both once more, so three links per author — and
+    # the face carries the name itself, which is how it can be found.
+    for {id, name} <- [{alice, "Alice"}, {bob, "Bob"}] do
+      href = ~s(href="/profile?id=#{URI.encode_www_form(id)}")
+      assert html =~ ~s(aria-label="#{name}")
+      assert length(:binary.matches(html, href)) == 3, "expected rail, name and face for #{name}"
+    end
+  end
+
   test "the message the feed opened is the one brought into view", %{conn: conn} do
     alice = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
     key = Base.url_encode64("%land-on=.sha256", padding: false)

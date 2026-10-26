@@ -516,11 +516,11 @@ defmodule HighWireWeb.PostLive do
               class="border-b border-edge pb-6"
             >
               <div class="flex items-start gap-3">
-                <Avatar.avatar
+                <Avatar.face
                   id={author_of(@root)}
-                  size={48}
-                  image={image_of(author_of(@root), @profiles)}
+                  profiles={@profiles}
                   rev={@blob_rev}
+                  size={48}
                   class="mt-0.5"
                 />
                 <div class="min-w-0 flex-1">
@@ -617,11 +617,11 @@ defmodule HighWireWeb.PostLive do
               data-thread-end={reply["key"] == @thread_end_key}
               class="flex gap-3 border-b border-edge-soft py-4"
             >
-              <Avatar.avatar
+              <Avatar.face
                 id={author_of(reply)}
-                size={32}
-                image={image_of(author_of(reply), @profiles)}
+                profiles={@profiles}
                 rev={@blob_rev}
+                size={32}
                 class="mt-0.5"
               />
               <div class="min-w-0 flex-1">
