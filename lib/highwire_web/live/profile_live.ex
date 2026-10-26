@@ -42,6 +42,7 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:id, nil)
      |> assign(:profile, nil)
      |> assign(:messages, [])
+     |> assign(:posts_error, nil)
      |> assign(:resume, nil)
      |> assign(:follows, [])
      |> assign(:blocked, [])
@@ -183,6 +184,30 @@ defmodule HighWireWeb.ProfileLive do
       {:noreply, assign(socket, :loading_more, true)}
     else
       {:noreply, socket}
+    end
+  end
+
+  # The page that would not come is asked for again, by hand. Only the
+  # posts are refetched: the identity around them already answered, and a
+  # second ask must not clear a follow still on its way. The answer is
+  # read here rather than in a message so no render ever stands between
+  # the press and its outcome.
+  def handle_event("retry-posts", _params, socket) do
+    case socket.assigns.id do
+      nil ->
+        {:noreply, socket}
+
+      id ->
+        {messages, resume, more, posts_error} = fetch_posts(id)
+
+        {:noreply,
+         assign(socket,
+           messages: messages,
+           posts_error: posts_error,
+           resume: resume,
+           more: more,
+           loading_more: false
+         )}
     end
   end
 
@@ -358,21 +383,14 @@ defmodule HighWireWeb.ProfileLive do
 
   defp load(socket, id) do
     viewer = Timeline.viewer()
-
-    {status, messages, resume, more} =
-      case Timeline.profile_feed(id) do
-        {:ok, %{rows: rows, resume: resume, more: more}} ->
-          {viewer.status, Enum.filter(rows, &post?/1), resume, more}
-
-        {:error, _reason} ->
-          {viewer.status, [], nil, false}
-      end
+    {messages, resume, more, posts_error} = fetch_posts(id)
 
     assign(socket,
-      status: status,
+      status: viewer.status,
       id: id,
       profile: Timeline.profile(id),
       messages: messages,
+      posts_error: posts_error,
       resume: resume,
       more: more,
       follows: viewer.follows,
@@ -389,6 +407,25 @@ defmodule HighWireWeb.ProfileLive do
       loading_more: false
     )
   end
+
+  # The page either comes or it does not, and the two are told apart
+  # here: a failure carries its reason forward as the reason, because
+  # folding it into an empty page is what makes a load that never
+  # landed read as a feed with nothing in it.
+  defp fetch_posts(id) do
+    case Timeline.profile_feed(id) do
+      {:ok, %{rows: rows, resume: resume, more: more}} ->
+        {Enum.filter(rows, &post?/1), resume, more, nil}
+
+      {:error, reason} ->
+        {[], nil, false, posts_error(reason)}
+    end
+  end
+
+  # The posts could not be read, so the page says that — under a press
+  # that asks again — rather than standing in for an empty feed.
+  defp posts_error(:offline), do: "Not connected yet."
+  defp posts_error(_reason), do: "Couldn't load posts yet."
 
   # A publish the engine refuses says so under the buttons: the working
   # state goes with the reply, so without these lines a click that did
@@ -705,7 +742,22 @@ defmodule HighWireWeb.ProfileLive do
             Posts
           </h2>
 
-          <div :if={@messages == []} class="py-8 text-sm italic text-faint">
+          <%!-- Two ways this list starts, and they are different claims:
+          a feed with nothing in it, and a page that never came. The
+          second says so and carries the press that asks again — read as
+          the first, a failed load would pass for a silent feed. --%>
+          <div
+            :if={@messages == [] and @posts_error}
+            id="profile-posts-error"
+            class="py-8 text-sm"
+          >
+            <p role="status" class="text-bad">{@posts_error}</p>
+            <button type="button" phx-click="retry-posts" class="btn mt-3">
+              Try again
+            </button>
+          </div>
+
+          <div :if={@messages == [] and @posts_error == nil} class="py-8 text-sm italic text-faint">
             No posts yet.
           </div>
 

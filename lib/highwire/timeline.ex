@@ -112,10 +112,21 @@ defmodule HighWire.Timeline do
   @other_cooloff_ms :timer.minutes(20)
 
   # One page of a roots-shaped view — a profile's feed, a tab. The engine
-  # honors this; the drain bounds itself to it too, because the drain runs
-  # inside the Timeline's GenServer call.
+  # honors this; the reader bounds itself to it too, whether that is the
+  # drain running inside the Timeline's GenServer call or a page read
+  # outside one.
   @profile_page 60
   @roots_page 30
+
+  # How long a profile page waits for rows the shared connection is still
+  # carrying. The heartbeat's reload opens hundreds of streams on that one
+  # connection, and this page's own rows queue behind them: on a busy
+  # connection they have been measured landing up to eight seconds after
+  # the ask, where the drain's two-second quiet window gave up on them and
+  # dropped every one as a stray. The wait stays under the fifteen seconds
+  # the caller holds the call for, so the answer always beats the caller's
+  # own give-up.
+  @page_wait_ms 10_000
 
   def topic, do: @topic
 
@@ -747,6 +758,10 @@ defmodule HighWire.Timeline do
       follows: [],
       blocked: [],
       pending: %{},
+      # Profile pages asked for and not yet answered: the call that asked
+      # returned without a reply, and these records hold where the reply
+      # goes until the rows land (see handle_call/3 for profile_feed).
+      pages: %{},
       acc: [],
       messages: empty_payload(),
       blob_ls_ref: nil,
@@ -809,8 +824,19 @@ defmodule HighWire.Timeline do
      }, state}
   end
 
-  def handle_call({:profile_feed, id, resume}, _from, state) do
-    {:reply, fetch_profile(state, id, resume), state}
+  # The page is asked for here and answered from the stream: the call
+  # returns without a reply while the rows are on their way, so a
+  # connection busy with the heartbeat's reload delays this page without
+  # ever failing it, and without holding the GenServer for the wait.
+  def handle_call({:profile_feed, id, resume}, from, state) do
+    case fetch_profile(state, id, resume) do
+      {:pending, ref} ->
+        Logger.debug("timeline: profile roots page waiting for its rows ref=#{inspect(ref)}")
+        {:noreply, hold_page(state, ref, from)}
+
+      reply ->
+        {:reply, reply, state}
+    end
   end
 
   def handle_call({:feed, view, resume}, _from, state) do
@@ -1246,11 +1272,11 @@ defmodule HighWire.Timeline do
     end
   end
 
-  # One-shot history pull on the shared client: open the stream, drain
-  # it here (the GenServer mailbox receives it while the caller waits),
-  # and return the messages. `order: "timestamp"` is the profile page's
-  # chronological view — without it the engine pages by thread activity,
-  # so a bumped thread jumps above more recent posts.
+  # One-shot history pull on the shared client: open the stream and hand
+  # back the ref — the rows are read in handle_info/3 as they land, never
+  # drained here (see @page_wait_ms for why). `order: "timestamp"` is the
+  # profile page's chronological view — without it the engine pages by
+  # thread activity, so a bumped thread jumps above more recent posts.
   #
   # A stream that would not open is a failed page, not an empty one: the
   # reader is owed a refusal they can recognize and ask against, never
@@ -1266,7 +1292,7 @@ defmodule HighWire.Timeline do
              [props],
              self()
            ) do
-        {:ok, ref} -> settle_page("profile roots", profile_page(ref))
+        {:ok, ref} -> {:pending, ref}
         other -> page_error("profile roots", {:stream, other})
       end
     else
@@ -1276,40 +1302,80 @@ defmodule HighWire.Timeline do
     kind, reason -> page_raised("profile roots", kind, reason)
   end
 
-  defp profile_page(ref) do
-    # Drain the page plus the marker frame that follows it; the surplus
-    # row the extra read may catch is trimmed — the page stays 60 wide.
-    # How the stream ended travels with it: `:done` is the engine saying
-    # the history is spent, while a timeout or an error frame says only
-    # that this attempt failed — the rows alone cannot tell the two
-    # apart, and reporting the second as the first is what makes a
-    # failed load read as the end of the feed.
-    case drain_stream(ref, @profile_page) do
-      {status, frames} when status in [:ok, :done] ->
-        {markers, rows} = Enum.split_with(frames, &(&1["marker"] == true))
-        rows = Enum.take(rows, @profile_page)
-        cursor = private_cursor(markers)
+  # The caller's answer is owed from here on: its rows are still on the
+  # wire, so the call has returned without a reply and this record holds
+  # where that reply goes. The timer is the backstop for rows that never
+  # come — without it a silent stream would leave the caller waiting the
+  # full length of its own call.
+  defp hold_page(state, ref, from) do
+    page = %{
+      from: from,
+      acc: [],
+      at: System.monotonic_time(:millisecond),
+      timer: Process.send_after(self(), {:page_timeout, ref}, @page_wait_ms)
+    }
 
-        %{
-          # Sorted here, not just requested: an engine that does not
-          # understand `order: "timestamp"` pages by thread activity, which
-          # interleaves a bumped thread above more recent posts. Every row
-          # carries the root timestamp either way, so the visible order is
-          # fixed regardless of what the engine did. The set is still the
-          # engine's window — this cannot recover a post that window
-          # dropped — but the two nearly coincide outside feeds where old
-          # threads stay busy.
-          rows:
-            rows
-            |> Enum.map(&Map.drop(&1, ["latestReplies", "bumps"]))
-            |> Enum.sort_by(& &1["timestamp"], :desc),
-          resume: cursor,
-          more: is_integer(cursor)
-        }
+    Map.put(state, :pages, Map.put(Map.get(state, :pages, %{}), ref, page))
+  end
 
-      {:error, reason} ->
-        {:error, reason}
+  # One page, one answer: the reply goes to whoever asked, the ref stops
+  # being watched, and the backstop timer is taken back with it, so a page
+  # that has already answered is never asked about again.
+  defp answer_page(state, ref, reply) do
+    case Map.fetch(state.pages, ref) do
+      {:ok, page} ->
+        _ = Process.cancel_timer(page.timer)
+
+        if is_map(reply) do
+          Logger.debug(
+            "timeline: profile roots rows landed #{System.monotonic_time(:millisecond) - page.at}ms after the ask"
+          )
+        end
+
+        GenServer.reply(page.from, reply)
+        %{state | pages: Map.delete(state.pages, ref)}
+
+      :error ->
+        state
     end
+  end
+
+  # Pages ride the connection that opened them: with that connection gone
+  # their rows are not coming, so the callers waiting on them are refused
+  # now rather than left to run into their own give-up.
+  defp fail_pages(state, reason) do
+    state
+    |> Map.get(:pages, %{})
+    |> Enum.reduce(state, fn {ref, _page}, acc -> answer_page(acc, ref, {:error, reason}) end)
+  end
+
+  # The page the rows make: markers split off for the cursor, the surplus
+  # row an extra read may catch trimmed so the page stays 60 wide, and the
+  # rows sorted into the order they are read in. How the stream ended is
+  # decided before the frames get here — the rows alone cannot tell a
+  # quiet end from a cut one, and reporting the second as the first is
+  # what makes a failed load read as the end of the feed.
+  defp profile_page_frames(frames) do
+    {markers, rows} = Enum.split_with(frames, &(&1["marker"] == true))
+    rows = Enum.take(rows, @profile_page)
+    cursor = private_cursor(markers)
+
+    %{
+      # Sorted here, not just requested: an engine that does not
+      # understand `order: "timestamp"` pages by thread activity, which
+      # interleaves a bumped thread above more recent posts. Every row
+      # carries the root timestamp either way, so the visible order is
+      # fixed regardless of what the engine did. The set is still the
+      # engine's window — this cannot recover a post that window
+      # dropped — but the two nearly coincide outside feeds where old
+      # threads stay busy.
+      rows:
+        rows
+        |> Enum.map(&Map.drop(&1, ["latestReplies", "bumps"]))
+        |> Enum.sort_by(& &1["timestamp"], :desc),
+      resume: cursor,
+      more: is_integer(cursor)
+    }
   end
 
   # -- paged feed tabs -----------------------------------------------------
@@ -2215,6 +2281,42 @@ defmodule HighWire.Timeline do
   end
 
   def handle_info({:reload, _stale}, state), do: {:noreply, state}
+
+  # A profile page a caller is still waiting on. Its rows are read here
+  # rather than inside the call that asked for them, because that call has
+  # already returned: they land whenever the shared connection gets to
+  # them, and the answer goes out with the page — filled, ended, refused,
+  # or timed out, never as an empty page dressed in a failure's place.
+  def handle_info({Client, ref, {:item, msg}}, %{pages: pages} = state)
+      when is_map_key(pages, ref) do
+    page = Map.fetch!(pages, ref)
+    acc = [msg | page.acc]
+
+    if page_full?(acc, @profile_page) do
+      {:noreply, answer_page(state, ref, profile_page_frames(Enum.reverse(acc)))}
+    else
+      {:noreply, put_in(state.pages[ref], %{page | acc: acc})}
+    end
+  end
+
+  def handle_info({Client, ref, :done}, %{pages: pages} = state)
+      when is_map_key(pages, ref) do
+    page = Map.fetch!(pages, ref)
+    {:noreply, answer_page(state, ref, profile_page_frames(Enum.reverse(page.acc)))}
+  end
+
+  def handle_info({Client, ref, {:error, reason}}, %{pages: pages} = state)
+      when is_map_key(pages, ref) do
+    {:noreply, answer_page(state, ref, page_error("profile roots", {:stream, reason}))}
+  end
+
+  # The backstop for rows that never come: the caller has been waiting
+  # since the ask, and a stream that opened and then went silent owes it a
+  # refusal it can ask again against.
+  def handle_info({:page_timeout, ref}, %{pages: pages} = state)
+      when is_map_key(pages, ref) do
+    {:noreply, answer_page(state, ref, page_error("profile roots", :timeout))}
+  end
 
   # feed history items
   def handle_info({Client, ref, {:item, msg}}, state) do
@@ -4036,6 +4138,7 @@ defmodule HighWire.Timeline do
   defp reset_connection(state) do
     schedule_reconnect()
     state = stop_client(state)
+    state = fail_pages(state, :offline)
 
     %{
       state

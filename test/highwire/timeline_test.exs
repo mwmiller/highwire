@@ -1457,53 +1457,6 @@ defmodule HighWire.TimelineTest do
       do: {:reply, {:error, :methodnotfound}, rows}
   end
 
-  # A profile page must not read past what it asked for: the drain runs
-  # inside the Timeline's GenServer call, so an engine (or a stream) that
-  # keeps flowing would block every mount until it stopped. The request
-  # asks for 60; the page comes back 60 wide with its cursor, however
-  # many more rows the stream offers.
-  describe "profile pages drain only the page they asked for" do
-    defp profile_state(client) do
-      %{
-        client: client,
-        self_id: "@me.ed25519",
-        follows: [],
-        contact_msgs: [],
-        collapsed_contacts: %{by_group: %{}, rows: %{}},
-        acc: [],
-        messages: %{},
-        blob_rev: 0,
-        status: :ok,
-        gen: 0,
-        reload_timer: nil,
-        pending: %{},
-        done_count: 0,
-        profile_fetching?: false
-      }
-    end
-
-    test "a stream offering more rows than the page is cut at the page" do
-      rows =
-        for i <- 1..500 do
-          %{"key" => "%p#{i}.sha256", "timestamp" => 1_000 + i, "value" => %{"author" => "@a"}}
-        end
-
-      {:ok, client} = PagedClient.start(rows)
-      state = profile_state(client)
-
-      {:reply, page, _state} =
-        Timeline.handle_call({:profile_feed, "@a.ed25519", nil}, {self(), make_ref()}, state)
-
-      assert length(page.rows) == 60
-      assert page.more
-      assert page.resume == 99
-
-      # The surplus rows are still in the mailbox, unread: the drain
-      # stopped at the page instead of walking the whole stream.
-      assert_received {HighWire.SSB.Client, _ref, {:item, %{"key" => "%p61.sha256"}}}
-    end
-  end
-
   # A stream exactly as scripted: the frames reach the subscriber in
   # order, the way they would come off the wire, and a script that ends
   # early leaves the stream open and silent.
@@ -1525,6 +1478,158 @@ defmodule HighWire.TimelineTest do
 
     def handle_call({:call, _name, _args}, _from, frames),
       do: {:reply, {:error, :methodnotfound}, frames}
+  end
+
+  # A profile page must not read past what it asked for: the request asks
+  # for 60; the page comes back 60 wide with its cursor, however many more
+  # rows the stream offers. It is also never answered inside the call that
+  # asked: the rows are read in handle_info/3, because on a connection
+  # busy with the heartbeat's reload they land seconds after that call has
+  # already returned — and a page answered late is still the page.
+  describe "a profile page answers the caller when its rows land" do
+    defp profile_state(client) do
+      %{
+        client: client,
+        self_id: "@me.ed25519",
+        follows: [],
+        contact_msgs: [],
+        collapsed_contacts: %{by_group: %{}, rows: %{}},
+        acc: [],
+        messages: %{},
+        blob_rev: 0,
+        status: :ok,
+        gen: 0,
+        reload_timer: nil,
+        pending: %{},
+        pages: %{},
+        done_count: 0,
+        profile_fetching?: false
+      }
+    end
+
+    defp ask(state) do
+      from = {self(), make_ref()}
+      {:noreply, state} = Timeline.handle_call({:profile_feed, "@a.ed25519", nil}, from, state)
+      {state, from}
+    end
+
+    defp page_rows(count) do
+      for i <- 1..count do
+        %{"key" => "%p#{i}.sha256", "timestamp" => 1_000 + i, "value" => %{"author" => "@a"}}
+      end
+    end
+
+    # The frames the client already queued in this mailbox, read the way
+    # the GenServer reads them when a call has returned without an answer.
+    defp read(state, _ref, 0), do: state
+
+    defp read(state, ref, n) do
+      assert_received {HighWire.SSB.Client, ^ref, frame}
+      {:noreply, state} = Timeline.handle_info({HighWire.SSB.Client, ref, frame}, state)
+      read(state, ref, n - 1)
+    end
+
+    # Frames that arrive afterwards — the connection clearing is what
+    # releases them — taken one handle_info at a time, as they would be.
+    defp land(state, _ref, []), do: state
+
+    defp land(state, ref, [row | rest]) when is_map(row) do
+      {:noreply, state} = Timeline.handle_info({HighWire.SSB.Client, ref, {:item, row}}, state)
+      land(state, ref, rest)
+    end
+
+    defp land(state, ref, [frame | rest]) do
+      {:noreply, state} = Timeline.handle_info({HighWire.SSB.Client, ref, frame}, state)
+      land(state, ref, rest)
+    end
+
+    test "a stream offering more rows than the page is cut at the page" do
+      {:ok, client} = PagedClient.start(page_rows(500))
+      state = profile_state(client)
+      {state, from} = ask(state)
+      {_tag, ask_ref} = from
+
+      assert [{ref, record}] = Map.to_list(state.pages)
+      assert record.acc == []
+
+      # The rows reached the mailbox while the stream opened, and the call
+      # has returned without an answer: they are read now, and the page
+      # stops at its own width — 60 rows plus the marker carrying the
+      # cursor — however much more the stream is offering.
+      state = read(state, ref, 61)
+
+      assert_received {^ask_ref, page}
+      assert length(page.rows) == 60
+      assert page.more
+      assert page.resume == 99
+      assert state.pages == %{}
+
+      # The surplus rows are still in the mailbox, unread: the page took
+      # 60 rather than walking the whole stream.
+      assert_received {HighWire.SSB.Client, ^ref, {:item, %{"key" => "%p61.sha256"}}}
+    end
+
+    test "rows held up behind the reload still answer the ask" do
+      # The stream opens and then says nothing: the heartbeat's reload has
+      # the shared connection, and these rows are queued behind its own
+      # traffic. The call has already returned, so nothing but this
+      # process is waiting on them.
+      {:ok, client} = ScriptClient.start([])
+      state = profile_state(client)
+      {state, from} = ask(state)
+      {_tag, ask_ref} = from
+
+      assert [{ref, record}] = Map.to_list(state.pages)
+      assert record.acc == []
+
+      # The connection clears and the rows land, long after the ask.
+      marker = %{"marker" => true, "resume" => 12}
+      state = land(state, ref, page_rows(60) ++ [marker])
+
+      assert_received {^ask_ref, page}
+      assert length(page.rows) == 60
+      assert page.more
+      assert page.resume == 12
+      assert state.pages == %{}
+    end
+
+    test "history spent without a marker is the true end: rows, no cursor, no more" do
+      {:ok, client} = ScriptClient.start([])
+      state = profile_state(client)
+      {state, from} = ask(state)
+      {_tag, ask_ref} = from
+
+      assert [{ref, _record}] = Map.to_list(state.pages)
+
+      state = land(state, ref, page_rows(2) ++ [:done])
+
+      assert_received {^ask_ref, page}
+      assert length(page.rows) == 2
+      refute page.more
+      assert page.resume == nil
+      assert state.pages == %{}
+    end
+
+    test "a page whose rows never come is refused, and asked about only once" do
+      {:ok, client} = ScriptClient.start([])
+      state = profile_state(client)
+      {state, from} = ask(state)
+      {_tag, ask_ref} = from
+
+      assert [{ref, _record}] = Map.to_list(state.pages)
+
+      # The backstop: a stream that opened and went silent owes the caller
+      # a refusal it can ask again against, rather than the wait running
+      # the full length of the caller's own call.
+      {:noreply, state} = Timeline.handle_info({:page_timeout, ref}, state)
+      assert_received {^ask_ref, {:error, :timeout}}
+      assert state.pages == %{}
+
+      # The timer went with the answer, so its tick must not answer a
+      # second time — one page, one reply.
+      {:noreply, ^state} = Timeline.handle_info({:page_timeout, ref}, state)
+      refute_received {^ask_ref, _}
+    end
   end
 
   # A roots page either carries history or carries an error — never an
@@ -1569,14 +1674,22 @@ defmodule HighWire.TimelineTest do
     test "the profile page reports a refused stream the same way" do
       {:ok, client} = ScriptClient.start([{:error, :methodnotfound}])
 
-      {:reply, reply, _state} =
-        Timeline.handle_call(
-          {:profile_feed, "@a.ed25519", nil},
-          {self(), make_ref()},
-          feed_state(client)
-        )
+      from = {self(), make_ref()}
+      {_tag, ask_ref} = from
 
-      assert reply == {:error, :failed}
+      # The stream opened, so the call returned without an answer and the
+      # refusal rides the stream itself — it is read here, the way the
+      # GenServer reads it, and the held page carries the failure out.
+      {:noreply, state} =
+        Timeline.handle_call({:profile_feed, "@a.ed25519", nil}, from, feed_state(client))
+
+      assert [{ref, _page}] = Map.to_list(state.pages)
+
+      {:noreply, state} =
+        Timeline.handle_info({HighWire.SSB.Client, ref, {:error, :methodnotfound}}, state)
+
+      assert_received {^ask_ref, {:error, :failed}}
+      assert state.pages == %{}
     end
 
     test "a stream that opens and goes quiet is a timeout" do

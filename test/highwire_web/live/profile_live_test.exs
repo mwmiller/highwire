@@ -76,12 +76,49 @@ defmodule HighWireWeb.ProfileLiveTest do
     # identicon keyed by the feed id — never a broken image
     assert html =~ "/identicon/" <> Base.encode16(id, case: :lower)
 
-    assert html =~ "No posts yet."
+    # The engine is off, so the page could not be read: the list says
+    # that — under the press that asks again — rather than passing for
+    # a feed with nothing in it.
+    assert html =~ "Not connected yet."
+    assert html =~ "Try again"
+    refute html =~ "No posts yet."
     # engine off: no follow control is offered
     refute html =~ "toggle-follow"
 
     # the rail identity card carries the id a second time (header + rail)
     assert length(Regex.scan(~r/vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=/, html)) >= 2
+  end
+
+  test "the posts line can be asked again, and the answer stands in for it", %{conn: conn} do
+    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+
+    # The page could not be read, so it says so under the press.
+    assert html =~ "profile-posts-error"
+    assert html =~ "Not connected yet."
+
+    # The press asks again. Under test the engine is still off, so the
+    # second ask fails the same way and the line stays — the press is
+    # answered, never a dead button over a silent list.
+    html = render_click(view, "retry-posts", %{})
+    assert html =~ "profile-posts-error"
+    assert html =~ "Not connected yet."
+
+    # Once the posts are in hand the line is gone for good: the retry
+    # only speaks for an empty, failed list.
+    msg = %{
+      "key" => "%p1.sha256",
+      "value" => %{
+        "author" => id,
+        "timestamp" => 1_700_000_000_000,
+        "content" => %{"type" => "post", "text" => "the thing"}
+      }
+    }
+
+    seed(view, %{id: id, messages: [msg], posts_error: nil})
+    html = render(view)
+    refute html =~ "profile-posts-error"
+    assert html =~ "the thing"
   end
 
   test "a short dev-era handle renders whole, not stubbed", %{conn: conn} do
@@ -287,7 +324,10 @@ defmodule HighWireWeb.ProfileLiveTest do
 
     refute html =~ "about-form"
     refute html =~ "Saving…"
-    refute html =~ "Not connected yet"
+
+    # The refusal that must not appear is the about one — the posts
+    # list carries its own line, and the two say different things.
+    refute html =~ "Not connected yet. Try again in a moment."
 
     # Cancel answers the same way when the reader walks back out.
     html = render_click(view, "edit-about", %{})
