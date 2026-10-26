@@ -23,7 +23,16 @@ defmodule HighWireWeb.ProfileLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Phoenix.PubSub.subscribe(HighWire.PubSub, Timeline.topic())
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(HighWire.PubSub, Timeline.topic())
+
+      # The timeline refreshes only while a view says it is being read,
+      # and this is the page the only Follow button lives on — without
+      # this registration the heartbeat stops the moment the reader
+      # opens a profile, and the follow pressed here has to wait for
+      # them to return to a timeline before its feed is fetched at all.
+      Timeline.set_activity(self(), true)
+    end
 
     {:ok,
      socket
@@ -315,6 +324,19 @@ defmodule HighWireWeb.ProfileLive do
     {:noreply, push_navigate(socket, to: "/post/" <> Base.url_encode64(key, padding: false))}
   end
 
+  # The pair the timeline and network pages carry, driven by the same
+  # TabActivity hook on the root below: a reader who is not looking at
+  # this page should not keep the window's timers running either.
+  def handle_event("tab-active", _params, socket) do
+    Timeline.set_activity(self(), true)
+    {:noreply, socket}
+  end
+
+  def handle_event("tab-inactive", _params, socket) do
+    Timeline.set_activity(self(), false)
+    {:noreply, socket}
+  end
+
   # The publish has landed, and the rail reads as the press. The payload
   # that carries the same relationship is built by that publish, so the
   # two agree while the engine's own delta is still on its way — where a
@@ -447,7 +469,11 @@ defmodule HighWireWeb.ProfileLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
+    <div
+      id="profile-root"
+      phx-hook="TabActivity"
+      class="flex h-screen overflow-hidden bg-app text-ink"
+    >
       <Nav.rail gossip={@gossip}>
         <Nav.rail_label>Profile</Nav.rail_label>
 

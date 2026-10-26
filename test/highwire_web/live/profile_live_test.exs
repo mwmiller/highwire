@@ -146,6 +146,25 @@ defmodule HighWireWeb.ProfileLiveTest do
     assert_redirect(view, "/post/" <> Base.url_encode64(key, padding: false))
   end
 
+  # The timeline refreshes only while a view says it is being read, and
+  # the only Follow button lives here: a profile page that never
+  # registered would leave the heartbeat stopped while the press it
+  # just took waits for someone to open a timeline again.
+  test "the profile holds the timeline active, and lets go when it is not read", %{conn: conn} do
+    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+
+    await_active(view.pid, true)
+
+    # The pair the TabActivity hook drives: an unfocused window stops
+    # the timers here exactly as it does on the timeline.
+    render_click(view, "tab-inactive", %{})
+    await_active(view.pid, false)
+
+    render_click(view, "tab-active", %{})
+    await_active(view.pid, true)
+  end
+
   test "the rail offers Follow and Block, and reflects the relationship", %{conn: conn} do
     me = "@me=.ed25519"
     peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
@@ -402,5 +421,22 @@ defmodule HighWireWeb.ProfileLiveTest do
 
     send(view.pid, :nudge)
     view
+  end
+
+  defp active?(pid), do: Map.has_key?(:sys.get_state(HighWire.Timeline).active, pid)
+
+  # The registration travels as a cast into another process, so read it
+  # back once it has landed rather than racing it.
+  defp await_active(pid, expected?, tries \\ 40)
+
+  defp await_active(pid, expected?, 0), do: assert(active?(pid) == expected?)
+
+  defp await_active(pid, expected?, tries) do
+    if active?(pid) == expected? do
+      :ok
+    else
+      Process.sleep(25)
+      await_active(pid, expected?, tries - 1)
+    end
   end
 end
