@@ -287,6 +287,42 @@ jobs:
       # Digested priv/static must exist in the release: the shell loads
       # http://localhost:24042, which serves these assets.
       - run: mix assets.deploy
+
+      # Burrito's default :precompiled ERTS on Linux is the Beam Machine
+      # "any" build, which is musl-linked. It cannot load the glibc enacl
+      # NIF (and bundled libsodium) that mix release compiles on this
+      # runner, so the wrapped backend would boot and then hang on
+      # "Connecting…" with a CRYPTO_LOAD on_load_failure. The Tauri shell
+      # is glibc-linked anyway (webkit2gtk/GTK), so a glibc backend costs
+      # no portability. Package THIS runner's OTP — the same glibc runtime
+      # mix release embeds and enacl links against — into the tarball shape
+      # Burrito expects (a single otp-*/ top dir, per its README) and hand
+      # it to the linux/linux_arm targets as :custom_erts. macOS and
+      # Windows keep their precompiled targets; they load their NIFs fine.
+      - name: Package host OTP as custom ERTS (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          OTP_ROOT=$(erl -noshell -eval 'io:format("~s",[code:root_dir()]),halt().')
+          OTP_VSN=$(erl -noshell -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt().')
+          ARCH=$(uname -m)
+          WRAP="otp-${OTP_VSN}-linux-${ARCH}"
+          STAGE="$RUNNER_TEMP/erts-stage"
+          rm -rf "$STAGE" && mkdir -p "$STAGE/$WRAP"
+          # The tarball must contain the erts-*/ bin + lib trees CopyERTS
+          # swaps in; wrap them under otp-*/ so its erts_location/*/lib glob
+          # resolves correctly. Copy rather than symlink so tar stores real
+          # files, not links into the host tree.
+          cp -R "$OTP_ROOT/erts-"* "$STAGE/$WRAP/"
+          cp -R "$OTP_ROOT/lib" "$STAGE/$WRAP/lib"
+          cp -R "$OTP_ROOT/releases" "$STAGE/$WRAP/releases" 2>/dev/null || true
+          cp -R "$OTP_ROOT/usr" "$STAGE/$WRAP/usr" 2>/dev/null || true
+          cp -R "$OTP_ROOT/misc" "$STAGE/$WRAP/misc" 2>/dev/null || true
+          TARBALL="$RUNNER_TEMP/custom-erts.tar.gz"
+          tar -C "$STAGE" -czf "$TARBALL" "$WRAP"
+          echo "Packaged custom ERTS from $OTP_ROOT -> $TARBALL"
+          tar -tzf "$TARBALL" | head -5
+          echo "HIGHWIRE_CUSTOM_ERTS=$TARBALL" >> "$GITHUB_ENV"
+
       - run: mix release highwire
 
       # Tauri's externalBin requires the sidecar named after the target

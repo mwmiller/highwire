@@ -27,13 +27,33 @@ defmodule HighWire.MixProject do
         burrito: [
           targets: [
             macos: [os: :darwin, cpu: :aarch64],
-            linux: [os: :linux, cpu: :x86_64],
-            linux_arm: [os: :linux, cpu: :aarch64],
+            linux: [os: :linux, cpu: :x86_64] ++ linux_erts(),
+            linux_arm: [os: :linux, cpu: :aarch64] ++ linux_erts(),
             windows: [os: :windows, cpu: :x86_64]
           ]
         ]
       ]
     ]
+  end
+
+  # On Linux, Burrito's default `:precompiled` ERTS is the Beam Machine
+  # "any" build, which is linked against musl. That runtime cannot load
+  # the glibc `enacl` NIF (and the libsodium we bundle beside it) that
+  # `mix release` compiles on the build host — the app would boot, then
+  # fail to load crypto and hang on "Connecting…". The Tauri shell is
+  # itself glibc-linked (it needs webkit2gtk/GTK), so the musl runtime
+  # buys no portability here; a glibc backend matches the NIF and the
+  # shell. When CI points HIGHWIRE_CUSTOM_ERTS at a tarball of the
+  # host's own OTP, we hand that to Burrito as `custom_erts` so it wraps
+  # the same glibc runtime `mix release` embedded instead of swapping in
+  # musl. Absent the variable (e.g. local dev) we leave the targets
+  # alone.
+  defp linux_erts do
+    case System.get_env("HIGHWIRE_CUSTOM_ERTS") do
+      nil -> []
+      "" -> []
+      path -> [custom_erts: path]
+    end
   end
 
   def application do
