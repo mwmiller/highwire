@@ -328,6 +328,16 @@ jobs:
           head -5 "$RUNNER_TEMP/erts-listing.txt"
           echo "HIGHWIRE_CUSTOM_ERTS=$TARBALL" >> "$GITHUB_ENV"
 
+          # Burrito's Zig wrapper does a comptime @embedFile("musl-runtime.so")
+          # in maybe_install_musl_runtime. On Linux that function is always
+          # analyzed (IS_LINUX is comptime-true), so Zig requires the file to
+          # exist at build time even though we skip FetchMusl — the only step
+          # that writes it — by using :custom_erts. The musl branch never runs
+          # for a glibc backend (MUSL_RUNTIME_PATH is empty), so an empty
+          # placeholder satisfies the embed without shipping a musl loader.
+          # macOS/Windows never analyze the function, so they need no file.
+          : > deps/burrito/src/musl-runtime.so
+
       - run: mix release highwire
 
       # Tauri's externalBin requires the sidecar named after the target
