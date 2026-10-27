@@ -319,8 +319,13 @@ jobs:
           cp -R "$OTP_ROOT/misc" "$STAGE/$WRAP/misc" 2>/dev/null || true
           TARBALL="$RUNNER_TEMP/custom-erts.tar.gz"
           tar -C "$STAGE" -czf "$TARBALL" "$WRAP"
-          echo "Packaged custom ERTS from $OTP_ROOT -> $TARBALL"
-          tar -tzf "$TARBALL" | head -5
+          # Verify the archive is non-empty and well-formed. Capture the
+          # listing to a file rather than piping to `head` — a closed pipe
+          # sends tar SIGPIPE and a nonzero exit, which set -e would treat
+          # as a step failure even though the tarball is fine.
+          tar -tzf "$TARBALL" > "$RUNNER_TEMP/erts-listing.txt"
+          echo "Packaged custom ERTS from $OTP_ROOT -> $TARBALL ($(wc -l < "$RUNNER_TEMP/erts-listing.txt") entries)"
+          head -5 "$RUNNER_TEMP/erts-listing.txt"
           echo "HIGHWIRE_CUSTOM_ERTS=$TARBALL" >> "$GITHUB_ENV"
 
       - run: mix release highwire
