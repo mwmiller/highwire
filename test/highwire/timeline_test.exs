@@ -2432,6 +2432,111 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  # The constellation's "reached" ring draws a peer whose last handshake
+  # worked but has no open session — the ring a connected peer falls to
+  # when it drops. That ring reads recency off the peer's *address*
+  # (`net:…~shs:…`), but a live session used to be filed only under the
+  # peer's feed id — a key none of those readers consult. So the moment a
+  # connected peer left the live ring it vanished from the sky entirely
+  # instead of falling outward to "reached". A session must be remembered
+  # under the address too.
+  describe "a connected peer remembers its address, so it falls to 'reached' when it drops" do
+    defp net_poll_state(client, opts) do
+      %{
+        gen: 1,
+        network_timer: nil,
+        network: Keyword.get(opts, :network),
+        client: client,
+        peer_meta: Keyword.get(opts, :peer_meta, %{}),
+        net_dirty: false,
+        messages: %{contacts: [], profiles: %{}, blob_rev: 0},
+        status: :ok,
+        suggestions: [],
+        follows: [],
+        blocked: [],
+        active: %{},
+        last_net_at: nil,
+        last_gossip_at: nil
+      }
+    end
+
+    test "a live session is filed under the peer's address as well as its feed id" do
+      feed = "@peer=.ed25519"
+      addr = "net:host.example:8008~shs:peer="
+
+      client =
+        NetworkClient.start(%{
+          "gossip.peers" => {:ok, %{"connections" => [feed]}},
+          "admin.peers.known" => {:ok, [%{"address" => addr, "source" => "pub"}]}
+        })
+
+      {:noreply, state} =
+        Timeline.handle_info({:network, 1}, net_poll_state(client, []))
+
+      meta = state.peer_meta
+
+      # The feed-id entry still carries the session, as it always did…
+      assert HighWire.PeersMeta.get(meta, feed)["last_connected_at"]
+
+      # …and now so does the address, which is the key the reached ring
+      # actually reads. Without it, `reached_at/1` was 0 and the peer
+      # fell off the map the instant it disconnected.
+      m = HighWire.PeersMeta.get(meta, addr)
+      assert m["last_connected_at"]
+      assert m["last_activity_at"]
+    end
+
+    test "a peer reached over several addresses files the session under each" do
+      feed = "@multi=.ed25519"
+      lan = "net:192.168.1.9:8008~shs:multi="
+      wan = "net:pub.example.org:8008~shs:multi="
+
+      client =
+        NetworkClient.start(%{
+          "gossip.peers" => {:ok, %{"connections" => [feed]}},
+          "admin.peers.known" => {:ok, [%{"address" => lan}, %{"address" => wan}]}
+        })
+
+      {:noreply, state} = Timeline.handle_info({:network, 1}, net_poll_state(client, []))
+
+      # Whichever address the ladder happens to draw is the one carrying
+      # the recency, so the peer stays visible on every route it is known
+      # by.
+      assert HighWire.PeersMeta.get(state.peer_meta, lan)["last_connected_at"]
+      assert HighWire.PeersMeta.get(state.peer_meta, wan)["last_connected_at"]
+    end
+
+    test "a later poll with the peer gone leaves the address recency standing" do
+      feed = "@drop=.ed25519"
+      addr = "net:gone.example:8008~shs:drop="
+
+      up =
+        NetworkClient.start(%{
+          "gossip.peers" => {:ok, %{"connections" => [feed]}},
+          "admin.peers.known" => {:ok, [%{"address" => addr}]}
+        })
+
+      {:noreply, state} = Timeline.handle_info({:network, 1}, net_poll_state(up, []))
+      connected_at = HighWire.PeersMeta.get(state.peer_meta, addr)["last_connected_at"]
+      assert connected_at
+
+      # The peer drops. Nothing in the disconnect path clears the
+      # address's session time, so the reached ring still has a recent
+      # handshake to draw rather than an empty sky.
+      down =
+        NetworkClient.start(%{
+          "gossip.peers" => {:ok, %{"connections" => []}},
+          "admin.peers.known" => {:ok, [%{"address" => addr}]}
+        })
+
+      {:noreply, state} =
+        Timeline.handle_info({:network, 1}, %{state | client: down, gen: 1})
+
+      assert HighWire.PeersMeta.get(state.peer_meta, addr)["last_connected_at"] ==
+               connected_at
+    end
+  end
+
   describe "network dial outcomes accumulate into peer meta" do
     test "records failed dials without clearing a past success" do
       addr = "net:dead.example:8008~shs:@dead.ed25519"

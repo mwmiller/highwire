@@ -4199,11 +4199,12 @@ defmodule HighWire.Timeline do
 
     old_conns = connections_of(old_net || %{})
     new_conns = connections_of(new_net)
+    addrs_by_id = conn_addrs_index(new_net)
 
     meta =
       state
       |> Map.get(:peer_meta, %{})
-      |> update_conns_recency(new_conns, old_conns, now)
+      |> update_conns_recency(new_conns, old_conns, addrs_by_id, now)
       |> update_known_recency(new_net, now)
       |> update_dial_outcomes(new_net)
 
@@ -4215,22 +4216,55 @@ defmodule HighWire.Timeline do
     end
   end
 
-  defp update_conns_recency(meta, new_conns, old_conns, now) do
+  # A live session is remembered under two kinds of key: the peer's feed
+  # id, and every network address we hold for it. The constellation's
+  # reached ring reads connection recency off the address, so filing the
+  # session there is what lets a peer that drops off the live ring fall
+  # outward to "reached" instead of vanishing — a feed id alone is a key
+  # none of those readers consult.
+  defp update_conns_recency(meta, new_conns, old_conns, addrs_by_id, now) do
     Enum.reduce(new_conns, meta, fn id, acc ->
       was_connected = id in old_conns
-      m = HighWire.PeersMeta.get(acc, id)
-
-      m1 =
-        if was_connected and Map.has_key?(m, "last_connected_at") do
-          m
-        else
-          Map.put(m, "last_connected_at", now)
-        end
-
-      m2 = Map.put(m1, "last_activity_at", now)
-      Map.put(acc, id, m2)
+      keys = [id | Map.get(addrs_by_id, id, [])]
+      Enum.reduce(keys, acc, &stamp_session(&1, &2, was_connected, now))
     end)
   end
+
+  # One key's share of a live session: stamp the connection time (once,
+  # so a session in progress keeps the moment it opened) and bump the
+  # activity time on every poll it is still connected.
+  defp stamp_session(key, acc, was_connected, now) do
+    m = HighWire.PeersMeta.get(acc, key)
+
+    m1 =
+      if was_connected and Map.has_key?(m, "last_connected_at") do
+        m
+      else
+        Map.put(m, "last_connected_at", now)
+      end
+
+    Map.put(acc, key, Map.put(m1, "last_activity_at", now))
+  end
+
+  # Feed id -> every `net:` address the report's address book holds for
+  # it: the mapping that lets a live session's recency be filed under the
+  # address the reached ring reads. A peer reached over several routes
+  # (say LAN and public) keeps them all, so whichever address the ladder
+  # draws is the one carrying the recency.
+  defp conn_addrs_index(%{"knownPeers" => peers}) when is_list(peers) do
+    Enum.reduce(peers, %{}, fn
+      %{"address" => "net:" <> _ = addr}, acc ->
+        case shs_id(addr) do
+          nil -> acc
+          id -> Map.update(acc, id, [addr], &[addr | &1])
+        end
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp conn_addrs_index(_net), do: %{}
 
   defp update_known_recency(meta, %{"knownPeers" => peers} = _net, now)
        when is_list(peers) do

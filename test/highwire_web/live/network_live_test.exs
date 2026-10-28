@@ -4,7 +4,29 @@ defmodule HighWireWeb.NetworkLiveTest do
   import Phoenix.LiveViewTest
 
   alias HighWire.SSB.Network
+  alias HighWire.Timeline
   alias HighWireWeb.NetworkLive
+
+  # Answers Client.call/4 without a network: a method name maps to the
+  # reply the fixture was built with, so a test can play engine reports
+  # to Timeline on demand.
+  defmodule PollClient do
+    @moduledoc false
+    use GenServer
+
+    def start(table) do
+      {:ok, pid} = GenServer.start_link(__MODULE__, table)
+      pid
+    end
+
+    @impl true
+    def init(table), do: {:ok, table}
+
+    @impl true
+    def handle_call({:call, name, _args}, _from, table) do
+      {:reply, Map.get(table, Enum.join(name, "."), {:error, :methodnotfound}), table}
+    end
+  end
 
   setup do
     # A stale overrides file from another run would move the pressed
@@ -726,6 +748,71 @@ defmodule HighWireWeb.NetworkLiveTest do
     end
   end
 
+  # The reached ring's reader (`reached_at/1`) looks a peer's recency up
+  # under its *address*, and Timeline is what writes that entry. These
+  # drive Timeline's network poll the way the running app does — once
+  # while the session is open, once after the peer drops — and render the
+  # report it hands over, so both halves of that seam are pinned: the
+  # session lands under the address, and the ring reads it back there.
+  describe "a peer that drops off the live ring falls outward to 'reached'" do
+    test "the session Timeline filed under the address draws on the reached rung" do
+      feed = "@reach=.ed25519"
+      addr = "net:reach.example:8008~shs:reach="
+
+      up =
+        PollClient.start(%{
+          "gossip.peers" => {:ok, %{"enabled" => true, "connections" => [feed], "dialTry" => []}},
+          "admin.peers.known" => {:ok, [%{"address" => addr}]}
+        })
+
+      {:noreply, state} = Timeline.handle_info({:network, 1}, network_poll_state(up))
+
+      # The peer drops. Nothing on the disconnect path clears the
+      # address's session time, so the next report still carries a
+      # handshake the ring can draw.
+      down =
+        PollClient.start(%{
+          "gossip.peers" => {:ok, %{"enabled" => true, "connections" => [], "dialTry" => []}},
+          "admin.peers.known" => {:ok, [%{"address" => addr}]}
+        })
+
+      {:noreply, state} = Timeline.handle_info({:network, 1}, %{state | client: down})
+      report = Timeline.fetch_network(down, state.peer_meta)
+
+      html = render_with_report(report)
+
+      assert report["connections"] == []
+      # The session we held is gone, so the peer falls to the outer ring
+      # a working handshake still earns, rather than leaving the sky.
+      assert html =~ "reached · 1"
+      assert html =~ ~s(key="ok-#{addr}")
+      # Its address-book row is dropped rather than stacked outside the
+      # ring the peer is already drawn on.
+      refute html =~ ~s(key="known-#{addr}")
+      refute html =~ "never tried · 1"
+    end
+
+    test "recency filed only under the feed id draws nothing there — the key the ring never reads" do
+      feed = "@forgotten=.ed25519"
+
+      html =
+        render_with_report(%{
+          "enabled" => true,
+          "connections" => [],
+          "dialTry" => [],
+          "knownPeers" => [],
+          "peer_meta" => %{feed => %{"last_connected_at" => 1_000, "last_activity_at" => 2_000}}
+        })
+
+      # The ring's cache is address-keyed by contract — `net:` addresses
+      # only — so a session remembered under the feed id alone earns no
+      # rung. That is the shape of the hole the writer files the address
+      # into; without that entry this peer is simply not here.
+      assert html =~ "reached · 0"
+      refute html =~ ~s(key="ok-#{feed}")
+    end
+  end
+
   describe "suppression control" do
     test "offers a preview and applies it with a confirm step" do
       html =
@@ -855,6 +942,28 @@ defmodule HighWireWeb.NetworkLiveTest do
     end)
 
     home
+  end
+
+  # The state Timeline's network poll runs on, with only the client and
+  # peer meta varying — so a test can drive the poll as a plain function
+  # call and read the meta it stamps.
+  defp network_poll_state(client, peer_meta \\ %{}) do
+    %{
+      gen: 1,
+      network_timer: nil,
+      network: nil,
+      client: client,
+      peer_meta: peer_meta,
+      net_dirty: false,
+      messages: %{contacts: [], profiles: %{}, blob_rev: 0},
+      status: :ok,
+      suggestions: [],
+      follows: [],
+      blocked: [],
+      active: %{},
+      last_net_at: nil,
+      last_gossip_at: nil
+    }
   end
 
   # The assigns a connected session would hold, with only the report
