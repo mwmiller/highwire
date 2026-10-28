@@ -101,9 +101,165 @@ defmodule HighWireWeb.NetworkLiveTest do
     test "the rail jump-links every section", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/network")
 
-      for href <- ~w(which-network dialer constellation connections known-peers dials) do
+      for href <-
+            ~w(which-network dialer join-a-pub add-a-peer constellation connections known-peers dials) do
         assert html =~ ~s(href="##{href}")
       end
+    end
+  end
+
+  # A fresh identity's address book starts empty, so this is the only
+  # control on the page that reaches out to a host the reader names.
+  describe "join a pub" do
+    test "offers an invite field and a join button", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/network")
+
+      assert html =~ "Join a pub"
+      assert html =~ ~s(id="invite-code")
+      assert html =~ ~s(name="invite")
+      assert html =~ "host:port:@key.ed25519~seed"
+      assert html =~ ~s(phx-submit="redeem-invite")
+      assert html =~ "Join pub"
+    end
+
+    test "an empty field answers with a prompt rather than an error", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/network")
+
+      view
+      |> form("form[phx-submit=redeem-invite]", %{invite: "   "})
+      |> render_submit()
+
+      assert render(view) =~ "Paste an invite code to join a pub."
+    end
+
+    test "text that is not an invite says what one looks like", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/network")
+
+      view
+      |> form("form[phx-submit=redeem-invite]", %{invite: "not-an-invite"})
+      |> render_submit()
+
+      assert render(view) =~ "That is not a valid invite code"
+      assert render(view) =~ "host:port:@key.ed25519~seed"
+    end
+
+    test "typing survives the periodic re-render", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/network")
+
+      view
+      |> form("form[phx-change=invite-type]", %{invite: "pub.example.org:8008:@key"})
+      |> render_change()
+
+      # The report is polled every few seconds; a field held only in the
+      # DOM would lose its text to the next tick.
+      assert render(view) =~ ~s(value="pub.example.org:8008:@key")
+    end
+  end
+
+  # The invite is spent at the pub the moment `use` succeeds, so an
+  # announce failure must not read as something to retry.
+  describe "invite outcome wording" do
+    test "a successful join names the pub it joined" do
+      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+
+      {:noreply, socket} =
+        NetworkLive.handle_info(
+          {:invite_result, {:ok, %{host: "pub.example.org", port: 8008}}},
+          socket
+        )
+
+      assert socket.assigns.invite_notice =~ "Joined pub.example.org:8008"
+      refute socket.assigns.redeeming
+    end
+
+    test "an announce failure reads as joined-but-not-yet-listed" do
+      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+
+      {:noreply, socket} =
+        NetworkLive.handle_info({:invite_result, {:error, {:announce, :boom}}}, socket)
+
+      assert socket.assigns.invite_notice =~ "could not announce"
+    end
+
+    test "an unreachable pub names the address as the thing to check" do
+      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+
+      {:noreply, socket} =
+        NetworkLive.handle_info({:invite_result, {:error, {:connect, :econnrefused}}}, socket)
+
+      assert socket.assigns.invite_notice =~ "Could not reach the pub"
+    end
+  end
+
+  # Adding an address is the weaker half of the same first connection:
+  # it records where something lives and follows nobody.
+  describe "add a peer by address" do
+    test "offers an address field and an add button", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/network")
+
+      assert html =~ "Add a peer"
+      assert html =~ ~s(id="peer-address")
+      assert html =~ ~s(name="peer")
+      assert html =~ "net:host:port~shs:key"
+      assert html =~ ~s(phx-submit="add-peer")
+      assert html =~ "Add peer"
+    end
+
+    test "says adding an address does not follow the peer", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/network")
+
+      assert html =~ "This does not follow the peer"
+    end
+
+    test "an empty field answers with a prompt", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/network")
+
+      view
+      |> form("form[phx-submit=add-peer]", %{peer: "  "})
+      |> render_submit()
+
+      assert render(view) =~ "Paste a peer address to add it."
+    end
+
+    test "text that is not an address says what one looks like", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/network")
+
+      view
+      |> form("form[phx-submit=add-peer]", %{peer: "not-an-address"})
+      |> render_submit()
+
+      assert render(view) =~ "That is not a valid address"
+      assert render(view) =~ "net:host:port~shs:key"
+    end
+
+    test "typing survives the periodic re-render", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/network")
+
+      view
+      |> form("form[phx-change=peer-type]", %{peer: "net:pub.example.org:8008~shs:key"})
+      |> render_change()
+
+      assert render(view) =~ ~s(value="net:pub.example.org:8008~shs:key")
+    end
+  end
+
+  describe "add-peer outcome wording" do
+    test "a saved address names what the dialer does next" do
+      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+
+      {:noreply, socket} = NetworkLive.handle_info({:peer_result, :ok}, socket)
+
+      assert socket.assigns.peer_notice =~ "Address saved"
+      refute socket.assigns.adding_peer
+    end
+
+    test "a failed announce names the reason" do
+      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+
+      {:noreply, socket} =
+        NetworkLive.handle_info({:peer_result, {:error, {:announce, :offline}}}, socket)
+
+      assert socket.assigns.peer_notice =~ "offline"
     end
   end
 
@@ -561,6 +717,8 @@ defmodule HighWireWeb.NetworkLiveTest do
 
       assert html =~ ~s(href="#which-network")
       assert html =~ ~s(href="#dialer")
+      assert html =~ ~s(href="#join-a-pub")
+      assert html =~ ~s(href="#add-a-peer")
       assert html =~ ~s(href="#constellation")
       assert html =~ ~s(href="#connections")
       assert html =~ ~s(href="#known-peers")
@@ -725,7 +883,13 @@ defmodule HighWireWeb.NetworkLiveTest do
           gossip: %{connected: 0, pulse: 0},
           suppress_preview: nil,
           suppress_notice: nil,
-          suppressing: false
+          suppressing: false,
+          invite_code: "",
+          redeeming: false,
+          invite_notice: nil,
+          peer_address: "",
+          adding_peer: false,
+          peer_notice: nil
         },
         overrides
       )

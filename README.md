@@ -44,14 +44,15 @@ release workflow (`.github/workflows/release.yml`).
   moves feeds, blobs, or history.
 - The Network page (`/network`) is the general place to manage
   dialing: the network profile switcher, the dialer's enable/disable
-  and dial-now controls, the live connections, the `conn.json`
-  address book, and the recent dial attempts. When the engine build
-  predates `gossip.peers`, the page falls back to the admin
-  namespace — dialer status, connected peers, the address book — and
-  marks the report partial. The native menu's Go
-  items (Timeline ⌘1, Network ⌘2, Dashboard ⌘D, My Profile ⌘⇧P) and
-  Preferences ⌘, navigate the webview; the window remembers its size
-  and position across launches.
+  and dial-now controls, joining a pub by redeeming an invite code or
+  adding a peer by its address alone, the live connections, the
+  `conn.json` address book, and the recent dial attempts. When the
+  engine build predates `gossip.peers`, the page falls back to the
+  admin namespace — dialer status, connected peers, the address book —
+  and marks the report partial. The native menu's Go items (Timeline
+  ⌘1, Network ⌘2, Dashboard ⌘D, My Profile ⌘⇧P) and Preferences ⌘,
+  navigate the webview; the window remembers its size and position
+  across launches.
 
 **Engine**
 

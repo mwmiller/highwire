@@ -583,6 +583,20 @@ defmodule HighWire.Timeline do
     publish_content(about_content(id, fields))
   end
 
+  @doc """
+  Announces a pub to the feeds that follow us — the `pub`-type message
+  the gossip layer turns into a `conn.json` entry, so the dialer learns
+  where to reach it. This is what makes an address survive past the
+  one-shot invite key that first named it: the engine publishes it on
+  our own feed, and its own ingest of that message is what writes the
+  address into the connection book.
+  """
+  @spec announce_pub(binary(), integer(), binary()) :: {:ok, binary() | nil} | {:error, term()}
+  def announce_pub(host, port, key)
+      when is_binary(host) and is_integer(port) and is_binary(key) do
+    publish_content(pub_content(host, port, key))
+  end
+
   # -- publish content (pure; the RPC only serializes these maps) -------
 
   @doc false
@@ -616,6 +630,15 @@ defmodule HighWire.Timeline do
   @doc false
   def about_content(id, fields) when is_binary(id) and is_map(fields) do
     Map.merge(%{"type" => "about", "about" => id}, fields)
+  end
+
+  @doc false
+  def pub_content(host, port, key)
+      when is_binary(host) and is_integer(port) and is_binary(key) do
+    # `key` arrives in the `@…=.ed25519` display form the invite code
+    # and conn.json both use; the engine's gossip layer expects that same
+    # shape when it folds the address into the connection book.
+    %{"type" => "pub", "address" => %{"host" => host, "port" => port, "key" => key}}
   end
 
   # Single chokepoint for every outbound message (posts, replies, votes,

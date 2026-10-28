@@ -157,6 +157,17 @@ defmodule HighWire.TimelineTest do
                "image" => nil
              }
     end
+
+    test "pub content names the address a redeemed invite announced" do
+      assert Timeline.pub_content("pub.example.org", 8008, "@pub=.ed25519") == %{
+               "type" => "pub",
+               "address" => %{
+                 "host" => "pub.example.org",
+                 "port" => 8008,
+                 "key" => "@pub=.ed25519"
+               }
+             }
+    end
   end
 
   describe "private content" do

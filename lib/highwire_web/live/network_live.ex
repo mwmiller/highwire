@@ -6,17 +6,19 @@ defmodule HighWireWeb.NetworkLive do
   Sections, top to bottom: which network the engine is on (the
   profile switcher, moved here from Settings so all network concerns
   live on one page), the dialer's live state with enable/disable and
-  dial-now controls, the constellation — a radial map of the same
-  facts the lists below state (self at centre, rings outward as a
-  ladder of connectivity: a session open now, an address whose last
-  handshake worked, one we are backing off after, and an address-book
-  entry with no result at all) — who we are connected to right now
-  (one row per live peer, Patchwork's "connected pubs" affordance
-  generalised to any peer), the `conn.json` address book, and the
-  recent dial attempts with their backoff state. Dialing and book
-  peers are selectable in either the sky or their list row — both
-  highlight together and the row scrolls into view; live peers are
-  named links to their profiles.
+  dial-now controls, joining a pub by redeeming an invite code (the
+  one way a fresh identity with an empty address book reaches the
+  network) or adding a peer by its address alone, the constellation —
+  a radial map of the same facts the lists below state (self at
+  centre, rings outward as a ladder of connectivity: a session open
+  now, an address whose last handshake worked, one we are backing off
+  after, and an address-book entry with no result at all) — who we are
+  connected to right now (one row per live peer, Patchwork's
+  "connected pubs" affordance generalised to any peer), the
+  `conn.json` address book, and the recent dial attempts with their
+  backoff state. Dialing and book peers are selectable in either the
+  sky or their list row — both highlight together and the row scrolls
+  into view; live peers are named links to their profiles.
 
   Node positions hash from each peer's address, so the sky holds
   still between polls — membership changes add or remove a node
@@ -34,7 +36,7 @@ defmodule HighWireWeb.NetworkLive do
   use HighWireWeb, :live_view
 
   alias HighWire.Avatar, as: Ident
-  alias HighWire.SSB.{Admin, ConnSuppress, Network, Sidecar}
+  alias HighWire.SSB.{Admin, ConnSuppress, Invite, Network, PeerAddress, Sidecar}
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Nav
@@ -112,7 +114,13 @@ defmodule HighWireWeb.NetworkLive do
        known_peers_cap: @known_peers_cap,
        suppress_preview: nil,
        suppress_notice: nil,
-       suppressing: false
+       suppressing: false,
+       invite_code: "",
+       redeeming: false,
+       invite_notice: nil,
+       peer_address: "",
+       adding_peer: false,
+       peer_notice: nil
      )}
   end
 
@@ -238,6 +246,20 @@ defmodule HighWireWeb.NetworkLive do
       end
 
     {:noreply, socket |> assign(suppressing: false, suppress_notice: notice) |> refresh_report()}
+  end
+
+  def handle_info({:invite_result, result}, socket) do
+    {:noreply,
+     socket
+     |> assign(redeeming: false, invite_notice: invite_notice(result))
+     |> refresh_report()}
+  end
+
+  def handle_info({:peer_result, result}, socket) do
+    {:noreply,
+     socket
+     |> assign(adding_peer: false, peer_notice: peer_notice(result))
+     |> refresh_report()}
   end
 
   def handle_info(_other, socket), do: {:noreply, socket}
@@ -397,6 +419,125 @@ defmodule HighWireWeb.NetworkLive do
     end
   end
 
+  # -- invite redemption ---------------------------------------------------
+
+  # Redeeming is the one flow that reaches out to a host the reader
+  # pasted in, so a bad or hostile code must not take the socket down:
+  # parse first (cheap, local), then run the pub round-trip in a Task
+  # and let its outcome land as a message.
+  def handle_event("redeem-invite", %{"invite" => code}, socket) do
+    code = String.trim(code)
+
+    cond do
+      socket.assigns.redeeming ->
+        {:noreply, socket}
+
+      code == "" ->
+        {:noreply, assign(socket, invite_notice: "Paste an invite code to join a pub.")}
+
+      true ->
+        case Invite.parse(code) do
+          {:error, :bad_invite} ->
+            {:noreply,
+             assign(socket,
+               invite_notice:
+                 "That is not a valid invite code. It should look like host:port:@key.ed25519~seed."
+             )}
+
+          {:ok, invite} ->
+            parent = self()
+
+            Task.start(fn ->
+              result =
+                try do
+                  Invite.redeem(invite)
+                catch
+                  kind, reason -> {:error, {kind, reason}}
+                end
+
+              send(parent, {:invite_result, result})
+            end)
+
+            {:noreply,
+             assign(socket,
+               redeeming: true,
+               invite_code: "",
+               invite_notice: "Joining #{invite.host}:#{invite.port}…"
+             )}
+        end
+    end
+  end
+
+  def handle_event("redeem-invite", _params, socket), do: {:noreply, socket}
+
+  # Keep the field's text in an assign so the periodic tick re-render
+  # does not clear what the reader is typing.
+  def handle_event("invite-type", %{"invite" => code}, socket) do
+    {:noreply, assign(socket, invite_code: code)}
+  end
+
+  def handle_event("invite-type", _params, socket), do: {:noreply, socket}
+
+  # -- add a peer by address -----------------------------------------------
+
+  # Weaker than an invite and safer than one: nothing here dials out or
+  # trusts a pasted key, it only records where something lives on this
+  # identity's own feed. The announce still goes through the engine's
+  # publish, which can block on a busy service, so it runs off-socket
+  # the same way redeeming does.
+  def handle_event("add-peer", %{"peer" => address}, socket) do
+    address = String.trim(address)
+
+    cond do
+      socket.assigns.adding_peer ->
+        {:noreply, socket}
+
+      address == "" ->
+        {:noreply, assign(socket, peer_notice: "Paste a peer address to add it.")}
+
+      true ->
+        case PeerAddress.parse(address) do
+          {:error, :bad_address} ->
+            {:noreply,
+             assign(socket,
+               peer_notice:
+                 "That is not a valid address. It should look like net:host:port~shs:key."
+             )}
+
+          {:ok, peer} ->
+            parent = self()
+
+            Task.start(fn ->
+              result =
+                try do
+                  PeerAddress.add(peer)
+                catch
+                  kind, reason -> {:error, {kind, reason}}
+                end
+
+              send(parent, {:peer_result, result})
+            end)
+
+            {:noreply,
+             assign(socket,
+               adding_peer: true,
+               peer_address: "",
+               peer_notice: "Saving #{peer.host}:#{peer.port}…"
+             )}
+        end
+    end
+  end
+
+  def handle_event("add-peer", _params, socket), do: {:noreply, socket}
+
+  # Keep the field's text in an assign so the periodic tick re-render
+  # does not clear what the reader is typing.
+  def handle_event("peer-type", %{"peer" => address}, socket) do
+    {:noreply, assign(socket, peer_address: address)}
+  end
+
+  def handle_event("peer-type", _params, socket), do: {:noreply, socket}
+
   # -- constellation ------------------------------------------------------
 
   # A dialing or book node and its list row are the same peer; selecting
@@ -419,6 +560,8 @@ defmodule HighWireWeb.NetworkLive do
         <Nav.rail_label>On this page</Nav.rail_label>
         <Nav.rail_link href="#which-network">Which network</Nav.rail_link>
         <Nav.rail_link href="#dialer">Dialer</Nav.rail_link>
+        <Nav.rail_link href="#join-a-pub">Join a pub</Nav.rail_link>
+        <Nav.rail_link href="#add-a-peer">Add a peer</Nav.rail_link>
         <Nav.rail_link href="#constellation">Constellation</Nav.rail_link>
         <Nav.rail_link href="#connections">Connections</Nav.rail_link>
         <Nav.rail_link href="#known-peers">Known peers</Nav.rail_link>
@@ -543,6 +686,100 @@ defmodule HighWireWeb.NetworkLive do
             The local service is not answering, so this is the cache from the last
             session that did. Connections and dial history are unknown.
           </p>
+
+          <%!-- Join a pub: redeem an invite code. The one way a fresh
+          identity that has no address book yet reaches the network — the
+          code names a pub and a one-time key the pub trusts, and redeeming
+          follows it back and saves the address. --%>
+          <section class="mt-8">
+            <h2
+              id="join-a-pub"
+              class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint"
+            >
+              Join a pub
+            </h2>
+
+            <p class="mt-3 text-sm text-dim">
+              Paste an invite code from a pub to connect for the first time. This identity
+              follows the pub and the address is saved, so the dialer keeps the connection
+              from then on.
+            </p>
+
+            <form
+              id="invite-form"
+              phx-change="invite-type"
+              phx-submit="redeem-invite"
+              class="mt-4 flex items-end gap-3"
+            >
+              <div class="min-w-0 flex-1">
+                <label for="invite-code" class="block text-xs text-faint">Invite code</label>
+                <input
+                  id="invite-code"
+                  type="text"
+                  name="invite"
+                  value={@invite_code}
+                  placeholder="host:port:@key.ed25519~seed"
+                  autocomplete="off"
+                  spellcheck="false"
+                  class="mt-1 w-full rounded border border-edge bg-panel px-3 py-1.5 font-mono text-sm text-paper"
+                />
+              </div>
+              <button type="submit" class="btn btn-primary" disabled={@redeeming}>
+                {if @redeeming, do: "Joining…", else: "Join pub"}
+              </button>
+            </form>
+
+            <p :if={@invite_notice} role="status" class="mt-2 text-sm text-dim">
+              {@invite_notice}
+            </p>
+          </section>
+
+          <%!-- Add a peer by address: the same first connection without
+          an invite. Weaker — it records where something lives and the
+          dialer keeps trying it, but it follows nobody and trusts no
+          pasted key, so the social decision stays with the reader. --%>
+          <section class="mt-8">
+            <h2
+              id="add-a-peer"
+              class="border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wider text-faint"
+            >
+              Add a peer
+            </h2>
+
+            <p class="mt-3 text-sm text-dim">
+              Already know where a peer lives? Add its address and the dialer will keep
+              trying it. This does not follow the peer — open its profile and follow it
+              there once it answers.
+            </p>
+
+            <form
+              id="peer-form"
+              phx-change="peer-type"
+              phx-submit="add-peer"
+              class="mt-4 flex items-end gap-3"
+            >
+              <div class="min-w-0 flex-1">
+                <label for="peer-address" class="block text-xs text-faint">Peer address</label>
+                <input
+                  id="peer-address"
+                  type="text"
+                  name="peer"
+                  value={@peer_address}
+                  placeholder="net:host:port~shs:key"
+                  autocomplete="off"
+                  spellcheck="false"
+                  class="mt-1 w-full rounded border border-edge bg-panel px-3 py-1.5 font-mono text-sm text-paper"
+                />
+              </div>
+              <button type="submit" class="btn btn-primary" disabled={@adding_peer}>
+                {if @adding_peer, do: "Saving…", else: "Add peer"}
+              </button>
+            </form>
+
+            <p :if={@peer_notice} role="status" class="mt-2 text-sm text-dim">
+              {@peer_notice}
+            </p>
+          </section>
 
           <div class="mt-8 space-y-8">
             <%!-- The sky: the lists below stated in one glance. Self at
@@ -1109,6 +1346,50 @@ defmodule HighWireWeb.NetworkLive do
   defp dial_error(:timeout), do: "Connection timed out."
   defp dial_error(:no_secret), do: "no account secret found."
   defp dial_error(reason), do: inspect(reason)
+
+  # Wording for a redemption outcome, in the shape the reader acts on.
+  # The invite is spent at the pub the moment `use` succeeds, so an
+  # announce failure is worded as joined-but-not-yet-listed rather than
+  # as something to retry.
+  defp invite_notice({:ok, %{host: host, port: port}}),
+    do: "Joined #{host}:#{port}. The pub follows this identity and the address is saved."
+
+  defp invite_notice({:error, :bad_invite}),
+    do: "That invite code is not valid."
+
+  defp invite_notice({:error, :no_identity}),
+    do: "No active identity. Switch to one, then join the pub."
+
+  defp invite_notice({:error, {:connect, _}}),
+    do: "Could not reach the pub. Check the address and try again."
+
+  defp invite_notice({:error, {:refused, _}}),
+    do: "The pub refused the invite. It may be expired or already used."
+
+  defp invite_notice({:error, {:announce, _}}),
+    do: "Joined the pub, but could not announce it here. It may not stay connected."
+
+  defp invite_notice({:error, :timeout}),
+    do: "The pub did not answer in time. Try again shortly."
+
+  defp invite_notice({:error, reason}),
+    do: "Joining the pub failed: #{inspect(reason)}"
+
+  # Wording for an added address. Adding records where something lives;
+  # it does not follow it or reach it, so success names the address as
+  # saved and says what the dialer will do with it.
+  defp peer_notice(:ok),
+    do:
+      "Address saved. The dialer will keep trying it, and you can follow the peer from its profile once it answers."
+
+  defp peer_notice({:error, :bad_address}),
+    do: "That address is not valid."
+
+  defp peer_notice({:error, {:announce, reason}}),
+    do: "Could not save the address here: #{inspect(reason)}"
+
+  defp peer_notice({:error, reason}),
+    do: "Adding the peer failed: #{inspect(reason)}"
 
   defp status_dot(:ok), do: "bg-dot-ok"
   defp status_dot(:connecting), do: "bg-dot-info animate-pulse"
