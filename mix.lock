@@ -10,7 +10,7 @@
   "deep_merge": {:hex, :deep_merge, "1.0.2", "476aa7ea61c54de96220051b998d893869069094da65b96101aebf79416f8a1e", [:mix], [], "hexpm", "737a53cdc9758fedbb608bdc213969e65729466c4ef3cd8e8726d0335dff116c"},
   "elixir_make": {:hex, :elixir_make, "0.10.1", "f5a44ab6b48421de1c4fd33c147e22cd2f82fd86e8a9a4d24809d466cad63c5e", [:mix], [], "hexpm", "ce1eaa234bc87f0279718e793fd6f8ad35b4e8ee8d412329e3879eee8d40adba"},
   "enacl": {:git, "https://github.com/cmoid/enacl", "3be2ed2e4ee1fdfbd73c04207c0b572fcde49720", [branch: "moid-v1.1.1"]},
-  "erlbutt": {:git, "https://github.com/cmoid/erlbutt", "ddfba0f683b4c2b729fab6d95e357cb20a78a0c8", [branch: "main"]},
+  "erlbutt": {:git, "https://github.com/cmoid/erlbutt", "89c8f1808daf3584827e90abb07d7d16d82a2048", [branch: "main"]},
   "esbuild": {:hex, :esbuild, "0.10.1", "32b44b468d2c6386b6bf9229617cbf51be025ce4380eacd383a8979cbb8327ef", [:mix], [{:jason, "~> 1.4", [hex: :jason, repo: "hexpm", optional: false]}], "hexpm", "890f251330052dcacafa40c409769e7c42e3876fb0ae450707bde831be7b34ea"},
   "esqlite": {:git, "https://github.com/cmoid/esqlite", "b3adc97accc1efb8d6dba2166f1011b3abe52fb6", [tag: "moid-v0.9.1"]},
   "excon": {:hex, :excon, "4.1.0", "58abec586aae8c3490e8fbb4b1ac1a15a1ec0754d1d195f58cb901c4a0e2aa1e", [:mix], [{:blake2, "~> 1.0", [hex: :blake2, repo: "hexpm", optional: false]}, {:png, "~> 0.2", [hex: :png, repo: "hexpm", optional: false]}], "hexpm", "7f778e9dc224e9bf999ff5016c4e0bb928375611ac1855c6790be51ec5eff019"},
