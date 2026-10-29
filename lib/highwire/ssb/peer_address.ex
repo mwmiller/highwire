@@ -95,15 +95,20 @@ defmodule HighWire.SSB.PeerAddress do
 
     # The wrap lives here rather than in the default announce so every
     # announce answers in the one shape this function's spec promises.
-    case announce.(peer) do
-      :ok ->
-        _ = trigger.()
-        :ok
-
-      {:error, reason} ->
-        {:error, {:announce, reason}}
+    # The engine's publish answers `{:ok, key}` — the id of the message
+    # it just wrote — as well as `:ok`, and both mean the address is on
+    # the feed. Answering only for `:ok` sent every real add down the
+    # error path, and raised before the dialer could be kicked: the
+    # address was saved, then reported as a failure and left undialed.
+    with :ok <- announce_status(announce.(peer)) do
+      _ = trigger.()
+      :ok
     end
   end
+
+  defp announce_status(:ok), do: :ok
+  defp announce_status({:ok, _message_id}), do: :ok
+  defp announce_status({:error, reason}), do: {:error, {:announce, reason}}
 
   defp announce_via_engine(%{host: host, port: port, key: key}) do
     Logger.info("peer: remembering #{host}:#{port}")

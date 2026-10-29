@@ -35,6 +35,8 @@ defmodule HighWireWeb.NetworkLive do
 
   use HighWireWeb, :live_view
 
+  require Logger
+
   alias HighWire.Avatar, as: Ident
   alias HighWire.SSB.{Admin, ConnSuppress, Invite, Network, PeerAddress, Sidecar}
   alias HighWire.Timeline
@@ -512,7 +514,15 @@ defmodule HighWireWeb.NetworkLive do
                 try do
                   PeerAddress.add(peer)
                 catch
-                  kind, reason -> {:error, {kind, reason}}
+                  kind, reason ->
+                    # A raise here is a bug, not a refusal — log it with
+                    # its trace, and hand the reader a sentence rather
+                    # than the raw Erlang terms the exception carries.
+                    Logger.error(
+                      "add-peer #{peer.host}:#{peer.port} raised #{inspect(kind)}: #{inspect(reason)}"
+                    )
+
+                    {:error, :raised}
                 end
 
               send(parent, {:peer_result, result})
@@ -1387,6 +1397,12 @@ defmodule HighWireWeb.NetworkLive do
 
   defp peer_notice({:error, {:announce, reason}}),
     do: "Could not save the address here: #{inspect(reason)}"
+
+  # A raise is a bug on our side, not a refusal — the trace is in the
+  # log. The reader gets a sentence, not the exception's raw terms.
+  defp peer_notice({:error, :raised}),
+    do:
+      "Something went wrong saving that address. It may still have been recorded; the log has the details."
 
   defp peer_notice({:error, reason}),
     do: "Adding the peer failed: #{inspect(reason)}"

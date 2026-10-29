@@ -118,6 +118,30 @@ defmodule HighWire.SSB.PeerAddressTest do
       assert_received :triggered
     end
 
+    test "an announce that answers with the published message id still counts as saved" do
+      parent = self()
+      {:ok, peer} = PeerAddress.parse("net:pub.example.org:8008~shs:#{@b64}")
+
+      # This is the shape the engine's publish actually answers with —
+      # `{:ok, "<id>.sha256"}`, the id of the announce it just wrote to
+      # our feed — so treating it as anything but a success sends a real
+      # add down the error path and leaves the address undialed.
+      assert :ok =
+               PeerAddress.add(peer,
+                 announce: fn announced ->
+                   send(parent, {:announced, announced})
+                   {:ok, "%ZmRJreEp4j3zd5wrUQI8FtM7CnHcN/jXronNsyA2uWw=.sha256"}
+                 end,
+                 trigger: fn ->
+                   send(parent, :triggered)
+                   :ok
+                 end
+               )
+
+      assert_received {:announced, _announced}
+      assert_received :triggered
+    end
+
     test "an announce failure is reported and the dialer is not kicked" do
       parent = self()
       {:ok, peer} = PeerAddress.parse("net:pub.example.org:8008~shs:#{@b64}")
