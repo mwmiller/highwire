@@ -785,6 +785,11 @@ defmodule HighWire.Timeline do
       # returned without a reply, and these records hold where the reply
       # goes until the rows land (see handle_call/3 for profile_feed).
       pages: %{},
+      # Refs of pages that timed out before they filled. Their stream is
+      # still open — there is no cancel — so the engine keeps sending the
+      # rows past the give-up; these refs mark them to drop quietly rather
+      # than log one "stray" per straggler (cleared when the stream ends).
+      abandoned: MapSet.new(),
       acc: [],
       messages: empty_payload(),
       blob_ls_ref: nil,
@@ -2335,29 +2340,41 @@ defmodule HighWire.Timeline do
 
   # The backstop for rows that never come: the caller has been waiting
   # since the ask, and a stream that opened and then went silent owes it a
-  # refusal it can ask again against.
+  # refusal it can ask again against. The stream itself cannot be
+  # cancelled, so its ref is remembered here: the rows still queued behind
+  # this timeout land later, and are dropped without a word rather than
+  # one "stray" log line apiece.
   def handle_info({:page_timeout, ref}, %{pages: pages} = state)
       when is_map_key(pages, ref) do
+    state = Map.put(state, :abandoned, MapSet.put(abandoned(state), ref))
     {:noreply, answer_page(state, ref, page_error("profile roots", :timeout))}
   end
 
   # feed history items
   def handle_info({Client, ref, {:item, msg}}, state) do
-    if Map.has_key?(state.pending, ref) do
-      {:noreply, %{state | acc: [msg | state.acc]}}
-    else
-      Logger.debug("timeline: stray item dropped ref=#{inspect(ref)}")
-      {:noreply, state}
+    cond do
+      Map.has_key?(state.pending, ref) ->
+        {:noreply, %{state | acc: [msg | state.acc]}}
+
+      # Rows from a page that timed out: the caller was already refused,
+      # so these arrive to nothing. Silently dropped; the set entry goes
+      # when the stream's own :done/:error lands.
+      MapSet.member?(abandoned(state), ref) ->
+        {:noreply, state}
+
+      true ->
+        Logger.debug("timeline: stray item dropped ref=#{inspect(ref)}")
+        {:noreply, state}
     end
   end
 
   def handle_info({Client, ref, :done}, state) do
-    feed_done(state, ref, :done)
+    feed_done(forget_abandoned(state, ref), ref, :done)
   end
 
   def handle_info({Client, ref, {:error, reason}}, state) do
     Logger.debug("timeline: feed stream error: #{inspect(reason)}")
-    feed_done(state, ref, :error)
+    feed_done(forget_abandoned(state, ref), ref, :error)
   end
 
   # the client died under us (sidecar restart, socket drop): reconnect
@@ -2803,6 +2820,15 @@ defmodule HighWire.Timeline do
 
       {ref, fid}
     end)
+  end
+
+  # Refs of pages that timed out before they filled. Read through a
+  # helper because handlers also run against hand-built state in tests,
+  # which may not carry the field; the running process always does.
+  defp abandoned(state), do: Map.get(state, :abandoned, MapSet.new())
+
+  defp forget_abandoned(state, ref) do
+    Map.put(state, :abandoned, MapSet.delete(abandoned(state), ref))
   end
 
   defp feed_done(state, ref, _result) do
@@ -4170,6 +4196,7 @@ defmodule HighWire.Timeline do
         contacts_ref: nil,
         contacts_primed?: false,
         pending: %{},
+        abandoned: MapSet.new(),
         blob_ls_ref: nil
     }
   end

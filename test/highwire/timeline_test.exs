@@ -901,6 +901,7 @@ defmodule HighWire.TimelineTest do
           status: :loading,
           acc: [post],
           pending: %{},
+          abandoned: MapSet.new(),
           messages: payload(%{"@me.ed25519" => %{}, "@a.ed25519" => %{}}),
           blob_rev: 0,
           gen: 0,
@@ -1641,6 +1642,50 @@ defmodule HighWire.TimelineTest do
       {:noreply, ^state} = Timeline.handle_info({:page_timeout, ref}, state)
       refute_received {^ask_ref, _}
     end
+
+    test "rows still arriving after a page timed out are dropped without a stray" do
+      # The engine cannot be told to stop a stream that is already open,
+      # so the rows queued behind a page's timeout keep arriving after the
+      # caller has been refused. Each one used to log a "stray item
+      # dropped"; now they are dropped quietly, because the caller was
+      # already answered and there is nothing to blame.
+      {:ok, client} = ScriptClient.start([])
+      state = profile_state(client)
+      {state, from} = ask(state)
+      {_tag, ask_ref} = from
+
+      assert [{ref, _record}] = Map.to_list(state.pages)
+
+      {:noreply, state} = Timeline.handle_info({:page_timeout, ref}, state)
+      assert_received {^ask_ref, {:error, :timeout}}
+
+      # The stragglers land after the give-up. They answer nothing, change
+      # nothing, and — above all — log nothing. The suite runs at :error,
+      # and capture_log's own level does not lift the primary one that
+      # Logger.debug is filtered against, so the primary level is raised
+      # for the length of each capture. This module is async: false, so
+      # nothing else is logging through the change.
+      log = capture_debug(fn -> land(state, ref, page_rows(3)) end)
+      refute log =~ "stray item dropped"
+
+      # The same capture, against a ref that was never a page, still logs:
+      # the silence above is the abandoned page specifically, not a capture
+      # that saw nothing.
+      stray_log = capture_debug(fn -> land(state, :never_a_page, page_rows(1)) end)
+      assert stray_log =~ "stray item dropped"
+    end
+
+    # Capture debug output by lifting the primary level for the duration.
+    defp capture_debug(fun) do
+      prev = Logger.level()
+      Logger.configure(level: :debug)
+
+      try do
+        ExUnit.CaptureLog.capture_log(fun)
+      after
+        Logger.configure(level: prev)
+      end
+    end
   end
 
   # A roots page either carries history or carries an error — never an
@@ -2175,6 +2220,7 @@ defmodule HighWire.TimelineTest do
         contacts_primed?: false,
         client: self(),
         pending: %{},
+        abandoned: MapSet.new(),
         gen: 5,
         reload_timer: nil,
         active: %{self() => make_ref()},
