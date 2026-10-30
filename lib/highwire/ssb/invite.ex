@@ -218,13 +218,15 @@ defmodule HighWire.SSB.Invite do
   # the address into conn.json — the pub is dialable from the next
   # pass onward with nothing else to do here.
   defp announce_via_engine(%{host: host, port: port, pub_id: pub_id}) do
-    with {:ok, _} <- Timeline.follow(pub_id) do
-      case Timeline.announce_pub(host, port, pub_id) do
-        {:ok, _} -> :ok
-        {:error, reason} -> {:error, {:announce, reason}}
-      end
-    else
-      {:error, reason} -> {:error, {:announce, reason}}
+    case Timeline.follow(pub_id) do
+      {:error, reason} ->
+        {:error, {:announce, reason}}
+
+      {:ok, _} ->
+        case Timeline.announce_pub(host, port, pub_id) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, {:announce, reason}}
+        end
     end
   end
 

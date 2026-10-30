@@ -438,35 +438,7 @@ defmodule HighWireWeb.NetworkLive do
         {:noreply, assign(socket, invite_notice: "Paste an invite code to join a pub.")}
 
       true ->
-        case Invite.parse(code) do
-          {:error, :bad_invite} ->
-            {:noreply,
-             assign(socket,
-               invite_notice:
-                 "That is not a valid invite code. It should look like host:port:@key.ed25519~seed."
-             )}
-
-          {:ok, invite} ->
-            parent = self()
-
-            Task.start(fn ->
-              result =
-                try do
-                  Invite.redeem(invite)
-                catch
-                  kind, reason -> {:error, {kind, reason}}
-                end
-
-              send(parent, {:invite_result, result})
-            end)
-
-            {:noreply,
-             assign(socket,
-               redeeming: true,
-               invite_code: "",
-               invite_notice: "Joining #{invite.host}:#{invite.port}…"
-             )}
-        end
+        redeem_invite(code, socket)
     end
   end
 
@@ -498,43 +470,7 @@ defmodule HighWireWeb.NetworkLive do
         {:noreply, assign(socket, peer_notice: "Paste a peer address to add it.")}
 
       true ->
-        case PeerAddress.parse(address) do
-          {:error, :bad_address} ->
-            {:noreply,
-             assign(socket,
-               peer_notice:
-                 "That is not a valid address. It should look like net:host:port~shs:key."
-             )}
-
-          {:ok, peer} ->
-            parent = self()
-
-            Task.start(fn ->
-              result =
-                try do
-                  PeerAddress.add(peer)
-                catch
-                  kind, reason ->
-                    # A raise here is a bug, not a refusal — log it with
-                    # its trace, and hand the reader a sentence rather
-                    # than the raw Erlang terms the exception carries.
-                    Logger.error(
-                      "add-peer #{peer.host}:#{peer.port} raised #{inspect(kind)}: #{inspect(reason)}"
-                    )
-
-                    {:error, :raised}
-                end
-
-              send(parent, {:peer_result, result})
-            end)
-
-            {:noreply,
-             assign(socket,
-               adding_peer: true,
-               peer_address: "",
-               peer_notice: "Saving #{peer.host}:#{peer.port}…"
-             )}
-        end
+        add_peer(address, socket)
     end
   end
 
@@ -1351,6 +1287,82 @@ defmodule HighWireWeb.NetworkLive do
     do: "the port is still in use. A leftover process is holding it."
 
   defp switch_error(reason), do: inspect(reason)
+
+  # The pub round-trip itself, run off the socket: a bad or hostile
+  # invite must not take the LiveView down, so the code parses first
+  # (cheap, local) and only a well-formed one reaches a Task, whose
+  # outcome lands back here as a message. A raise or exit is caught and
+  # worded like any other refusal.
+  defp redeem_invite(code, socket) do
+    case Invite.parse(code) do
+      {:error, :bad_invite} ->
+        {:noreply,
+         assign(socket,
+           invite_notice:
+             "That is not a valid invite code. It should look like host:port:@key.ed25519~seed."
+         )}
+
+      {:ok, invite} ->
+        parent = self()
+
+        Task.start(fn ->
+          result =
+            try do
+              Invite.redeem(invite)
+            catch
+              kind, reason -> {:error, {kind, reason}}
+            end
+
+          send(parent, {:invite_result, result})
+        end)
+
+        {:noreply,
+         assign(socket,
+           redeeming: true,
+           invite_code: "",
+           invite_notice: "Joining #{invite.host}:#{invite.port}…"
+         )}
+    end
+  end
+
+  # Same shape for adding a saved address. A raise here is a bug, not a
+  # refusal — log it with its trace, and hand the reader a sentence
+  # rather than the raw Erlang terms the exception carries.
+  defp add_peer(address, socket) do
+    case PeerAddress.parse(address) do
+      {:error, :bad_address} ->
+        {:noreply,
+         assign(socket,
+           peer_notice: "That is not a valid address. It should look like net:host:port~shs:key."
+         )}
+
+      {:ok, peer} ->
+        parent = self()
+
+        Task.start(fn ->
+          result =
+            try do
+              PeerAddress.add(peer)
+            catch
+              kind, reason ->
+                Logger.error(
+                  "add-peer #{peer.host}:#{peer.port} raised #{inspect(kind)}: #{inspect(reason)}"
+                )
+
+                {:error, :raised}
+            end
+
+          send(parent, {:peer_result, result})
+        end)
+
+        {:noreply,
+         assign(socket,
+           adding_peer: true,
+           peer_address: "",
+           peer_notice: "Saving #{peer.host}:#{peer.port}…"
+         )}
+    end
+  end
 
   defp dial_error({:exit, reason}), do: inspect(reason)
   defp dial_error(:timeout), do: "Connection timed out."

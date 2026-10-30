@@ -3,7 +3,7 @@ defmodule HighWire.SSB.InviteTest do
   # running identity, and the integration cases bind a loopback port.
   use ExUnit.Case, async: false
 
-  alias HighWire.SSB.{BoxStream, Invite, Muxrpc, Network}
+  alias HighWire.SSB.{BoxStream, Identities, Invite, Muxrpc, Network}
 
   @moduletag :capture_log
 
@@ -55,35 +55,44 @@ defmodule HighWire.SSB.InviteTest do
       {eph_sk, server_hello, dec_nonce} = gen_hello(net_id)
       :ok = :gen_tcp.send(sock, server_hello)
 
-      shared_ab = :enacl.curve25519_scalarmult(eph_sk, cl_eph_pk)
+      # The three shared secrets, each named for the two keys it
+      # multiplies — ours first, theirs second — which is erlbutt's
+      # Shared_ab, Shared_aB and Shared_Ab in snake_case.
+      shared_eph_eph = :enacl.curve25519_scalarmult(eph_sk, cl_eph_pk)
 
-      shared_aB =
+      shared_static_eph =
         :enacl.curve25519_scalarmult(
           :enacl.crypto_sign_ed25519_secret_to_curve25519(long_sk),
           cl_eph_pk
         )
 
       {:ok, serv_data} = :gen_tcp.recv(sock, 112, 5_000)
-      sha_ab = :crypto.hash(:sha256, shared_ab)
-      auth_key = :crypto.hash(:sha256, net_id <> shared_ab <> shared_aB)
+      sha_eph_eph = :crypto.hash(:sha256, shared_eph_eph)
+      auth_key = :crypto.hash(:sha256, net_id <> shared_eph_eph <> shared_static_eph)
       {:ok, msg_plain} = :enacl.secretbox_open(serv_data, @shs_nonce, auth_key)
       <<det_sig_a::binary-size(64), cl_long_pk::binary-size(32)>> = msg_plain
-      true = :enacl.sign_verify_detached(det_sig_a, net_id <> long_pk <> sha_ab, cl_long_pk)
+      true = :enacl.sign_verify_detached(det_sig_a, net_id <> long_pk <> sha_eph_eph, cl_long_pk)
 
-      shared_Ab =
+      shared_eph_static =
         :enacl.curve25519_scalarmult(
           eph_sk,
           :enacl.crypto_sign_ed25519_public_to_curve25519(cl_long_pk)
         )
 
-      det_sig_b = :enacl.sign_detached(net_id <> det_sig_a <> cl_long_pk <> sha_ab, long_sk)
-      resp_key = :crypto.hash(:sha256, net_id <> shared_ab <> shared_aB <> shared_Ab)
+      det_sig_b = :enacl.sign_detached(net_id <> det_sig_a <> cl_long_pk <> sha_eph_eph, long_sk)
+
+      resp_key =
+        :crypto.hash(:sha256, net_id <> shared_eph_eph <> shared_static_eph <> shared_eph_static)
+
       :ok = :gen_tcp.send(sock, :enacl.secretbox(det_sig_b, @shs_nonce, resp_key))
 
       session =
         :crypto.hash(
           :sha256,
-          :crypto.hash(:sha256, net_id <> shared_ab <> shared_aB <> shared_Ab)
+          :crypto.hash(
+            :sha256,
+            net_id <> shared_eph_eph <> shared_static_eph <> shared_eph_static
+          )
         )
 
       state = %{
@@ -388,8 +397,8 @@ defmodule HighWire.SSB.InviteTest do
 
     File.write!(Path.join([home, ".ssberl", "secret"]), body <> "\n")
 
-    assert :ok = HighWire.SSB.Identities.ensure_boot()
-    assert HighWire.SSB.Identities.active_id() == id
+    assert :ok = Identities.ensure_boot()
+    assert Identities.active_id() == id
 
     {:ok, feed_id: id}
   end

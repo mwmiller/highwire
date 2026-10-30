@@ -38,9 +38,9 @@ defmodule HighWire.SSB.PeerAddress do
   """
   @spec parse(binary()) :: {:ok, t()} | {:error, :bad_address}
   def parse(address) when is_binary(address) do
-    with trimmed = String.trim(address),
-         trimmed = String.trim_leading(trimmed, "net:"),
-         [addr_part, key_body] <- String.split(trimmed, "~", parts: 2),
+    trimmed = address |> String.trim() |> String.trim_leading("net:")
+
+    with [addr_part, key_body] <- String.split(trimmed, "~", parts: 2),
          [host, port_str] <- split_host_port(addr_part),
          {port, ""} <- Integer.parse(String.trim(port_str)),
          true <- port >= 1 and port <= 65_535,
