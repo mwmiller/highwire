@@ -151,7 +151,11 @@ defmodule HighWireWeb.MessageText do
   defp typed_label("post-edit", c, msg, ctx), do: edit_label(c, msg, ctx)
   defp typed_label("vote", c, _msg, ctx), do: vote_label(c, ctx)
   defp typed_label("post", c, _msg, _ctx), do: post_label(c)
-  defp typed_label(type, _c, _msg, _ctx), do: "sent a #{humanize_type(type_family(type))} message"
+
+  defp typed_label(type, _c, _msg, _ctx) do
+    family = humanize_type(type_family(type))
+    "sent #{article(family)} #{family} message"
+  end
 
   # A contact edit is the reader's social ledger: which way the
   # relationship went, and with whom. The edit may also carry a name for
@@ -289,6 +293,24 @@ defmodule HighWireWeb.MessageText do
     type
     |> String.replace(["/", "_", "-"], " ")
     |> String.downcase()
+  end
+
+  # English takes its article by sound, and the wire carries only the
+  # letters, so the cases where the two disagree are named here: the
+  # silent h ("an hour", "an honest…") and the words that open on a
+  # consonant sound despite their letter — the "you" of "a user", the
+  # "w" of "a one", the "y" of "a euro". Every other family is read
+  # off its first letter, which is how the reader says it aloud.
+  @silent_h ~w(hour honest honor honour heir)
+  @consonant_sound ~w(one once uni use usu eu)
+
+  defp article(family) do
+    cond do
+      String.starts_with?(family, @silent_h) -> "an"
+      String.starts_with?(family, @consonant_sound) -> "a"
+      String.starts_with?(family, ~w(a e i o u)) -> "an"
+      true -> "a"
+    end
   end
 
   defp index(%{index: index}) when is_map(index), do: index

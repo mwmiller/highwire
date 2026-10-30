@@ -94,6 +94,19 @@ defmodule HighWireWeb.MessageTextTest do
                "sent a secret thing message"
     end
 
+    test "the article follows how the family sounds, not just its letter" do
+      assert MessageText.describe(msg(%{"type" => "issue"})) == "sent an issue message"
+      assert MessageText.describe(msg(%{"type" => "event"})) == "sent an event message"
+
+      # a vowel letter that opens on a consonant sound keeps "a"
+      assert MessageText.describe(msg(%{"type" => "user"})) == "sent a user message"
+      assert MessageText.describe(msg(%{"type" => "unique-poll"})) == "sent a unique poll message"
+
+      # and a consonant letter that is silent takes "an"
+      assert MessageText.describe(msg(%{"type" => "hourly-report"})) ==
+               "sent an hourly report message"
+    end
+
     test "describe_spate/1 says the family repeated, without a count" do
       assert MessageText.describe_spate(msg(%{"type" => "movieclub/new"})) ==
                "sent some movieclub messages"
