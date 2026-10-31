@@ -267,6 +267,19 @@ jobs:
             timeout 30 erl -noshell -eval \
               'io:format("dns: ~p~n", [inet_res:lookup("repo.hex.pm", in, a)]), halt().' \
               || echo "== phase: erlang dns probe FAILED =="
+            # erlbutt's project-wide release pre_hooks call a POSIX
+            # script (scripts/stage-plugins.sh: stage the plugins a
+            # package ships), and rebar3 starts hooks through cmd on
+            # Windows, which cannot run one — the leg dies at "Hook for
+            # release failed!". Stage the plugins ourselves under this
+            # shell, from the erlbutt root with PLUGINS unset exactly as
+            # the other legs have it, so the _build/plugins tree the
+            # release overlay copies already exists; then hand cmd a
+            # hook it can answer, so the hook still runs and still
+            # succeeds. The tree and the script are untouched.
+            (cd deps/erlbutt && bash scripts/stage-plugins.sh)
+            sed -i 's|"scripts/stage-plugins.sh"|"echo stage-plugins.sh staged by the workflow"|g' \
+              deps/erlbutt/rebar.config
             echo "== phase: deps fetched, starting rebar3 =="
             (cd deps/erlbutt && DEBUG=1 timeout 15m ./rebar3 as prod release)
             echo "== phase: rebar3 release done =="
