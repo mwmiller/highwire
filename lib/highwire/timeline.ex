@@ -874,7 +874,8 @@ defmodule HighWire.Timeline do
   end
 
   def handle_call({:feed, view, resume}, _from, state) do
-    {:reply, fetch_view(state, view, resume), state}
+    {page, state} = fetch_view(state, view, resume)
+    {:reply, page, state}
   end
 
   def handle_call({:post, key}, _from, state) do
@@ -1433,7 +1434,7 @@ defmodule HighWire.Timeline do
   defp fetch_view(%{self_id: id} = state, :profile, resume) when is_binary(id),
     do: fetch_roots(state, "profile", %{"id" => id}, resume, false)
 
-  defp fetch_view(_state, :profile, _resume), do: empty_page()
+  defp fetch_view(state, :profile, _resume), do: {empty_page(), state}
 
   # One patchwork.<Feed>.roots page, drained here like fetch_history.
   # The trailing {marker, resume} frame (only sent on a full page)
@@ -1452,13 +1453,13 @@ defmodule HighWire.Timeline do
     if is_pid(state.client) and Process.alive?(state.client) do
       case Client.stream(state.client, ["patchwork", feed, "roots"], [props], self()) do
         {:ok, ref} -> settle_page("#{feed} roots", roots_page(ref, state, self_id, private?))
-        other -> page_error("#{feed} roots", {:stream, other})
+        other -> {page_error("#{feed} roots", {:stream, other}), state}
       end
     else
-      {:error, :offline}
+      {{:error, :offline}, state}
     end
   catch
-    kind, reason -> page_raised("#{feed} roots", kind, reason)
+    kind, reason -> {page_raised("#{feed} roots", kind, reason), state}
   end
 
   defp roots_page(ref, state, self_id, private?) do
@@ -1467,8 +1468,19 @@ defmodule HighWire.Timeline do
     # frame says only that this attempt failed — the rows alone cannot
     # tell the two apart, and reporting the second as the first is what
     # makes a failed load read as the end of the feed.
+    #
+    # A full page leaves the stream open with more frames queued behind
+    # it: the engine honors the limit it was asked for, but this drain
+    # stops the moment the page fills. A give-up is the same story from
+    # the other end — the rows are on their way and the caller has been
+    # refused. Either way the ref is remembered for that surplus, the
+    # way a profile page remembers its own, so the frames land silently
+    # rather than one "stray item dropped" apiece. The set travels back
+    # with the page: this state is a copy, and only the caller's is the
+    # GenServer's.
     case drain_stream(ref, @roots_page) do
       {status, frames} when status in [:ok, :done] ->
+        state = if status == :ok, do: remember_abandoned(state, ref), else: state
         {markers, items} = Enum.split_with(frames, &(&1["marker"] == true))
         items = Enum.take(items, @roots_page)
         cursor = private_cursor(markers)
@@ -1485,18 +1497,26 @@ defmodule HighWire.Timeline do
             Map.put(row, :likes, Map.get(like_counts, item["key"], row.likes))
           end)
 
-        %{rows: rows, resume: cursor, more: is_integer(cursor)}
+        {%{rows: rows, resume: cursor, more: is_integer(cursor)}, state}
 
       {:error, reason} ->
-        {:error, reason}
+        # A quiet stream owes the caller a refusal it can ask again
+        # against, and owes the frames still queued behind it a silent
+        # landing. An error frame ends the stream itself, so there is
+        # no surplus to remember there.
+        state = if reason == :timeout, do: remember_abandoned(state, ref), else: state
+        {{:error, reason}, state}
     end
   end
 
   # The page came back or it did not: either way the log is owed the
   # reason and the caller the state. `{:error, …}` stays `{:error, …}`
   # through the reply — the public wrappers pass it on untouched.
-  defp settle_page(what, {:error, reason}), do: page_error(what, reason)
-  defp settle_page(_what, page), do: page
+  # A page arrives as `{page, state}`: the state carries the ref of a
+  # stream left open for surplus frames, and only the caller's copy is
+  # the GenServer's.
+  defp settle_page(what, {{:error, reason}, state}), do: {page_error(what, reason), state}
+  defp settle_page(_what, {page, state}), do: {page, state}
 
   defp page_error(what, {:stream, reason}) do
     Logger.warning("timeline: #{what} stream failed: #{inspect(reason)}")

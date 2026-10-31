@@ -1733,7 +1733,12 @@ defmodule HighWire.TimelineTest do
   # had ended when the load had merely failed.
   describe "a feed page that fails reports the failure, never an empty last page" do
     defp feed_state(client) do
-      %{client: client, self_id: "@me=.ed25519", messages: %{}}
+      %{
+        client: client,
+        self_id: "@me=.ed25519",
+        messages: %{},
+        pending: %{}
+      }
     end
 
     defp root_item(n) do
@@ -1823,6 +1828,76 @@ defmodule HighWire.TimelineTest do
       # arriving as {:error, …} is the contract the view's case stands
       # on — wrapped in {:ok, …} it would read as a page.
       assert {:error, :offline} = Timeline.feed(:public, nil)
+    end
+
+    # The engine honors the limit a page asks for, but the drain stops
+    # reading the moment the page fills — and a drain that gives up
+    # stops reading long before. Either way the stream stays open and
+    # its surplus frames arrive later, with nothing left to file them
+    # under. They are dropped without a log line, the way a profile
+    # page's are: one "stray item dropped" apiece is a log line about
+    # nothing, and a full page's worth of them is a flood.
+    test "surplus frames from a page that filled land without a stray" do
+      # Forty rows for a thirty-wide page: the drain stops on the
+      # thirty-first, and the stream goes on offering after that.
+      rows = Enum.map(1..40, &root_item/1)
+      {:ok, client} = ScriptClient.start(Enum.map(rows, &{:item, &1}))
+      state = feed_state(client)
+
+      {:reply, reply, state} =
+        Timeline.handle_call({:feed, :public, nil}, {self(), make_ref()}, state)
+
+      # The page is the width it asked for however much the stream had
+      # to offer — the surplus is not in it.
+      assert length(reply.rows) == 30
+      refute Enum.any?(reply.rows, &(&1.msg["key"] == "%root40.sha256"))
+      assert [ref] = MapSet.to_list(state.abandoned)
+
+      log =
+        capture_debug(fn ->
+          {:noreply, _state} =
+            Timeline.handle_info({HighWire.SSB.Client, ref, {:item, root_item(41)}}, state)
+
+          # The stream's own end clears the entry: nothing is left to
+          # remember, and the next page asked for starts clean.
+          {:noreply, state} =
+            Timeline.handle_info({HighWire.SSB.Client, ref, :done}, state)
+
+          assert MapSet.size(state.abandoned) == 0
+        end)
+
+      refute log =~ "stray item dropped"
+    end
+
+    test "a drain that gives up remembers its ref, so its rows stay quiet too" do
+      # A stream that goes quiet mid-page leaves the caller refused a
+      # timeout — and the rows the engine had already queued land
+      # afterwards, with the page answered and nothing to file them
+      # under. This is the shape that flooded the log: one feed's whole
+      # page arriving as strays.
+      {:ok, client} = ScriptClient.start(Enum.map(1..5, &{:item, root_item(&1)}))
+      state = feed_state(client)
+
+      {:reply, reply, state} =
+        Timeline.handle_call({:feed, :public, nil}, {self(), make_ref()}, state)
+
+      assert reply == {:error, :timeout}
+      assert [ref] = MapSet.to_list(state.abandoned)
+
+      log =
+        capture_debug(fn ->
+          {:noreply, state} =
+            Timeline.handle_info({HighWire.SSB.Client, ref, {:item, root_item(6)}}, state)
+
+          # The ref stays remembered until the stream's own end, so
+          # every frame behind the give-up is dropped the same way.
+          {:noreply, state} =
+            Timeline.handle_info({HighWire.SSB.Client, ref, {:item, root_item(7)}}, state)
+
+          assert MapSet.member?(state.abandoned, ref)
+        end)
+
+      refute log =~ "stray item dropped"
     end
   end
 
