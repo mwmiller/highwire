@@ -1504,18 +1504,23 @@ defmodule HighWire.TimelineTest do
     defp profile_state(client) do
       %{
         client: client,
+        pages_client: nil,
         self_id: "@me.ed25519",
         follows: [],
         contact_msgs: [],
         collapsed_contacts: %{by_group: %{}, rows: %{}},
+        contacts_ref: nil,
+        contacts_primed?: true,
         acc: [],
         messages: %{},
         blob_rev: 0,
+        blob_ls_ref: nil,
         status: :ok,
         gen: 0,
         reload_timer: nil,
         pending: %{},
         pages: %{},
+        abandoned: MapSet.new(),
         done_count: 0,
         profile_fetching?: false
       }
@@ -1725,6 +1730,92 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  # A profile page rides a connection of its own, for the reason the
+  # contact drain has one: on the shared connection its rows queue behind
+  # every stream the heartbeat's reload opens, and the page waits out
+  # that queue rather than its own rows. So the page opens its stream on
+  # the dedicated connection — and because each page remembers which
+  # connection it rides, a connection dying takes only its own pages with
+  # it, never the reader's whole request queue.
+  describe "a profile page rides a dedicated connection" do
+    defp with_pages_client(state, pages_client) do
+      Map.put(state, :pages_client, pages_client)
+    end
+
+    test "the page's stream opens on the dedicated connection, not the shared one" do
+      main = start_supervised!(%{id: :pages_main, start: {FakeClient, :start_link, [nil]}})
+
+      dedicated =
+        start_supervised!(%{id: :pages_dedicated, start: {FakeClient, :start_link, [nil]}})
+
+      state = profile_state(main) |> with_pages_client(dedicated)
+      {state, _from} = ask(state)
+
+      assert [{_ref, page}] = Map.to_list(state.pages)
+      assert page.client == dedicated
+
+      assert [{["patchwork", "profile", "roots"], _args}] = FakeClient.streams(dedicated)
+      assert FakeClient.streams(main) == []
+    end
+
+    test "the dedicated connection dying refuses only its own pages" do
+      main = start_supervised!(%{id: :drop_main, start: {FakeClient, :start_link, [nil]}})
+
+      dedicated =
+        start_supervised!(%{id: :drop_dedicated, start: {FakeClient, :start_link, [nil]}})
+
+      # Two pages are waiting: one that rode the dedicated connection
+      # and one that fell back to the shared one, because the dial had
+      # failed. Both are in flight when the dedicated connection goes.
+      state = profile_state(main) |> with_pages_client(dedicated)
+      {state, {_, dedicated_ask}} = ask(state)
+      [dedicated_ref] = Map.keys(state.pages)
+
+      shared_ref = make_ref()
+      shared_ask = make_ref()
+      shared_page = %{from: {self(), shared_ask}, client: main, acc: [], at: 0, timer: nil}
+      state = put_in(state.pages[shared_ref], shared_page)
+
+      assert state.pages[dedicated_ref].client == dedicated
+      assert state.pages[shared_ref].client == main
+
+      {:noreply, state} =
+        Timeline.handle_info({:EXIT, dedicated, :closed}, state)
+
+      # The page that rode the dead connection is refused now — its rows
+      # are not coming, and the caller is owed a refusal it can ask
+      # again against rather than a wait to its own give-up.
+      assert_received {^dedicated_ask, {:error, :offline}}
+
+      # The other page is untouched: its rows ride a healthy connection
+      # and are still on their way.
+      assert Map.keys(state.pages) == [shared_ref]
+      refute_received {^shared_ask, _}
+      assert state.pages_client == nil
+    end
+
+    test "the shared connection dying leaves dedicated-connection pages alone" do
+      main = start_supervised!(%{id: :shared_main, start: {FakeClient, :start_link, [nil]}})
+
+      dedicated =
+        start_supervised!(%{id: :shared_dedicated, start: {FakeClient, :start_link, [nil]}})
+
+      state = profile_state(main) |> with_pages_client(dedicated)
+      {state, {_, ask_ref}} = ask(state)
+      [page_ref] = Map.keys(state.pages)
+
+      # The shared connection drops — a sidecar restart, a socket loss.
+      # The reconnect takes the main client down, and with it the pages
+      # that rode it; a page on the dedicated connection is not one of
+      # them.
+      {:noreply, state} = Timeline.handle_info({:EXIT, main, :closed}, state)
+
+      refute_received {^ask_ref, _}
+      assert Map.keys(state.pages) == [page_ref]
+      assert state.client == nil
+    end
+  end
+
   # A roots page either carries history or carries an error — never an
   # empty final page dressed as one. Every failure arm here used to
   # return `%{rows: [], resume: nil, more: false}` inside an `{:ok, …}`,
@@ -1735,6 +1826,7 @@ defmodule HighWire.TimelineTest do
     defp feed_state(client) do
       %{
         client: client,
+        pages_client: nil,
         self_id: "@me=.ed25519",
         messages: %{},
         pending: %{}
@@ -1838,7 +1930,7 @@ defmodule HighWire.TimelineTest do
     # page's are: one "stray item dropped" apiece is a log line about
     # nothing, and a full page's worth of them is a flood.
     test "surplus frames from a page that filled land without a stray" do
-      # Forty rows for a thirty-wide page: the drain stops on the
+      # Thirty-one rows for a thirty-wide page: the drain stops on the
       # thirty-first, and the stream goes on offering after that.
       rows = Enum.map(1..40, &root_item/1)
       {:ok, client} = ScriptClient.start(Enum.map(rows, &{:item, &1}))

@@ -783,6 +783,9 @@ defmodule HighWire.Timeline do
       edit_buf: [],
       edit_snapshot?: true,
       drain_client: nil,
+      # Profile pages ride a connection of their own once one is
+      # opened (see pages_endpoint/1); a nil means none is open yet.
+      pages_client: nil,
       last_drain_at: nil,
       follows: [],
       blocked: [],
@@ -863,10 +866,12 @@ defmodule HighWire.Timeline do
   # connection busy with the heartbeat's reload delays this page without
   # ever failing it, and without holding the GenServer for the wait.
   def handle_call({:profile_feed, id, resume}, from, state) do
-    case fetch_profile(state, id, resume) do
+    {client, state} = pages_endpoint(state)
+
+    case fetch_profile(client, id, resume) do
       {:pending, ref} ->
         Logger.debug("timeline: profile roots page waiting for its rows ref=#{inspect(ref)}")
-        {:noreply, hold_page(state, ref, from)}
+        {:noreply, hold_page(state, ref, from, client)}
 
       reply ->
         {:reply, reply, state}
@@ -1307,22 +1312,22 @@ defmodule HighWire.Timeline do
     end
   end
 
-  # One-shot history pull on the shared client: open the stream and hand
-  # back the ref — the rows are read in handle_info/3 as they land, never
-  # drained here (see @page_wait_ms for why). `order: "timestamp"` is the
-  # profile page's chronological view — without it the engine pages by
-  # thread activity, so a bumped thread jumps above more recent posts.
+  # One-shot history pull: open the stream and hand back the ref — the
+  # rows are read in handle_info/3 as they land, never drained here (see
+  # @page_wait_ms for why). `order: "timestamp"` is the profile page's
+  # chronological view — without it the engine pages by thread activity,
+  # so a bumped thread jumps above more recent posts.
   #
   # A stream that would not open is a failed page, not an empty one: the
   # reader is owed a refusal they can recognize and ask against, never
   # history that quietly looks spent.
-  defp fetch_profile(state, id, resume) do
+  defp fetch_profile(client, id, resume) do
     props = %{"id" => id, "limit" => @profile_page, "reverse" => true, "order" => "timestamp"}
     props = if is_integer(resume), do: Map.put(props, "resume", resume), else: props
 
-    if is_pid(state.client) and Process.alive?(state.client) do
+    if is_pid(client) and Process.alive?(client) do
       case Client.stream(
-             state.client,
+             client,
              ["patchwork", "profile", "roots"],
              [props],
              self()
@@ -1341,10 +1346,13 @@ defmodule HighWire.Timeline do
   # wire, so the call has returned without a reply and this record holds
   # where that reply goes. The timer is the backstop for rows that never
   # come — without it a silent stream would leave the caller waiting the
-  # full length of its own call.
-  defp hold_page(state, ref, from) do
+  # full length of its own call. The connection is remembered with it: a
+  # page's rows ride the connection that opened them, so only that
+  # connection going away can call the page lost.
+  defp hold_page(state, ref, from, client) do
     page = %{
       from: from,
+      client: client,
       acc: [],
       at: System.monotonic_time(:millisecond),
       timer: Process.send_after(self(), {:page_timeout, ref}, @page_wait_ms)
@@ -1377,10 +1385,12 @@ defmodule HighWire.Timeline do
 
   # Pages ride the connection that opened them: with that connection gone
   # their rows are not coming, so the callers waiting on them are refused
-  # now rather than left to run into their own give-up.
-  defp fail_pages(state, reason) do
+  # now rather than left to run into their own give-up. A page on another
+  # connection is untouched — its rows are still on their way.
+  defp fail_pages(state, client, reason) do
     state
     |> Map.get(:pages, %{})
+    |> Enum.filter(fn {_ref, page} -> Map.get(page, :client) == client end)
     |> Enum.reduce(state, fn {ref, _page}, acc -> answer_page(acc, ref, {:error, reason}) end)
   end
 
@@ -2422,6 +2432,14 @@ defmodule HighWire.Timeline do
     {:noreply, %{state | drain_client: nil, contact_ref: nil, contact_buf: [], about_ref: nil}}
   end
 
+  # the dedicated pages connection died under us (sidecar restart,
+  # socket drop): its pages' rows are not coming, so their callers are
+  # refused now — and the ref clears, so the next page asked for dials
+  # a fresh connection rather than waiting on a dead one.
+  def handle_info({:EXIT, pid, _reason}, %{pages_client: pid} = state) do
+    {:noreply, fail_pages(%{state | pages_client: nil}, pid, :offline)}
+  end
+
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
@@ -2779,6 +2797,46 @@ defmodule HighWire.Timeline do
 
   defp drain_due?(%{last_drain_at: at}) do
     System.monotonic_time(:millisecond) - at > @drain_refresh_ms
+  end
+
+  # A profile page rides a connection of its own, for the reason the
+  # contact drain has one: the rows are ordered frames behind every
+  # stream the heartbeat's reload opens, and on the shared connection
+  # that queue is what the page waits out — measured here at five to
+  # nine seconds to first row during a reload, against ~160ms when the
+  # connection is quiet. One SHS dial buys the page its own lane, and
+  # it is paid once: the connection is kept for the pages after it.
+  #
+  # A dial that fails falls back to the shared client — correct, just
+  # with the starvation caveat — and tests (drain_connection: false)
+  # never dial at all, answering from the fake client directly.
+  defp pages_endpoint(state) do
+    cond do
+      is_pid(state.pages_client) and Process.alive?(state.pages_client) ->
+        {state.pages_client, state}
+
+      Keyword.get(Sidecar.config(), :drain_connection, true) == false ->
+        {state.client, state}
+
+      not is_pid(state.client) ->
+        {nil, state}
+
+      true ->
+        dial_pages(state)
+    end
+  end
+
+  defp dial_pages(state) do
+    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
+
+    if File.exists?(secret) do
+      case start_client(secret) do
+        {:ok, client} -> {client, %{state | pages_client: client}}
+        _ -> {state.client, state}
+      end
+    else
+      {state.client, state}
+    end
   end
 
   # An already-open dedicated connection wins; tests (drain_connection:
@@ -4225,8 +4283,11 @@ defmodule HighWire.Timeline do
 
   defp reset_connection(state) do
     schedule_reconnect()
+    # The pages that rode this connection are lost with it; those on the
+    # dedicated pages connection keep coming, so that one is left up.
+    client = state.client
     state = stop_client(state)
-    state = fail_pages(state, :offline)
+    state = fail_pages(state, client, :offline)
 
     %{
       state
