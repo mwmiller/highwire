@@ -2321,6 +2321,13 @@ defmodule HighWire.Timeline do
     acc = [msg | page.acc]
 
     if page_full?(acc, @profile_page) do
+      # The page is answered the moment it fills, but its stream is still
+      # open: the engine offers more rows than the page asked for, and the
+      # surplus keeps landing after the ref is forgotten. The ref is
+      # remembered here for the same reason a timeout remembers it — the
+      # rows arrive to nothing and must not log one "stray" apiece. The
+      # entry goes when the stream's own :done/:error lands.
+      state = remember_abandoned(state, ref)
       {:noreply, answer_page(state, ref, profile_page_frames(Enum.reverse(acc)))}
     else
       {:noreply, put_in(state.pages[ref], %{page | acc: acc})}
@@ -2346,7 +2353,7 @@ defmodule HighWire.Timeline do
   # one "stray" log line apiece.
   def handle_info({:page_timeout, ref}, %{pages: pages} = state)
       when is_map_key(pages, ref) do
-    state = Map.put(state, :abandoned, MapSet.put(abandoned(state), ref))
+    state = remember_abandoned(state, ref)
     {:noreply, answer_page(state, ref, page_error("profile roots", :timeout))}
   end
 
@@ -2822,10 +2829,16 @@ defmodule HighWire.Timeline do
     end)
   end
 
-  # Refs of pages that timed out before they filled. Read through a
-  # helper because handlers also run against hand-built state in tests,
-  # which may not carry the field; the running process always does.
+  # Refs of pages whose streams outlived their answer — a page that
+  # timed out, or one that filled while the engine kept offering rows.
+  # Read through a helper because handlers also run against hand-built
+  # state in tests, which may not carry the field; the running process
+  # always does.
   defp abandoned(state), do: Map.get(state, :abandoned, MapSet.new())
+
+  defp remember_abandoned(state, ref) do
+    Map.put(state, :abandoned, MapSet.put(abandoned(state), ref))
+  end
 
   defp forget_abandoned(state, ref) do
     Map.put(state, :abandoned, MapSet.delete(abandoned(state), ref))

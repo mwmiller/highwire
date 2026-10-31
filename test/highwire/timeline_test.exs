@@ -1643,6 +1643,41 @@ defmodule HighWire.TimelineTest do
       refute_received {^ask_ref, _}
     end
 
+    test "rows still arriving after a page filled are dropped without a stray" do
+      # The page is answered the moment it fills, but its stream is still
+      # open: the engine offered more rows than the page asked for, and
+      # the surplus keeps landing after the ref is forgotten. Each one
+      # used to log a "stray item dropped"; now they are dropped quietly,
+      # the way a timed-out page's stragglers are — the caller already
+      # has its page.
+      {:ok, client} = PagedClient.start(page_rows(500))
+      state = profile_state(client)
+      {state, from} = ask(state)
+      {_tag, ask_ref} = from
+
+      assert [{ref, _record}] = Map.to_list(state.pages)
+
+      # The rows reached the mailbox while the stream opened. They are
+      # read up to the fill, where the page answers and its ref goes.
+      state = read(state, ref, 61)
+
+      assert_received {^ask_ref, page}
+      assert length(page.rows) == 60
+      assert state.pages == %{}
+
+      # The surplus lands after the answer. It answers nothing, changes
+      # nothing, and — above all — logs nothing.
+      surplus = Enum.drop(page_rows(500), 60)
+      log = capture_debug(fn -> land(state, ref, surplus) end)
+      refute log =~ "stray item dropped"
+
+      # The same capture, against a ref that was never a page, still
+      # logs: the silence above is the filled page's surplus
+      # specifically, not a capture that saw nothing.
+      stray_log = capture_debug(fn -> land(state, :never_a_page, page_rows(1)) end)
+      assert stray_log =~ "stray item dropped"
+    end
+
     test "rows still arriving after a page timed out are dropped without a stray" do
       # The engine cannot be told to stop a stream that is already open,
       # so the rows queued behind a page's timeout keep arriving after the
