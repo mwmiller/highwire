@@ -143,9 +143,29 @@ defmodule HighWireWeb.ProfileLive do
     end
   end
 
+  # The page's rows land as a message, so while they were out the view
+  # kept answering its reader: the Follow button, the timeline events,
+  # the tabs. An answer for a page that has moved on — or that already
+  # has its rows — speaks for posts the reader is no longer waiting
+  # on, and is dropped.
+  @impl true
+  def handle_info({:posts, {messages, resume, more, posts_error}, id}, socket) do
+    if id != socket.assigns.id or not socket.assigns.posts_loading? do
+      {:noreply, socket}
+    else
+      {:noreply,
+       assign(socket,
+         messages: messages,
+         posts_error: posts_error,
+         posts_loading?: false,
+         resume: resume,
+         more: more
+       )}
+    end
+  end
+
   # A page lands with the cursor it was asked for, so an answer that
   # belongs to where the reader was cannot land on where they are now.
-  @impl true
   def handle_info({:load_more, id, resume}, socket) do
     if id != socket.assigns.id or resume != socket.assigns.resume do
       {:noreply, assign(socket, :loading_more, false)}
@@ -385,26 +405,25 @@ defmodule HighWireWeb.ProfileLive do
   defp load(socket, id) do
     viewer = Timeline.viewer()
 
-    # The render the browser gets before its socket opens owes it no
-    # engine round-trip: those rows land only to be fetched again by
-    # the connected mount that follows, so first paint would wait on
-    # work thrown away. The identity reads from the read model either
-    # way; the posts are the connected mount's to ask for, and this
-    # render says only that they are on their way.
-    posts_loading? = not connected?(socket)
-
-    {messages, resume, more, posts_error} =
-      if posts_loading?, do: {[], nil, false, nil}, else: fetch_posts(id)
+    # Neither render owes the browser a wait on the engine. The one
+    # served before the socket opens does not ask at all — those rows
+    # land only to be fetched again by the connected mount that
+    # follows — and the connected mount asks from a task, so the view
+    # opens with its Follow button and its timeline events while the
+    # rows are still on their way. The identity reads from the read
+    # model either way; only the posts are outstanding, and until they
+    # land the page says so.
+    if connected?(socket), do: queue_posts(id)
 
     assign(socket,
       status: viewer.status,
       id: id,
       profile: Timeline.profile(id),
-      messages: messages,
-      posts_error: posts_error,
-      posts_loading?: posts_loading?,
-      resume: resume,
-      more: more,
+      messages: [],
+      posts_error: nil,
+      posts_loading?: true,
+      resume: nil,
+      more: false,
       follows: viewer.follows,
       blocked: viewer.blocked,
       self_id: viewer.self_id,
@@ -432,6 +451,22 @@ defmodule HighWireWeb.ProfileLive do
       {:error, reason} ->
         {[], nil, false, posts_error(reason)}
     end
+  catch
+    # The page is held rather than answered while its rows are on their
+    # way, so a call that runs out of time exits instead of returning.
+    # That is a page that did not come, and it is read here as one.
+    :exit, reason -> {[], nil, false, posts_error(reason)}
+  end
+
+  # A page the engine is still reaching for holds its caller, and the
+  # caller here is the view itself — every click, every event behind
+  # it, queued for as long as that takes. So the ask is made from a
+  # task of its own and its answer comes back as a message: the view
+  # opens on the identity it already has, and the posts land on it.
+  defp queue_posts(id) do
+    parent = self()
+
+    Task.start(fn -> send(parent, {:posts, fetch_posts(id), id}) end)
   end
 
   # The posts could not be read, so the page says that — under a press

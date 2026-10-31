@@ -83,7 +83,8 @@ defmodule HighWireWeb.ProfileLiveTest do
 
   test "identity resolution falls back cleanly with no engine", %{conn: conn} do
     id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, _view, html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+    html = await_posts(view)
 
     # alias: no name resolves through the engine, so the heading falls
     # back to Patchwork's shortFeedId (id.slice(1, 10))
@@ -110,7 +111,8 @@ defmodule HighWireWeb.ProfileLiveTest do
 
   test "the posts line can be asked again, and the answer stands in for it", %{conn: conn} do
     id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+    html = await_posts(view)
 
     # The page could not be read, so it says so under the press.
     assert html =~ "profile-posts-error"
@@ -460,8 +462,13 @@ defmodule HighWireWeb.ProfileLiveTest do
 
   # Engine off under test, so relationship state is seeded straight into
   # the assigns; __changed__ records the old values so the next render
-  # computes a diff instead of serving the cached tree.
+  # computes a diff instead of serving the cached tree. Rows seeded by
+  # hand stand in for the engine's answer, so the page stops reading as
+  # one still on its way: without that, the real answer could land on
+  # top of them and clear the list the test put there.
   defp seed(view, overrides) do
+    overrides = Map.put_new(Map.new(overrides), :posts_loading?, false)
+
     :sys.replace_state(view.pid, fn state ->
       socket = state.socket
       assigns = socket.assigns
@@ -483,6 +490,25 @@ defmodule HighWireWeb.ProfileLiveTest do
   end
 
   defp active?(pid), do: Map.has_key?(:sys.get_state(HighWire.Timeline).active, pid)
+
+  # The connected mount asks for its rows from a task, so the html a
+  # test gets back from live/2 may still be the one that says they are
+  # on their way. The answer is a message into the view; read the page
+  # back once it has landed rather than racing it.
+  defp await_posts(view, tries \\ 60)
+
+  defp await_posts(view, 0), do: render(view)
+
+  defp await_posts(view, tries) do
+    html = render(view)
+
+    if html =~ "profile-posts-loading" do
+      Process.sleep(25)
+      await_posts(view, tries - 1)
+    else
+      html
+    end
+  end
 
   # The registration travels as a cast into another process, so read it
   # back once it has landed rather than racing it.
