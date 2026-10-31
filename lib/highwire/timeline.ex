@@ -115,7 +115,13 @@ defmodule HighWire.Timeline do
   # honors this; the reader bounds itself to it too, whether that is the
   # drain running inside the Timeline's GenServer call or a page read
   # outside one.
-  @profile_page 60
+  #
+  # A profile opens on a small page: the first look is for a sense of the
+  # person, not their whole history, and the cursor carries the reader
+  # into more when they scroll for it. A page the engine fills sooner is
+  # an answer sooner — the caller's call is held only until the rows
+  # land, and seven of them land well before sixty would.
+  @profile_page 7
   @roots_page 30
 
   # How long a profile page waits for rows the shared connection is still
@@ -1378,11 +1384,11 @@ defmodule HighWire.Timeline do
   end
 
   # The page the rows make: markers split off for the cursor, the surplus
-  # row an extra read may catch trimmed so the page stays 60 wide, and the
-  # rows sorted into the order they are read in. How the stream ended is
-  # decided before the frames get here — the rows alone cannot tell a
-  # quiet end from a cut one, and reporting the second as the first is
-  # what makes a failed load read as the end of the feed.
+  # row an extra read may catch trimmed so the page stays the width it
+  # asked for, and the rows sorted into the order they are read in. How
+  # the stream ended is decided before the frames get here — the rows
+  # alone cannot tell a quiet end from a cut one, and reporting the second
+  # as the first is what makes a failed load read as the end of the feed.
   defp profile_page_frames(frames) do
     {markers, rows} = Enum.split_with(frames, &(&1["marker"] == true))
     rows = Enum.take(rows, @profile_page)

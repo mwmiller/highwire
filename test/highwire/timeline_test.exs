@@ -1442,7 +1442,8 @@ defmodule HighWire.TimelineTest do
   # Serves a paged roots stream the way the engine does — a page of rows,
   # then the marker that carries the next cursor — followed by far more
   # rows than the page asked for. The drain must stop at the page, not
-  # read the surplus into the GenServer call.
+  # read the surplus into the GenServer call. The page here is the width
+  # the profile asks for: seven rows.
   defmodule PagedClient do
     @moduledoc false
     use GenServer
@@ -1455,7 +1456,7 @@ defmodule HighWire.TimelineTest do
     @impl true
     def handle_call({:stream, _name, _args, subscriber}, _from, rows) do
       ref = make_ref()
-      {page, surplus} = Enum.split(rows, 60)
+      {page, surplus} = Enum.split(rows, 7)
 
       Enum.each(page, &send(subscriber, {HighWire.SSB.Client, ref, {:item, &1}}))
       send(subscriber, {HighWire.SSB.Client, ref, {:item, %{"marker" => true, "resume" => 99}}})
@@ -1493,11 +1494,12 @@ defmodule HighWire.TimelineTest do
   end
 
   # A profile page must not read past what it asked for: the request asks
-  # for 60; the page comes back 60 wide with its cursor, however many more
-  # rows the stream offers. It is also never answered inside the call that
-  # asked: the rows are read in handle_info/3, because on a connection
-  # busy with the heartbeat's reload they land seconds after that call has
-  # already returned — and a page answered late is still the page.
+  # for seven; the page comes back seven wide with its cursor, however
+  # many more rows the stream offers. It is also never answered inside the
+  # call that asked: the rows are read in handle_info/3, because on a
+  # connection busy with the heartbeat's reload they land seconds after
+  # that call has already returned — and a page answered late is still
+  # the page.
   describe "a profile page answers the caller when its rows land" do
     defp profile_state(client) do
       %{
@@ -1566,19 +1568,19 @@ defmodule HighWire.TimelineTest do
 
       # The rows reached the mailbox while the stream opened, and the call
       # has returned without an answer: they are read now, and the page
-      # stops at its own width — 60 rows plus the marker carrying the
+      # stops at its own width — seven rows plus the marker carrying the
       # cursor — however much more the stream is offering.
-      state = read(state, ref, 61)
+      state = read(state, ref, 8)
 
       assert_received {^ask_ref, page}
-      assert length(page.rows) == 60
+      assert length(page.rows) == 7
       assert page.more
       assert page.resume == 99
       assert state.pages == %{}
 
       # The surplus rows are still in the mailbox, unread: the page took
-      # 60 rather than walking the whole stream.
-      assert_received {HighWire.SSB.Client, ^ref, {:item, %{"key" => "%p61.sha256"}}}
+      # seven rather than walking the whole stream.
+      assert_received {HighWire.SSB.Client, ^ref, {:item, %{"key" => "%p8.sha256"}}}
     end
 
     test "rows held up behind the reload still answer the ask" do
@@ -1596,10 +1598,10 @@ defmodule HighWire.TimelineTest do
 
       # The connection clears and the rows land, long after the ask.
       marker = %{"marker" => true, "resume" => 12}
-      state = land(state, ref, page_rows(60) ++ [marker])
+      state = land(state, ref, page_rows(7) ++ [marker])
 
       assert_received {^ask_ref, page}
-      assert length(page.rows) == 60
+      assert length(page.rows) == 7
       assert page.more
       assert page.resume == 12
       assert state.pages == %{}
@@ -1659,15 +1661,15 @@ defmodule HighWire.TimelineTest do
 
       # The rows reached the mailbox while the stream opened. They are
       # read up to the fill, where the page answers and its ref goes.
-      state = read(state, ref, 61)
+      state = read(state, ref, 8)
 
       assert_received {^ask_ref, page}
-      assert length(page.rows) == 60
+      assert length(page.rows) == 7
       assert state.pages == %{}
 
       # The surplus lands after the answer. It answers nothing, changes
       # nothing, and — above all — logs nothing.
-      surplus = Enum.drop(page_rows(500), 60)
+      surplus = Enum.drop(page_rows(500), 7)
       log = capture_debug(fn -> land(state, ref, surplus) end)
       refute log =~ "stray item dropped"
 
