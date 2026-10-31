@@ -43,6 +43,7 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:profile, nil)
      |> assign(:messages, [])
      |> assign(:posts_error, nil)
+     |> assign(:posts_loading?, false)
      |> assign(:resume, nil)
      |> assign(:follows, [])
      |> assign(:blocked, [])
@@ -383,7 +384,17 @@ defmodule HighWireWeb.ProfileLive do
 
   defp load(socket, id) do
     viewer = Timeline.viewer()
-    {messages, resume, more, posts_error} = fetch_posts(id)
+
+    # The render the browser gets before its socket opens owes it no
+    # engine round-trip: those rows land only to be fetched again by
+    # the connected mount that follows, so first paint would wait on
+    # work thrown away. The identity reads from the read model either
+    # way; the posts are the connected mount's to ask for, and this
+    # render says only that they are on their way.
+    posts_loading? = not connected?(socket)
+
+    {messages, resume, more, posts_error} =
+      if posts_loading?, do: {[], nil, false, nil}, else: fetch_posts(id)
 
     assign(socket,
       status: viewer.status,
@@ -391,6 +402,7 @@ defmodule HighWireWeb.ProfileLive do
       profile: Timeline.profile(id),
       messages: messages,
       posts_error: posts_error,
+      posts_loading?: posts_loading?,
       resume: resume,
       more: more,
       follows: viewer.follows,
@@ -742,12 +754,24 @@ defmodule HighWireWeb.ProfileLive do
             Posts
           </h2>
 
-          <%!-- Two ways this list starts, and they are different claims:
-          a feed with nothing in it, and a page that never came. The
-          second says so and carries the press that asks again — read as
-          the first, a failed load would pass for a silent feed. --%>
+          <%!-- Three ways this list starts, and they are different
+          claims: a page still on its way, a feed with nothing in it,
+          and a page that never came. The first is the static render
+          before the socket opens — it asks for nothing and says so,
+          rather than passing for the second while the posts are still
+          owed. The last says so and carries the press that asks again:
+          read as the second, a failed load would pass for a silent
+          feed. --%>
           <div
-            :if={@messages == [] and @posts_error}
+            :if={@messages == [] and @posts_loading?}
+            id="profile-posts-loading"
+            class="py-8 text-sm italic text-faint"
+          >
+            Loading posts…
+          </div>
+
+          <div
+            :if={@messages == [] and not @posts_loading? and @posts_error}
             id="profile-posts-error"
             class="py-8 text-sm"
           >
@@ -757,7 +781,10 @@ defmodule HighWireWeb.ProfileLive do
             </button>
           </div>
 
-          <div :if={@messages == [] and @posts_error == nil} class="py-8 text-sm italic text-faint">
+          <div
+            :if={@messages == [] and not @posts_loading? and @posts_error == nil}
+            class="py-8 text-sm italic text-faint"
+          >
             No posts yet.
           </div>
 

@@ -14,6 +14,25 @@ defmodule HighWireWeb.ProfileLiveTest do
     assert render_hook(view, "load-more", %{}) =~ "Posts"
   end
 
+  test "the render before the socket opens asks for no posts", %{conn: conn} do
+    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+
+    # A plain request, never upgraded to a socket: this is the HTML the
+    # browser paints while the LiveView connects.
+    html =
+      conn
+      |> get("/profile?id=" <> URI.encode_www_form(id))
+      |> html_response(200)
+
+    # The identity is on the page — the read model answers it either
+    # way — and the posts say they are on their way rather than asking
+    # the engine here, only for the connected mount to ask again.
+    assert html =~ id
+    assert html =~ "profile-posts-loading"
+    refute html =~ "profile-posts-error"
+    refute html =~ "profile-sentinel"
+  end
+
   test "a page on the way says so, and lands where it was asked for", %{conn: conn} do
     id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
 
