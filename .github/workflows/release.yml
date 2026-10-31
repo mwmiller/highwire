@@ -5,7 +5,7 @@ name: Release
 # against the host), bundles the Tauri shell around it, and attaches the
 # installers to the GitHub release for that tag.
 #
-#   macos-14       → HighWire.app + .dmg   (backend: aarch64-apple-darwin)
+#   macos-15       → HighWire.app + .dmg   (backend: aarch64-apple-darwin)
 #   ubuntu-22.04     → .deb + .rpm + .AppImage (backend: x86_64-unknown-linux-gnu)
 #   ubuntu-22.04-arm → .deb + .rpm + .AppImage (backend: aarch64-unknown-linux-gnu)
 #   windows-2022   → NSIS -setup.exe       (backend: x86_64-pc-windows-msvc)
@@ -34,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             burrito_target: macos
             backend: highwire_macos
             triple: aarch64-apple-darwin
