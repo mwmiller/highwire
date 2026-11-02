@@ -24,6 +24,17 @@ defmodule HighWire.SSB.Sidecar do
     stops even an attached engine it owns, so nothing HighWire started
     outlives it.
 
+    The engine this sidecar spawns is also a distributed node, named
+    and cookied by the spawn, so the control surface reaches it over
+    the one distribution connection (`HighWire.SSB.Erpc`) instead of a
+    Secret Handshake per call. Only a spawned engine has that node: an
+    attached one is not ours to name or cookie, so it keeps answering
+    the muxrpc path. Distribution is best-effort on both halves — this
+    VM starts it before the spawn when it can, and the engine starts it
+    before its applications when it can; either half failing leaves
+    `engine_node/0` nil and every caller exactly on the muxrpc path it
+    had before, never a boot that does not happen.
+
     Status: `:disabled | :starting | :ready | :down` plus the first-run
     import states `:import_pending` (a JS `~/.ssb` store is waiting for
     a decision), `:importing` (erlbutt's converter is running) and
@@ -54,6 +65,26 @@ defmodule HighWire.SSB.Sidecar do
     case Process.whereis(__MODULE__) do
       nil -> config_port()
       pid -> GenServer.call(pid, :port)
+    end
+  end
+
+  @doc """
+  The distributed node name of the engine this sidecar spawned, or
+  `nil` when there is none to reach: the engine is disabled, it was
+  attached rather than spawned (a leftover or foreign engine is not
+  ours to name or cookie), or distribution would not start on one side
+  or the other.
+
+  Callers holding this name reach the engine with `erpc` over the one
+  distribution connection — no Secret Handshake, nothing started per
+  request. A `nil` answers the same as a call the engine refuses:
+  fall back to the muxrpc client.
+  """
+  @spec engine_node() :: atom() | nil
+  def engine_node do
+    case Process.whereis(__MODULE__) do
+      nil -> nil
+      pid -> GenServer.call(pid, :engine_node)
     end
   end
 
@@ -349,6 +380,7 @@ defmodule HighWire.SSB.Sidecar do
       listen_port: nil,
       os_port: nil,
       os_pid: nil,
+      engine_node: nil,
       buf: "",
       attempts: 0,
       health: 0,
@@ -392,6 +424,8 @@ defmodule HighWire.SSB.Sidecar do
   def handle_call(:status, _from, state), do: {:reply, state.status, state}
 
   def handle_call(:port, _from, state), do: {:reply, state.listen_port || config_port(), state}
+
+  def handle_call(:engine_node, _from, state), do: {:reply, state.engine_node, state}
 
   def handle_call(:import_info, _from, state), do: {:reply, state.import, state}
 
@@ -460,8 +494,18 @@ defmodule HighWire.SSB.Sidecar do
 
     # Take ownership when the pidfile names this engine: terminate/2
     # kills state.os_pid, so an attached leftover we spawned earlier is
-    # stopped on shutdown instead of living on forever.
-    state = %{state | status: :ready, listen_port: port, os_pid: owner, attempts: 0}
+    # stopped on shutdown instead of living on forever. No node comes
+    # with it: an engine found this way was not named or cookied by
+    # this spawn, so the erpc path is not available beside it.
+    state = %{
+      state
+      | status: :ready,
+        listen_port: port,
+        os_pid: owner,
+        engine_node: nil,
+        attempts: 0
+    }
+
     {:noreply, schedule_health_check(state)}
   end
 
@@ -498,7 +542,15 @@ defmodule HighWire.SSB.Sidecar do
           "HW_SIDECAR_READY" ->
             Logger.info("sidecar: erlbutt ready on 127.0.0.1:#{st.listen_port}")
             ensure_dialer()
+            if st.engine_node, do: connect_engine(st.engine_node)
             %{st | status: :ready, attempts: 0}
+
+          # Logged by the spawn's -eval: net_kernel refused to start in
+          # the engine. The engine is up regardless, so this is a
+          # warning and a muxrpc-only life for it, not a failed boot.
+          "HW_SIDECAR_DIST" <> detail ->
+            Logger.warning("erlbutt engine distribution did not start:#{detail}")
+            st
 
           "HW_SIDECAR_FAIL" <> detail ->
             Logger.error("erlbutt sidecar failed to boot:#{detail}")
@@ -518,8 +570,26 @@ defmodule HighWire.SSB.Sidecar do
 
   def handle_info({port, {:exit_status, code}}, %{os_port: port} = state) when is_port(port) do
     Logger.warning("erlbutt sidecar exited (status #{code})")
-    {:noreply, retry(%{state | os_port: nil, os_pid: nil})}
+
+    {:noreply, retry(%{state | os_port: nil, os_pid: nil, engine_node: nil})}
   end
+
+  # The engine node was reached (or refused) once, off the spawn's
+  # READY. Reaching it is not needed to keep it: erpc reconnects per
+  # call, and a node that cannot be reached at all answers :no_engine
+  # there, so the only thing owed here is the log line.
+  def handle_info({:engine_node_connected, node, true}, %{engine_node: node} = state) do
+    Logger.info("sidecar: engine node #{node} connected")
+    {:noreply, state}
+  end
+
+  def handle_info({:engine_node_connected, node, _}, %{engine_node: node} = state) do
+    Logger.warning("sidecar: engine node #{node} did not connect; engine calls stay on muxrpc")
+
+    {:noreply, state}
+  end
+
+  def handle_info({:engine_node_connected, _node, _}, state), do: {:noreply, state}
 
   # An attached engine has no port here to report its exit, so readiness
   # is only as current as this check. The token makes a timer left over
@@ -780,19 +850,41 @@ defmodule HighWire.SSB.Sidecar do
         Path.wildcard(Path.join(rel, "lib/*/ebin"))
         |> Enum.flat_map(&["-pa", &1])
 
-      eval =
-        "case catch lists:foreach(fun(A) -> {ok,_} = application:ensure_all_started(A) " <>
-          "end, [ssb, admin, silkpurse, ssb_conv]) of " <>
-          "ok -> io:format(\"HW_SIDECAR_READY~n\"); " <>
-          "Other -> io:format(\"HW_SIDECAR_FAIL ~p~n\",[Other]) end, timer:sleep(infinity)."
+      # Name the engine and hand it our cookie, so its node can be
+      # reached with erpc. Distribution is best-effort: if this VM
+      # cannot start it, the spawn carries no -eval for it and the
+      # engine keeps its muxrpc-only life.
+      {engine_node, cookie} =
+        case ensure_dist() do
+          {:ok, cookie} -> {new_engine_node(), cookie}
+          :error -> {nil, nil}
+        end
 
-      args = ["-noshell"] ++ boot_args(rel) ++ ebin ++ ["-config", config_path, "-eval", eval]
+      eval = dist_eval(engine_node, cookie) <> apps_eval()
+
+      # The engine's distribution listens on loopback only: it is a
+      # local IPC channel, and the cookie that guards it should never
+      # be the only thing between the network and the engine's node.
+      args =
+        ["-noshell"] ++
+          boot_args(rel) ++
+          ebin ++
+          [
+            "-config",
+            config_path,
+            "-kernel",
+            "inet_dist_use_interface",
+            "{127,0,0,1}",
+            "-eval",
+            eval
+          ]
 
       os_port =
         Port.open({:spawn_executable, erl}, [
           :binary,
           :exit_status,
           {:cd, rel},
+          {:env, [{~c"ERL_EPMD_ADDRESS", ~c"127.0.0.1"}]},
           {:args, args}
         ])
 
@@ -804,7 +896,15 @@ defmodule HighWire.SSB.Sidecar do
 
       write_pidfile(state.listen_port, os_pid)
       Logger.info("sidecar: spawned erlbutt on port #{state.listen_port} (#{rel})")
-      %{state | status: :starting, os_port: os_port, os_pid: os_pid, buf: ""}
+
+      %{
+        state
+        | status: :starting,
+          os_port: os_port,
+          os_pid: os_pid,
+          engine_node: engine_node,
+          buf: ""
+      }
     else
       false ->
         Logger.error("sidecar: erlbutt release not found at #{inspect(rel)}")
@@ -814,6 +914,158 @@ defmodule HighWire.SSB.Sidecar do
         Logger.error("sidecar: no bundled erts in #{inspect(rel)} and no `erl` on PATH")
         retry(%{state | status: :down})
     end
+  end
+
+  # -- distribution ------------------------------------------------------
+  # Both nodes live on loopback and share this VM's cookie, so the
+  # engine's node trusts nobody but us. Restricted to the loopback
+  # interface on both halves: distribution is a local IPC channel here,
+  # not something the network should be able to reach.
+
+  # Bring this VM up as a distributed node so spawned engines can be
+  # reached with erpc. Runs once per node lifetime; an already-distributed
+  # VM (started with --name/--sname) just keeps its name and cookie.
+  # Never fatal: an error answers :error and the spawn goes out without
+  # a node to name, exactly as it did before this existed.
+  defp ensure_dist do
+    if Node.alive?() do
+      {:ok, shared_cookie()}
+    else
+      _ = :os.putenv(~c"ERL_EPMD_ADDRESS", ~c"127.0.0.1")
+      _ = Application.put_env(:kernel, :inet_dist_use_interface, {127, 0, 0, 1})
+      name = :"highwire_#{System.pid()}_#{:erlang.unique_integer([:positive])}@127.0.0.1"
+
+      with :ok <- ensure_epmd(),
+           {:ok, _pid} <- Node.start(name, :longnames) do
+        {:ok, shared_cookie()}
+      else
+        {:error, reason} ->
+          Logger.warning(
+            "sidecar: distribution not started (#{inspect(reason)}); " <>
+              "engine calls stay on muxrpc"
+          )
+
+          :error
+      end
+    end
+  end
+
+  # A node brought up at runtime gets no epmd of its own: the `erl`
+  # script starts one only for -sname/-name at boot, so registering
+  # with none running is a refused connect. Start one when there is
+  # none — from the same ERTS this VM runs on, since a packaged app's
+  # PATH has no epmd in it — and wait for its socket, because -daemon
+  # returns before the listener is up and net_kernel would otherwise
+  # race it. An epmd already listening (this machine's, or one an
+  # earlier engine started) is simply used.
+  defp ensure_epmd do
+    if epmd_listening?() do
+      :ok
+    else
+      _ = System.cmd(epmd_executable(), ["-daemon"], stderr_to_stdout: true)
+      await_epmd(40)
+    end
+  end
+
+  defp epmd_listening? do
+    match?({:ok, _sock}, :gen_tcp.connect(~c"127.0.0.1", 4369, [:binary, active: false], 400))
+  end
+
+  defp await_epmd(0), do: :ok
+
+  defp await_epmd(tries) do
+    if epmd_listening?() do
+      :ok
+    else
+      Process.sleep(50)
+      await_epmd(tries - 1)
+    end
+  end
+
+  defp epmd_executable do
+    root = List.to_string(:code.root_dir())
+
+    case Path.wildcard(Path.join([root, "erts-*/bin", "epmd"])) ++
+           Path.wildcard(Path.join([root, "erts-*/bin", "epmd.exe"])) do
+      [epmd | _] -> epmd
+      [] -> System.find_executable("epmd") || "epmd"
+    end
+  end
+
+  # The cookie both nodes present to each other. A node that just
+  # started distribution has one already — read from the cookie file by
+  # the auth server — so this only mints one when there is none, which
+  # on a fresh machine with no ~/.erlang.cookie is exactly once.
+  defp shared_cookie do
+    case Node.get_cookie() do
+      :nocookie ->
+        cookie = :"hw_#{Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)}"
+        true = Node.set_cookie(node(), cookie)
+        cookie
+
+      cookie ->
+        cookie
+    end
+  end
+
+  # A fresh name per spawn: a restarted engine reusing its old name
+  # would have the new one mistaken for the dead one by epmd until the
+  # old registration aged out.
+  defp new_engine_node do
+    :"ssb_#{System.pid()}_#{:erlang.unique_integer([:positive])}@127.0.0.1"
+  end
+
+  # Prepended to the engine's -eval: start distribution, present our
+  # cookie, and keep going either way. A net_kernel failure prints a
+  # line the sidecar logs as a warning and the engine boots exactly as
+  # it would have without this — the erpc path degrades, the engine
+  # does not.
+  defp dist_eval(nil, _cookie), do: ""
+
+  defp dist_eval(engine_node, cookie) do
+    "case catch net_kernel:start([#{erl_atom(engine_node)},longnames]) of " <>
+      "{ok,_} -> erlang:set_cookie(node(),#{erl_atom(cookie)}); " <>
+      "Err -> io:format(\"HW_SIDECAR_DIST ~p~n\",[Err]) end, "
+  end
+
+  defp apps_eval do
+    "case catch lists:foreach(fun(A) -> {ok,_} = application:ensure_all_started(A) " <>
+      "end, [ssb, admin, silkpurse, ssb_conv]) of " <>
+      "ok -> io:format(\"HW_SIDECAR_READY~n\"); " <>
+      "Other -> io:format(\"HW_SIDECAR_FAIL ~p~n\",[Other]) end, timer:sleep(infinity)."
+  end
+
+  # An atom as Erlang source: quoted, with the two characters a quoted
+  # atom needs escaped. Node names and cookies are plain, but this is
+  # the one place a value becomes code, so it does not get to assume
+  # that forever.
+  defp erl_atom(atom) do
+    escaped =
+      atom
+      |> Atom.to_string()
+      |> String.replace("\\", "\\\\")
+      |> String.replace("'", "\\'")
+
+    "'" <> escaped <> "'"
+  end
+
+  # Reach the engine's node once it is up. Off the spawn's READY, in a
+  # throwaway process: a connect that would raise or block must not
+  # hold the sidecar, and the answer only owes the log line — erpc
+  # reconnects per call, so nothing else depends on this one.
+  defp connect_engine(node) do
+    sidecar = self()
+
+    spawn(fn ->
+      result =
+        try do
+          Node.connect(node)
+        catch
+          _, _ -> false
+        end
+
+      send(sidecar, {:engine_node_connected, node, result})
+    end)
   end
 
   @doc false

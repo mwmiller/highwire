@@ -6,8 +6,9 @@ defmodule HighWire.SSB.EngineTest do
   The everyday suite runs with `:ssb` disabled, so every engine-enabled
   path — spawn and readiness, owner auth, publish and unbox, the
   silkpurse views the paged tabs read, identity switching with an engine
-  restart, crash reattach, and the shutdown contract — is only ever
-  exercised by the shipped app. This module closes that gap.
+  restart, crash reattach, the erpc control surface, and the shutdown
+  contract — is only ever exercised by the shipped app. This module
+  closes that gap.
 
   Hermetic by construction: the sidecar gets its own port (never the
   configured 8899, so a dev machine's own engine is never probed as ours
@@ -24,7 +25,7 @@ defmodule HighWire.SSB.EngineTest do
 
   use ExUnit.Case, async: false
 
-  alias HighWire.SSB.{Client, Identities, Keys, Network, Sidecar}
+  alias HighWire.SSB.{Admin, Client, Erpc, Identities, Keys, Network, Sidecar}
   alias HighWire.Timeline
 
   @moduletag timeout: 240_000
@@ -211,6 +212,38 @@ defmodule HighWire.SSB.EngineTest do
     assert os_alive?(replacement)
     assert Sidecar.port() == ctx.port
     assert whoami_id(engine_client(ctx, ctx.keys)) == ctx.keys.id
+  end
+
+  test "a spawned engine is reachable over distribution; builtins refuse erpc", _ctx do
+    node = Sidecar.engine_node()
+
+    assert is_atom(node) and not is_nil(node),
+           "the sidecar named no engine node — distribution did not start " <>
+             "(the sidecar logs 'distribution not started' with the reason)"
+
+    # The one distribution connection every erpc call rides — no Secret
+    # Handshake, nothing started per request.
+    assert Node.connect(node) == true
+    assert node in Node.list()
+
+    # A plugin method answers as it does over the wire, decoded to the
+    # same terms Jason would have produced.
+    assert {:ok, %{"enabled" => enabled}} =
+             Erpc.call(["admin", "dialer", "status"], [], 5_000)
+
+    assert is_boolean(enabled)
+
+    # Builtins are not on the erpc surface — their dispatch lives inside
+    # the engine's muxrpc machinery — and say so distinctly from a
+    # method that does not exist at all. Neither answer costs a
+    # connection.
+    assert {:error, :builtin} = Erpc.call(["whoami"], [], 5_000)
+    assert {:error, :unknown_method} = Erpc.call(["no", "such", "method"], [], 5_000)
+
+    # And the wire carries the same question the erpc path just did:
+    # Admin's fallback is the whole dance, not a stub, so whichever
+    # transport answered, the Network page reads the same map.
+    assert {:ok, %{"enabled" => ^enabled}} = Admin.dialer_status(5_000)
   end
 
   # -- helpers ------------------------------------------------------------

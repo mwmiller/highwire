@@ -1,15 +1,18 @@
 defmodule HighWire.SSB.Admin do
   @moduledoc """
-  One-shot owner-client calls into the engine's `admin.*` muxrpc
-  namespace — the local control surface the Network page binds to:
-  dialer enable/disable/trigger and the `conn.json` address book.
+  Owner calls into the engine's `admin.*` namespace — the local control
+  surface the Network page binds to: dialer enable/disable/trigger and
+  the `conn.json` address book.
 
-  Each call opens its own muxrpc client to the sidecar's port, issues
-  one request, and tears the client down. That matches how the sidecar
-  already flips the dialer on at boot: these are rare, user-driven
-  actions and one cheap periodic read, not a hot path, so the SHS
-  handshake cost is nothing next to the state machine a shared client
-  would need.
+  Each call asks the engine's node directly over distributed Erlang
+  when this VM spawned the engine (`HighWire.SSB.Erpc`): both nodes are
+  on loopback and share a cookie, so the question reaches the engine as
+  an `erpc` call on the distribution connection that is already up — no
+  Secret Handshake, nothing started for the request, one round trip.
+  The muxrpc client remains the fallback it degrades to, and the only
+  path for an attached engine (not ours to name or cookie) or a method
+  the erpc surface does not carry; those calls open their own client to
+  the sidecar's port, ask one question, and tear it down.
 
   Runs each request in a throwaway process that traps exits (Client
   start_link links; a refused connect or an engine that dies mid-call
@@ -19,7 +22,7 @@ defmodule HighWire.SSB.Admin do
   method error, which arrives here as `{:error, reason}` too.
   """
 
-  alias HighWire.SSB.{Client, Keys, Sidecar}
+  alias HighWire.SSB.{Client, Erpc, Keys, Sidecar}
 
   @timeout 3_000
 
@@ -53,13 +56,27 @@ defmodule HighWire.SSB.Admin do
   @spec peers_known(timeout()) :: result()
   def peers_known(timeout \\ @timeout), do: call(["admin", "peers", "known"], [], timeout)
 
+  # -- routing: erpc first, the wire as its fallback ----------------------
+
+  # The engine's node when this VM spawned it; :no_engine (no node, or
+  # the node would not answer) and :builtin (a method whose dispatch
+  # lives inside the engine's muxrpc machinery) are the two answers the
+  # wire can serve and erpc cannot — everything else is the engine's own
+  # reply, carried across.
+  defp call(name, args, timeout) do
+    case Erpc.call(name, args, timeout) do
+      {:error, reason} when reason in [:no_engine, :builtin] -> oneshot(name, args, timeout)
+      result -> result
+    end
+  end
+
   # -- one-shot owner client ---------------------------------------------
 
   # The whole dance runs in a throwaway process that traps exits
   # (Client.start_link links; a refused connect or an engine that dies
   # mid-call must not take the caller down). The caller awaits the
   # reply — or the worker's death — up to the timeout.
-  defp call(name, args, timeout) do
+  defp oneshot(name, args, timeout) do
     caller = self()
 
     {worker, ref} =
