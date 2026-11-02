@@ -716,7 +716,8 @@ defmodule HighWireWeb.TimelineLive do
   # Timeline as an ensure. Without this the older you page, the more
   # rows sit on identicons — and a suggestion never helps: its feed is
   # not followed and not in the window, so no finalize sees it until
-  # some other traffic finalizes, up to 13s of bare short id away.
+  # some other traffic finalizes, which the reload heartbeat only
+  # guarantees eventually.
   defp request_missing_profiles(socket) do
     known = Map.get(socket.assigns, :profiles, %{})
     likes_by = Map.get(socket.assigns, :likes_by, %{})

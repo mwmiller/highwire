@@ -330,7 +330,7 @@ defmodule HighWire.TimelineIndexTest do
     end
   end
 
-  # The 13s heartbeat reruns the same window through finalize. When the
+  # The reload heartbeat reruns the same window through finalize. When the
   # rebuilt payload matches the last one, nothing is broadcast — that is
   # what a quiet feed looks like.
   describe "unchanged heartbeats stay quiet" do

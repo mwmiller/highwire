@@ -1354,6 +1354,149 @@ defmodule HighWire.TimelineTest do
     end
   end
 
+  # patchwork.publicFeed.latest is the engine's append push: a live tail
+  # that carries each new thread event the moment it is ingested. It is
+  # what lets the reload heartbeat stay long — a peer's post arrives here
+  # rather than on the next full window re-fetch.
+  describe "append tail (patchwork.publicFeed.latest)" do
+    # A latest item is the full {key, value, timestamp} message plus
+    # rootId (and, for a reply, the root object) — a superset of a window
+    # row. The extra fields are ignored by the builders; only the author
+    # and content matter here.
+    defp latest_item(author, key, timestamp, content) do
+      Map.put(msg(author, key, timestamp, content), "rootId", key)
+    end
+
+    test "a followed feed's post joins the window and rebuilds when idle" do
+      st = drain_state(status: :ok, pending: %{}, latest_ref: :latest_ref)
+
+      post = latest_item("@a.ed25519", "%new=.sha256", 9_000, %{"type" => "post", "text" => "yo"})
+      {:noreply, st} = Timeline.handle_info({Client, :latest_ref, {:item, post}}, st)
+
+      # the tail stays open
+      assert st.latest_ref == :latest_ref
+      # the item joined the window…
+      assert Enum.any?(st.acc, &(&1["key"] == "%new=.sha256"))
+      # …and an idle timeline rebuilt so the row is on screen now
+      assert Enum.any?(st.messages.feed, &(&1.msg["key"] == "%new=.sha256"))
+    end
+
+    test "a post by an account this one does not follow is dropped" do
+      st = drain_state(status: :ok, pending: %{}, latest_ref: :latest_ref)
+
+      stranger =
+        latest_item("@stranger.ed25519", "%stranger=.sha256", 9_000, %{
+          "type" => "post",
+          "text" => "not for you"
+        })
+
+      {:noreply, st} = Timeline.handle_info({Client, :latest_ref, {:item, stranger}}, st)
+
+      # the tail is store-wide; the window is follows-only, so the item
+      # never joins and no rebuild happens
+      refute Enum.any?(st.acc, &(&1["key"] == "%stranger=.sha256"))
+      assert st.messages.feed == []
+    end
+
+    test "a landing post merges quietly while the window is still streaming" do
+      st = drain_state(status: :ok, pending: %{123 => "@me.ed25519"}, latest_ref: :latest_ref)
+
+      post =
+        latest_item("@a.ed25519", "%early=.sha256", 9_000, %{"type" => "post", "text" => "hi"})
+
+      {:noreply, st} = Timeline.handle_info({Client, :latest_ref, {:item, post}}, st)
+
+      # merged into the window, but no rebuild while feeds are in flight
+      assert Enum.any?(st.acc, &(&1["key"] == "%early=.sha256"))
+      assert st.messages.feed == []
+
+      # the window's own finalize carries the merged post
+      {:noreply, st} = Timeline.handle_info({Client, 123, :done}, st)
+      assert Enum.any?(st.messages.feed, &(&1.msg["key"] == "%early=.sha256"))
+    end
+
+    test "a dropped tail clears its ref and arms its own reopen" do
+      st = drain_state(latest_ref: :latest_ref)
+
+      {:noreply, st} = Timeline.handle_info({Client, :latest_ref, {:error, :closed}}, st)
+
+      # not waiting on the heartbeat: the reopen is armed already
+      assert st.latest_ref == nil
+      assert is_reference(st.latest_retry_timer)
+    end
+
+    test "an ended tail arms a reopen too" do
+      st = drain_state(latest_ref: :latest_ref)
+
+      {:noreply, st} = Timeline.handle_info({Client, :latest_ref, :done}, st)
+
+      assert st.latest_ref == nil
+      assert is_reference(st.latest_retry_timer)
+    end
+
+    test "the armed reopen opens the tail without waiting for a heartbeat" do
+      st = drain_state(status: :ok, latest_ref: nil)
+
+      {:noreply, st} = Timeline.handle_info({:reopen_latest, 0, 1}, st)
+
+      assert is_reference(st.latest_ref)
+      # opened, so nothing is left pending
+      assert st.latest_retry_timer == nil
+    end
+
+    test "a reopen for a stale generation does nothing" do
+      # a viewer left and activate/1 re-armed the world under a new gen
+      st = drain_state(latest_ref: nil, gen: 3)
+
+      {:noreply, st} = Timeline.handle_info({:reopen_latest, 2, 1}, st)
+
+      assert st.latest_ref == nil
+    end
+
+    test "each failed reopen backs the next attempt off, capped" do
+      # a nil client fails every reopen, so each attempt arms the next
+      st = drain_state(client: nil, latest_ref: :latest_ref)
+
+      # the drop itself: one second, not a heartbeat
+      {:noreply, st} = Timeline.handle_info({Client, :latest_ref, {:error, :closed}}, st)
+      assert retry_left(st) in 950..1_000
+
+      {:noreply, st} = Timeline.handle_info({:reopen_latest, 0, 1}, st)
+      assert retry_left(st) in 1_950..2_000
+
+      # and it holds however many failures pile up
+      {:noreply, st} = Timeline.handle_info({:reopen_latest, 0, 40}, st)
+      assert retry_left(st) in 29_950..30_000
+    end
+
+    # Read the armed delay, then clear it so the test leaves no timer
+    # behind in its own mailbox.
+    defp retry_left(st) do
+      left = Process.read_timer(st.latest_retry_timer)
+      Process.cancel_timer(st.latest_retry_timer)
+      left
+    end
+
+    test "a reload that reopens the tail cancels its pending reopen" do
+      # otherwise the stale timer would still be armed on the next drop,
+      # and schedule_latest_retry/2 would decline to arm a second one
+      st = drain_state(contact_ref: nil, status: :ok, latest_ref: nil)
+      st = Map.put(st, :latest_retry_timer, Process.send_after(self(), :never, 60_000))
+
+      {:noreply, st} = Timeline.handle_info({:reload, 0}, st)
+
+      assert is_reference(st.latest_ref)
+      assert st.latest_retry_timer == nil
+    end
+
+    test "a reload opens the tail alongside the window when none is open" do
+      st = drain_state(contact_ref: nil, status: :ok, latest_ref: nil)
+
+      {:noreply, st} = Timeline.handle_info({:reload, 0}, st)
+      assert is_reference(st.latest_ref)
+    end
+  end
+
   describe "blob wants" do
     # A body embedding an image the store has never seen, with every
     # profile already known — the finalize shape where the worker used
@@ -2379,7 +2522,7 @@ defmodule HighWire.TimelineTest do
       {:noreply, st2} = Timeline.handle_info({:reload, 3}, st)
 
       assert st2.reload_timer != nil
-      # not the 13s heartbeat — the short retry
+      # not the heartbeat — the short retry
       assert_receive {:reload, 3}, 1_500
     end
   end

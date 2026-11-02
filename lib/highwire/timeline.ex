@@ -88,6 +88,31 @@ defmodule HighWire.Timeline do
   # network poll or the 7s UI ticks.
   @drain_refresh_ms :timer.minutes(13)
 
+  # The reload heartbeat re-opens the per-feed window (createHistoryStream
+  # per followed feed). Each stream makes the engine fold that feed's log,
+  # so a short interval is a periodic full scan of every followed feed —
+  # the engine's CPU burn when this ran every 13s.
+  #
+  # The common paths do not wait it out: a publish calls reload_soon/1,
+  # and a peer's new post or reply arrives on the patchwork.publicFeed.latest
+  # tail (open_latest/1) the moment the engine ingests it. What is left for
+  # this timer is the rare append the tail never carries — a vote, which
+  # never bumps a thread — so it bounds that staleness and can be long.
+  # A dropped tail is not one of them: that recovers on its own event,
+  # see @latest_retry_ms.
+  @reload_ms :timer.seconds(120)
+
+  # How long to wait before reopening the append tail after it drops.
+  # The heartbeat above is a freshness bound, not a watchdog: waiting for
+  # it would leave the timeline frozen — no peer's post arriving at all,
+  # with nothing on screen to explain it — for up to @reload_ms. The
+  # first retry is quick because a drop is usually transient, then each
+  # attempt that still finds no tail doubles the delay up to the cap, so
+  # an engine that refuses the stream is polled gently rather than
+  # hammered.
+  @latest_retry_ms 1_000
+  @latest_retry_max_ms 30_000
+
   # After a rail refresh the Suggester may serve a prefetched set at
   # once or finish a background ranking in a second or two; the sync
   # samples just long enough to catch either without waiting for the
@@ -782,6 +807,13 @@ defmodule HighWire.Timeline do
       edit_ref: nil,
       edit_buf: [],
       edit_snapshot?: true,
+      # The engine's live append push (patchwork.publicFeed.latest): a
+      # tail, not a drain, so it carries no snapshot and needs no buffer.
+      # A nil means one is not open yet (boot, or a drop to reconnect).
+      latest_ref: nil,
+      # The reopen armed by that drop, so recovery need not wait for the
+      # reload heartbeat. nil means none is pending.
+      latest_retry_timer: nil,
       drain_client: nil,
       # Profile pages ride a connection of their own once one is
       # opened (see pages_endpoint/1); a nil means none is open yet.
@@ -1102,6 +1134,7 @@ defmodule HighWire.Timeline do
   defp deactivate(state) do
     state = cancel_timer(state, :network_timer)
     state = cancel_timer(state, :reload_timer)
+    state = cancel_timer(state, :latest_retry_timer)
     %{state | gen: state.gen + 1}
   end
 
@@ -1142,13 +1175,40 @@ defmodule HighWire.Timeline do
     end
   end
 
+  # Arm the append tail's reopen after a drop. One at a time — a tail
+  # already being retried needs no second timer — and open_latest/1
+  # cancels this on success, so a reload that reopened the tail first
+  # does not leave a timer armed that would then block the next drop's.
+  defp schedule_latest_retry(state, attempt) do
+    if Map.get(state, :latest_retry_timer) == nil and active?(state) do
+      timer =
+        Process.send_after(
+          self(),
+          {:reopen_latest, state.gen, attempt},
+          latest_retry_delay(attempt)
+        )
+
+      Map.put(state, :latest_retry_timer, timer)
+    else
+      state
+    end
+  end
+
+  defp latest_retry_delay(attempt) do
+    # Cap the exponent before raising: attempt counts consecutive
+    # failures with no bound, and 2^large would build a bignum only for
+    # min/2 to take it straight back down.
+    (@latest_retry_ms * Integer.pow(2, min(attempt - 1, 16)))
+    |> min(@latest_retry_max_ms)
+  end
+
   # The boot paths open windows directly, not through a reload request.
   # Arm the heartbeat from there too, without schedule_reload/2's
   # active?/1 gate — that set is about live connections, and boot has
   # none yet; a stalled boot still needs a timer to retry on.
   defp ensure_heartbeat(state) do
     if state.reload_timer == nil do
-      %{state | reload_timer: Process.send_after(self(), {:reload, state.gen}, 13_000)}
+      %{state | reload_timer: Process.send_after(self(), {:reload, state.gen}, @reload_ms)}
     else
       state
     end
@@ -2248,6 +2308,67 @@ defmodule HighWire.Timeline do
     {:noreply, %{state | edit_ref: nil, edit_snapshot?: true}}
   end
 
+  # patchwork.publicFeed.latest: the engine's append push. Each item is a
+  # full {key, value, timestamp} message — a superset of a window row, so
+  # it merges and threads exactly like one (the extra rootId/root fields
+  # are ignored by the builders). Only followed feeds' items join: the
+  # tail is store-wide (publicFeed's scope is empty), while the window is
+  # one createHistoryStream per followed feed. This is what lets the
+  # reload heartbeat be long — a peer's post lands here the moment the
+  # engine ingests it, rather than on the next full window re-fetch.
+  def handle_info({Client, ref, {:item, msg}}, %{latest_ref: ref} = state) do
+    if msg["value"]["author"] in state.follows do
+      state = %{state | acc: [msg | state.acc]}
+
+      if state.status == :ok and map_size(state.pending) == 0 do
+        {:noreply, finalize(state)}
+      else
+        {:noreply, state}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
+  # A live source has no end of its own; a `:done` is the finite fallback
+  # (no owning peer) and an error is a dropped connection. Either way the
+  # ref clears and a reopen is armed at once: the heartbeat bounds
+  # freshness, not liveness, so waiting for it would freeze the timeline
+  # for up to @reload_ms.
+  def handle_info({Client, ref, :done}, %{latest_ref: ref} = state) do
+    {:noreply, drop_latest(state)}
+  end
+
+  def handle_info({Client, ref, {:error, reason}}, %{latest_ref: ref} = state) do
+    Logger.debug("timeline: latest tail failed: #{inspect(reason)}")
+    {:noreply, drop_latest(state)}
+  end
+
+  # The reopen that drop armed. The first attempt comes a second later;
+  # each one that still finds no tail doubles the delay up to the cap.
+  # Already open means a reload beat it there, and no viewer means
+  # activation will open the tail alongside the window — either way there
+  # is nothing to do but clear the timer. A stale generation has the same
+  # answer: a viewer left, and activate/1 re-armed the world.
+  def handle_info({:reopen_latest, gen, attempt}, %{gen: current} = state)
+      when gen == current do
+    state = Map.put(state, :latest_retry_timer, nil)
+
+    if latest_open?(state) or not active?(state) do
+      {:noreply, state}
+    else
+      state = open_latest(state)
+
+      if latest_open?(state) do
+        {:noreply, state}
+      else
+        {:noreply, schedule_latest_retry(state, attempt + 1)}
+      end
+    end
+  end
+
+  def handle_info({:reopen_latest, _stale, _attempt}, state), do: {:noreply, state}
+
   def handle_info(:rebroadcast, state) do
     # One activity broadcast per debounce window, alongside the revision
     # bump — not one per blob (see the blobs.ls tail above).
@@ -2341,7 +2462,7 @@ defmodule HighWire.Timeline do
   def handle_info({:reload, gen}, %{gen: current} = state) when gen == current do
     state = %{state | reload_timer: nil}
     state = maybe_reload(state)
-    {:noreply, schedule_reload(state, 13_000)}
+    {:noreply, schedule_reload(state, @reload_ms)}
   end
 
   def handle_info({:reload, _stale}, state), do: {:noreply, state}
@@ -2577,7 +2698,7 @@ defmodule HighWire.Timeline do
         resume_boot(state)
 
       # Streams are already in flight: come back shortly rather than
-      # losing this request to the 13s heartbeat. A publish's refresh
+      # losing this request to the heartbeat. A publish's refresh
       # must not wait out a full tick to show up on screen.
 
       map_size(state.pending) != 0 ->
@@ -2707,8 +2828,19 @@ defmodule HighWire.Timeline do
         state
       end
 
-    if state.edit_ref == nil do
-      open_edit_drain(state)
+    state =
+      if state.edit_ref == nil do
+        open_edit_drain(state)
+      else
+        state
+      end
+
+    # The append push: opened once and kept open, like the tails above.
+    # This is what carries a peer's new post while the heartbeat is long.
+    # Read through Map.get, not the dot: handlers also run against
+    # hand-built state in tests, which may not carry the field.
+    if Map.get(state, :latest_ref) == nil do
+      open_latest(state)
     else
       state
     end
@@ -2780,6 +2912,44 @@ defmodule HighWire.Timeline do
     end
   catch
     _, _ -> state
+  end
+
+  # patchwork.publicFeed.latest: the engine's append push. Every new
+  # thread event (a root or a reply) is pushed to this live source as it
+  # lands, so a peer's post reaches the timeline here rather than waiting
+  # out the reload heartbeat — which is what lets that heartbeat be long.
+  #
+  # It rides the owner connection: the manifest marks it owner class, and
+  # unlike the drains it has no snapshot to walk (silkpurse_threads sends
+  # {live_source, [], ...}), so it cannot starve the shared connection
+  # the way the contact table's backlog does. A nil ref means one is not
+  # open yet — boot, or a drop to reconnect.
+  defp open_latest(state) do
+    with true <- is_pid(state.client) and Process.alive?(state.client),
+         {:ok, ref} <-
+           Client.stream(state.client, ["patchwork", "publicFeed", "latest"], [], self()) do
+      # Map.put, not %{state | …}: handlers also run against hand-built
+      # state in tests (and a process started before this field existed),
+      # which may not carry the key. Cancelling the pending reopen here
+      # matters: a reload that reopened the tail first must not leave a
+      # timer armed, or the next drop would find one and never arm again.
+      state
+      |> Map.put(:latest_ref, ref)
+      |> cancel_timer(:latest_retry_timer)
+    else
+      _ -> state
+    end
+  catch
+    _, _ -> state
+  end
+
+  # The tail is open. Read through Map.get, not the dot: handlers also
+  # run against hand-built state in tests, which may not carry the field.
+  defp latest_open?(state), do: Map.get(state, :latest_ref) != nil
+
+  # The tail dropped: clear it and arm the reopen that recovery runs on.
+  defp drop_latest(state) do
+    state |> Map.put(:latest_ref, nil) |> schedule_latest_retry(1)
   end
 
   # A live type stream: keep the tail open so later items arrive without
@@ -2958,7 +3128,7 @@ defmodule HighWire.Timeline do
   defp finalize(state) do
     {payload, missing, base, post_refs} = build_payload(state)
 
-    # The 13s heartbeat re-fetches the window and lands here every time.
+    # The reload heartbeat re-fetches the window and lands here every time.
     # A rebuild that produced the same payload as the last one is not
     # news: skip the broadcast and the profile writes, so a quiet feed
     # stays quiet. The comparison is structural — the same window, the
@@ -4289,6 +4459,9 @@ defmodule HighWire.Timeline do
     state = stop_client(state)
     state = fail_pages(state, client, :offline)
 
+    # The append push rode the dropped client; reopen with the new one.
+    # Set through Map.put, not the %{state | …} update: handlers also run
+    # against hand-built state in tests, which may not carry the field.
     %{
       state
       | status: :connecting,
@@ -4299,6 +4472,7 @@ defmodule HighWire.Timeline do
         abandoned: MapSet.new(),
         blob_ls_ref: nil
     }
+    |> Map.put(:latest_ref, nil)
   end
 
   # A reconnect drops the client. If it is still alive — the whoami

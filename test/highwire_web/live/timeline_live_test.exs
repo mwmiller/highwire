@@ -871,7 +871,7 @@ defmodule HighWireWeb.TimelineLiveTest do
 
       # Asked for on render, not on the next finalize: the feed id of a
       # suggestion is neither followed nor in the window, so without
-      # this it would wait out the 13s heartbeat on its identicon.
+      # this it would wait out the heartbeat on its identicon.
       wants = :sys.get_state(HighWire.Timeline).profile_wants
       assert MapSet.member?(wants, id)
     end
