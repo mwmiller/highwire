@@ -672,10 +672,14 @@ defmodule HighWire.Timeline do
     %{"type" => "pub", "address" => %{"host" => host, "port" => port, "key" => key}}
   end
 
-  # Single chokepoint for every outbound message (posts, replies, votes,
-  # follows). Publishing is allowed on every network — the switch point
-  # is Network, not a policy about who else might write the identity.
-  defp publish_content(content) do
+  @doc """
+  Publish an arbitrary content map — the chokepoint for every outbound
+  message (posts, replies, votes, follows, and the game messages that need a
+  shape of their own). Publishing is allowed on every network: the switch
+  point is Network, not a policy about who else might write the identity.
+  """
+  @spec publish_content(map()) :: {:ok, binary() | nil} | {:error, term()}
+  def publish_content(content) do
     case Process.whereis(__MODULE__) do
       nil ->
         {:error, :offline}
@@ -2317,6 +2321,11 @@ defmodule HighWire.Timeline do
   # reload heartbeat be long — a peer's post lands here the moment the
   # engine ingests it, rather than on the next full window re-fetch.
   def handle_info({Client, ref, {:item, msg}}, %{latest_ref: ref} = state) do
+    # Games ride the same tail: the store files the message and tells its own
+    # subscribers, which is how a move reaches a board without the timeline's
+    # reload heartbeat. It is a cast, so a slow disk never stalls this stream.
+    HighWire.Backgammon.Store.observe(msg)
+
     if msg["value"]["author"] in state.follows do
       state = %{state | acc: [msg | state.acc]}
 
@@ -3649,6 +3658,12 @@ defmodule HighWire.Timeline do
     # the same way a boxed message never joins it. The index holds the
     # deleter's id, so a delete from anyone else is ignored here.
     acc = Enum.reject(acc, &tombstoned?/1)
+
+    # Games own their rows. A move is not a post, and a game's messages are
+    # threaded on the challenge key, so leaving them in would either thread a
+    # board under a challenge or collapse a session into "sent a … message".
+    # The gameroom reads them from the store instead.
+    acc = Enum.reject(acc, &HighWire.Backgammon.Game.message?(content(&1)))
 
     by_key = Map.new(acc, fn msg -> {msg["key"], msg} end)
     # An edit revises the post named by revisionRoot/revisionBranch/root.

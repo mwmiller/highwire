@@ -730,6 +730,34 @@ defmodule HighWire.TimelineTest do
       assert Enum.map(rows, & &1.kind) == [:other, :thread]
       assert hd(rows).other_count == 2
     end
+
+    test "game messages never become feed rows" do
+      then = :timer.hours(24) * 365 * 3
+      game_id = String.duplicate("ab", 32)
+
+      events = [
+        msg("@alice", "%g1.sha256", then, %{
+          "type" => "backgammon/challenge",
+          "game_id" => game_id
+        }),
+        msg("@alice", "%g2.sha256", then + 1_000, %{
+          "type" => "backgammon/turn",
+          "game_id" => game_id,
+          "root" => "%g1.sha256",
+          "turn" => 1
+        }),
+        post("@alice", "%p1.sha256", then + 2_000)
+      ]
+
+      rows = Timeline.build_feed(events, "@me", %{})
+
+      # A move carries `root` at the challenge, so left in it would thread a
+      # board under the invitation; a challenge alone would collapse into a
+      # "sent a … message" run. Neither belongs in the social timeline — the
+      # gameroom reads them from the store.
+      assert Enum.map(rows, & &1.kind) == [:thread]
+      assert hd(rows).msg["key"] == "%p1.sha256"
+    end
   end
 
   describe "contacts stream items" do

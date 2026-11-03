@@ -79,6 +79,14 @@ defmodule HighWireWeb.Components.Nav do
             />
           </.link>
           <.link
+            navigate="/games"
+            title="Gameroom"
+            aria-label="Gameroom"
+            class="text-dim transition hover:text-paper"
+          >
+            <.die />
+          </.link>
+          <.link
             navigate="/settings"
             title="Settings"
             aria-label="Settings"
@@ -171,6 +179,21 @@ defmodule HighWireWeb.Components.Nav do
   defp identity_image(%{"id" => _id, "image" => image}) when is_binary(image), do: image
   defp identity_image(%{"id" => id}), do: Profile.image(id)
   defp identity_image(_identity), do: nil
+
+  # A die rather than a board: at 16px the pips still read, where a board
+  # would collapse into a grey square.
+  defp die(assigns) do
+    ~H"""
+    <svg class="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="3.5" />
+      <circle cx="8.5" cy="8.5" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="15.5" cy="8.5" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="8.5" cy="15.5" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="15.5" cy="15.5" r="1.1" fill="currentColor" stroke="none" />
+    </svg>
+    """
+  end
 
   defp gear(assigns) do
     ~H"""

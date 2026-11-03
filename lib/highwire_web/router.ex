@@ -26,6 +26,8 @@ defmodule HighWireWeb.Router do
       live("/about", Live)
       live("/profile", ProfileLive)
       live("/network", NetworkLive)
+      live("/games", GamesLive)
+      live("/games/:game_id", GameLive)
       live("/identity", IdentityLive)
       live("/settings", SettingsLive)
       live("/diagnostics", DiagnosticsLive)
