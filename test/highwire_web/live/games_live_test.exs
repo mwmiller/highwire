@@ -451,8 +451,10 @@ defmodule HighWireWeb.GamesLiveTest do
     assert html =~ "e4"
     assert html =~ "e5"
     assert html =~ "in play"
-    # The board draws pieces, both sides, from the folded squares.
-    assert html =~ "♙"
+    # The board draws pieces, both sides, from the folded squares: one filled
+    # silhouette whose colour says which side it belongs to.
+    assert html =~ ~s(data-colour="white")
+    assert html =~ ~s(data-colour="black")
     assert html =~ "♟"
   end
 

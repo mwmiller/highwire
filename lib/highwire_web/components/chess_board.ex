@@ -6,9 +6,12 @@ defmodule HighWireWeb.Components.ChessBoard do
   the rank and file names rather than of the map: empty squares are the ones
   the map does not have, and a board drawn from its keys would lose them.
 
-  Pieces are text, not images — the same glyph every platform has, sized by
-  the type scale — so the gameroom needs no sprite sheet and a spectator
-  reads the position at any zoom.
+  Pieces are text, not images — the same glyph every platform has — so the
+  gameroom needs no sprite sheet and a spectator reads the position at any
+  zoom. White and black are the same filled silhouette coloured differently,
+  at a share of the square's width: a font that draws white as an outline and
+  black as a solid offers two piece sets, and the outlined one fades out on
+  the board.
   """
 
   use Phoenix.Component
@@ -17,18 +20,12 @@ defmodule HighWireWeb.Components.ChessBoard do
   @ranks ~w(8 7 6 5 4 3 2 1)
 
   @glyphs %{
-    {:king, :white} => "♔",
-    {:queen, :white} => "♕",
-    {:rook, :white} => "♖",
-    {:bishop, :white} => "♗",
-    {:knight, :white} => "♘",
-    {:pawn, :white} => "♙",
-    {:king, :black} => "♚",
-    {:queen, :black} => "♛",
-    {:rook, :black} => "♜",
-    {:bishop, :black} => "♝",
-    {:knight, :black} => "♞",
-    {:pawn, :black} => "♟"
+    king: "♚",
+    queen: "♛",
+    rook: "♜",
+    bishop: "♝",
+    knight: "♞",
+    pawn: "♟"
   }
 
   attr :board, :map, required: true, doc: "the fold's board: square => {type, colour}"
@@ -87,13 +84,11 @@ defmodule HighWireWeb.Components.ChessBoard do
       phx-click={@playable && "square"}
       phx-value-sq={@square}
       class={[
-        "relative flex aspect-square items-center justify-center leading-none",
+        "chess-square relative flex aspect-square items-center justify-center leading-none",
         @playable && "cursor-pointer",
-        @light? && "bg-raised",
-        !@light? && "bg-panel",
+        @light? && "board-light",
+        !@light? && "board-dark",
         @selected && "ring-2 ring-inset ring-focus",
-        @compact && "text-[11px]",
-        !@compact && "text-2xl",
         @movable && !@selected && "hover:ring-1 hover:ring-inset hover:ring-focus"
       ]}
     >
@@ -101,7 +96,9 @@ defmodule HighWireWeb.Components.ChessBoard do
            game shows where the piece came from. --%>
       <span :if={@last} class="absolute inset-0 bg-accent/20" />
 
-      <span :if={@piece}>{glyph(@piece)}</span>
+      <span :if={@piece} class="chess-piece" data-colour={colour(@piece)} data-type={type(@piece)}>
+        {glyph(@piece)}
+      </span>
 
       <%!-- A reachable square says so under the piece as well as on an
            empty one, so a capture reads as a move and not as a colour. --%>
@@ -118,5 +115,8 @@ defmodule HighWireWeb.Components.ChessBoard do
   end
 
   defp stoi(<<c>>), do: c
-  defp glyph(piece), do: Map.get(@glyphs, piece, "")
+
+  defp glyph({type, _colour}), do: Map.get(@glyphs, type, "")
+  defp colour({_type, colour}), do: to_string(colour)
+  defp type({type, _colour}), do: to_string(type)
 end

@@ -43,6 +43,18 @@
   --warn-text: #fbbf24;
   --bad-text: #f87171;
 
+  /* Chess board. The board carries its own colours instead of borrowing the
+     app's surfaces: two greys four percent apart do not read as squares, and
+     a piece is white or black before it is anything else. Both are mid-tones
+     so that a white piece and a black piece are equally legible on either
+     square, with an edge in the opposite colour to hold the silhouette. */
+  --board-light: #b4bcc7;
+  --board-dark: #66727f;
+  --piece-white: #fbfcfd;
+  --piece-white-edge: #12161c;
+  --piece-black: #12161c;
+  --piece-black-edge: #f2f4f7;
+
   /* Markdown bodies (.md-body). */
   --md-strong: #ffffff;
   --md-code-bg: #1d2025;
@@ -80,6 +92,13 @@
   --info-text: #0369a1;
   --warn-text: #b45309;
   --bad-text: #b91c1c;
+
+  --board-light: #f2f4f7;
+  --board-dark: #97a4b4;
+  --piece-white: #ffffff;
+  --piece-white-edge: #1b2027;
+  --piece-black: #1b2027;
+  --piece-black-edge: #ffffff;
 
   --md-strong: #09090b;
   --md-code-bg: #f4f4f5;
@@ -272,6 +291,39 @@
    dialer). aria-pressed is the source of truth — the Prefs hook sets it,
    so the state survives LiveView patches; plain actions that share the
    chip (no attribute at all) rest like an unpressed choice. */
+/* The board's squares are named for what they are, not for how they sit
+   relative to the panel behind them. A square is a size container so its
+   piece can be a share of it: a chess piece belongs to its square, and the
+   type scale has no step that knows how wide the window is. */
+@layer components {
+  .board-light {
+    background-color: var(--board-light);
+  }
+  .board-dark {
+    background-color: var(--board-dark);
+  }
+  .chess-square {
+    container-type: inline-size;
+  }
+  .chess-piece {
+    font-size: 84cqi;
+    line-height: 0.82;
+    -webkit-text-stroke-width: 0.03em;
+    -webkit-text-stroke-color: var(--piece-white-edge);
+    color: var(--piece-white);
+    user-select: none;
+  }
+  /* A pawn's glyph carries a descender the other pieces do not, so its ink
+     sits high in a line box centred on the font. */
+  .chess-piece[data-type="pawn"] {
+    transform: translateY(0.055em);
+  }
+  .chess-piece[data-colour="black"] {
+    -webkit-text-stroke-color: var(--piece-black-edge);
+    color: var(--piece-black);
+  }
+}
+
 @layer components {
   .pref-choice {
     @apply rounded border px-4 py-2 text-sm transition-colors;
