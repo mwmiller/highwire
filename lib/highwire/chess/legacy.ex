@@ -246,6 +246,9 @@ defmodule HighWire.Chess.Legacy do
 
   defp verdict(_ending, _position), do: nil
 
+  # The position after the move travels with the move: it is what the page
+  # draws, and the only thing a game this node does not own can be asked to
+  # stand behind.
   defp history_item(%{author: author, content: content}) do
     %{
       ply: content["ply"],
@@ -253,7 +256,8 @@ defmodule HighWire.Chess.Legacy do
       type: "move",
       uci: uci(content),
       san: content["pgnMove"],
-      note: nil
+      note: nil,
+      fen: content["fen"]
     }
   end
 

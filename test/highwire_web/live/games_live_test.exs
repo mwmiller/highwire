@@ -301,7 +301,13 @@ defmodule HighWireWeb.GamesLiveTest do
     ts = Keyword.get(opts, :ts, 1_000)
     root = "%" <> Base.encode64(bytes) <> ".sha256"
 
-    for {ply, orig, dest, san} <- moves do
+    for move <- moves do
+      {ply, orig, dest, san, fen} =
+        case move do
+          {ply, orig, dest, san} -> {ply, orig, dest, san, nil}
+          {ply, orig, dest, san, fen} -> {ply, orig, dest, san, fen}
+        end
+
       HighWire.Chess.Legacy.Store.ingest(%{
         "key" => "%m#{ply}.sha256",
         "value" => %{
@@ -313,7 +319,8 @@ defmodule HighWireWeb.GamesLiveTest do
             "ply" => ply,
             "orig" => orig,
             "dest" => dest,
-            "pgnMove" => san
+            "pgnMove" => san,
+            "fen" => fen
           }
         }
       })
@@ -335,6 +342,26 @@ defmodule HighWireWeb.GamesLiveTest do
     stale_at = :binary.match(html, stale) |> elem(0)
 
     assert fresh_at < stale_at
+  end
+
+  test "a network game is stepped through from the positions it published", %{conn: conn} do
+    # Our engine would refuse a4b3 here — there is no black king on a4 after
+    # 1. e4 — but the game published the position it reached, and a game this
+    # node does not own is its own authority on where its pieces stood.
+    game_id =
+      seed_legacy([
+        {1, "e2", "e4", "e4", "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"},
+        {2, "a4", "b3", "Kb3", "8/8/8/8/8/1k6/8/4K3 w - - 0 2"}
+      ])
+
+    {:ok, view, html} = live(conn, "/games/#{game_id}")
+
+    refute html =~ "stops verifying"
+    assert html =~ "2 / 2"
+
+    # The last position is the live one, so stepping into it leaves replay.
+    html = view |> element("button[phx-value-to='1']") |> render_click()
+    assert html =~ "Looking back at move 1 of 2"
   end
 
   test "the room can be narrowed by how long a game ran", %{conn: conn} do

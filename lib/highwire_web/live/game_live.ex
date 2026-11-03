@@ -13,6 +13,7 @@ defmodule HighWireWeb.GameLive do
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
   alias HighWire.Chess.Engine
+  alias HighWire.Chess.Legacy
   alias HighWire.Games.Catalog
   alias HighWire.SSB.{Identities, Profile}
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav}
@@ -295,6 +296,17 @@ defmodule HighWireWeb.GameLive do
   # holds can begin at move 139 of 166 — and the position those moves started
   # from is not in the log, so there is no line and the page says why rather
   # than pretending the fragment is the whole game.
+  # The network's own games arrive with the position after every move, so
+  # their line is read rather than replayed. A game this node does not own is
+  # its own authority on where its pieces stood: replaying the moves here
+  # asked our rules to agree with another engine's, and the first disagreement
+  # cut the line short on a move both players had already made.
+  defp line(%{kind: :chess, format: :legacy, history: [%{ply: 1} | _]} = game) do
+    start = Engine.initial()
+    {steps, stop} = walk_fens(game.history, start, [])
+    {[step(0, start, nil) | steps], stop}
+  end
+
   defp line(%{kind: :chess, history: [%{ply: 1} | _]} = game) do
     start = Engine.initial()
     {steps, stop} = walk(game.history, start, [])
@@ -303,6 +315,27 @@ defmodule HighWireWeb.GameLive do
 
   defp line(%{kind: :chess, history: []}), do: {[step(0, Engine.initial(), nil)], nil}
   defp line(_game), do: {[], nil}
+
+  defp walk_fens([], _pos, acc), do: {Enum.reverse(acc), nil}
+
+  defp walk_fens([%{ply: ply} = item | rest], pos, acc) do
+    cond do
+      is_binary(item[:fen]) ->
+        walked = Legacy.position(item[:fen])
+        walk_fens(rest, walked, [step(ply, walked, item) | acc])
+
+      # A row with no position of its own can only be followed by playing
+      # it, which is the fallback this page used to depend on entirely.
+      is_binary(item[:uci]) ->
+        case Engine.play(pos, item[:uci]) do
+          {:ok, next, _san} -> walk_fens(rest, next, [step(ply, next, item) | acc])
+          {:error, reason} -> {Enum.reverse(acc), %{ply: ply, reason: reason}}
+        end
+
+      true ->
+        {Enum.reverse(acc), %{ply: ply, reason: :unknown}}
+    end
+  end
 
   defp walk([], _pos, acc), do: {Enum.reverse(acc), nil}
 
