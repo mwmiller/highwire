@@ -137,6 +137,48 @@ defmodule HighWireWeb.GamesLive do
     end
   end
 
+  # The room is three places and a past: games it is your turn in, games
+  # you are waiting on, everything else in flight — which is what there is
+  # to watch — and what is over. The grouping is the same for either game.
+  defp your_move(games, _self_id), do: Enum.filter(games, &(&1.yours? and in_flight?(&1)))
+
+  defp waiting(games, self_id),
+    do: Enum.filter(games, &(not &1.yours? and mine?(&1, self_id) and in_flight?(&1)))
+
+  defp spectate(games, self_id),
+    do: Enum.filter(games, &(not mine?(&1, self_id) and in_flight?(&1)))
+
+  defp finished(games, _self_id), do: Enum.filter(games, &(not in_flight?(&1)))
+
+  defp in_flight?(game), do: game.status in [:playing, :opening]
+
+  # A game is yours when you are one of the two players, whichever way the
+  # game names them: a chess game has a challenger and an accepter, and a
+  # backgammon one keeps white and black.
+  defp mine?(game, self_id) when is_binary(self_id) do
+    players = Enum.map([:challenger, :accepter, :white, :black], &Map.get(game, &1))
+    self_id in players
+  end
+
+  defp mine?(_game, _self_id), do: false
+
+  attr :title, :string, required: true
+  attr :games, :list, required: true
+  attr :self_id, :string, default: nil
+
+  defp section(assigns) do
+    ~H"""
+    <section class="mb-6">
+      <h3 class="mb-2 text-[11px] uppercase tracking-wider text-faint">
+        {@title} <span class="text-faint">· {length(@games)}</span>
+      </h3>
+      <div class="grid gap-3">
+        <.game_card :for={game <- @games} game={game} self_id={@self_id} />
+      </div>
+    </section>
+    """
+  end
+
   defp name(nil), do: "unknown"
   defp name(id), do: Profile.display_name(id)
 
@@ -162,7 +204,7 @@ defmodule HighWireWeb.GamesLive do
               <span class="text-xs text-faint">
                 {if @total > 0, do: "#{length(@games)} of #{@total} recent", else: "0 games"}
               </span>
-              <span class="text-[10px] uppercase tracking-wide text-faint">open as</span>
+              <span class="text-[10px] uppercase tracking-wide text-faint">new chess game as</span>
 
               <button
                 phx-click="new"
@@ -194,9 +236,30 @@ defmodule HighWireWeb.GamesLive do
             their game lands here on the next move.
           </p>
 
-          <div class="grid gap-3">
-            <.game_card :for={game <- @games} game={game} self_id={@self_id} />
-          </div>
+          <.section
+            :if={your_move(@games, @self_id) != []}
+            title="Your move"
+            games={your_move(@games, @self_id)}
+            self_id={@self_id}
+          />
+          <.section
+            :if={waiting(@games, @self_id) != []}
+            title="Waiting on them"
+            games={waiting(@games, @self_id)}
+            self_id={@self_id}
+          />
+          <.section
+            :if={spectate(@games, @self_id) != []}
+            title="Spectate"
+            games={spectate(@games, @self_id)}
+            self_id={@self_id}
+          />
+          <.section
+            :if={finished(@games, @self_id) != []}
+            title="Finished"
+            games={finished(@games, @self_id)}
+            self_id={@self_id}
+          />
 
           <div :if={length(@games) < @total} class="mt-4 flex justify-center">
             <button

@@ -53,7 +53,7 @@ defmodule HighWireWeb.GamesLiveTest do
   test "the room offers to open a game on either side", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/games")
 
-    assert html =~ "open as"
+    assert html =~ "new chess game as"
     assert html =~ "phx-value-color=\"white\""
     assert html =~ "phx-value-color=\"black\""
   end

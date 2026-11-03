@@ -158,6 +158,14 @@ defmodule HighWireWeb.GameLive do
     Chess.Store.get(game_id) || Chess.Legacy.Store.get(game_id) || Store.get(game_id)
   end
 
+  # Which side of the glass you are on, whichever way the game names its
+  # players: a chess game has a challenger and an accepter, a backgammon
+  # one keeps white and black, and a game read from the network has both.
+  defp spectating?(game, self_id) do
+    players = Enum.map([:challenger, :accepter, :white, :black], &Map.get(game, &1))
+    is_nil(self_id) or self_id not in players
+  end
+
   defp self_id do
     case Identities.active() do
       %{"id" => id} when is_binary(id) -> id
@@ -206,7 +214,15 @@ defmodule HighWireWeb.GameLive do
               <.side id={@game.white} color={:white} turn={@game.turn} />
               <.side id={@game.black} color={:black} turn={@game.turn} />
             </div>
-            <p class="mt-2 text-xs text-dim">{chess_line(@game, @self_id)}</p>
+            <p class="mt-2 flex items-center gap-2 text-xs text-dim">
+              <span>{chess_line(@game, @self_id)}</span>
+              <span
+                :if={spectating?(@game, @self_id)}
+                class="rounded bg-raised px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-faint"
+              >
+                spectating
+              </span>
+            </p>
           </header>
 
           <p
@@ -320,7 +336,15 @@ defmodule HighWireWeb.GameLive do
               <Avatar.avatar :if={@game.accepter} id={@game.accepter} size={20} />
               <span class="text-sm text-paper">{name(@game.accepter)}</span>
             </div>
-            <p class="mt-1 text-xs text-dim">{turn_line(@game, @self_id)}</p>
+            <p class="mt-1 flex items-center gap-2 text-xs text-dim">
+              <span>{turn_line(@game, @self_id)}</span>
+              <span
+                :if={spectating?(@game, @self_id)}
+                class="rounded bg-raised px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-faint"
+              >
+                spectating
+              </span>
+            </p>
           </header>
 
           <p
