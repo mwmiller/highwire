@@ -48,12 +48,12 @@
      a piece is white or black before it is anything else. Both are mid-tones
      so that a white piece and a black piece are equally legible on either
      square, with an edge in the opposite colour to hold the silhouette. */
-  --board-light: #b4bcc7;
-  --board-dark: #66727f;
-  --piece-white: #fbfcfd;
-  --piece-white-edge: #12161c;
-  --piece-black: #12161c;
-  --piece-black-edge: #f2f4f7;
+  --board-light: #cdc5b6;
+  --board-dark: #9a9081;
+  --piece-white: #fdfaf3;
+  --piece-white-edge: rgba(52, 45, 37, 0.62);
+  --piece-black: #332f29;
+  --piece-black-edge: rgba(253, 250, 243, 0.45);
 
   /* Markdown bodies (.md-body). */
   --md-strong: #ffffff;
@@ -93,12 +93,12 @@
   --warn-text: #b45309;
   --bad-text: #b91c1c;
 
-  --board-light: #f2f4f7;
-  --board-dark: #97a4b4;
-  --piece-white: #ffffff;
-  --piece-white-edge: #1b2027;
-  --piece-black: #1b2027;
-  --piece-black-edge: #ffffff;
+  --board-light: #f1ece2;
+  --board-dark: #bcb1a0;
+  --piece-white: #fffdf8;
+  --piece-white-edge: rgba(59, 51, 42, 0.55);
+  --piece-black: #3a352e;
+  --piece-black-edge: rgba(255, 253, 248, 0.5);
 
   --md-strong: #09090b;
   --md-code-bg: #f4f4f5;
@@ -319,7 +319,7 @@
     font-size: calc(84cqi * var(--piece-scale, 1));
     transform: translateY(var(--piece-shift, 0em));
     line-height: 0.82;
-    -webkit-text-stroke-width: 0.03em;
+    -webkit-text-stroke-width: 0.02em;
     -webkit-text-stroke-color: var(--piece-white-edge);
     color: var(--piece-white);
     user-select: none;
