@@ -187,6 +187,10 @@ defmodule HighWireWeb.Components.Nav do
   # words — the timeline is what this node has read, the room is the tables
   # it has laid out. Both are ordinary objects drawn in one stroke, so the
   # pair reads as two ways to spend an evening rather than two abstractions.
+  #
+  # Both are drawn inside the same box, y 5.5 to 16.5 and x 3.5 to 20.5, so
+  # redrawing one does not shift it against the other: a change of shape is a
+  # move, and the two have to move together.
   defp timeline(assigns) do
     ~H"""
     <svg
@@ -222,10 +226,10 @@ defmodule HighWireWeb.Components.Nav do
       stroke-linecap="round"
       stroke-linejoin="round"
     >
-      <path d="M3.5 8.5h17l-2.5 8h-12Z" />
-      <path d="M7 20v-3.5" />
-      <path d="M17 20v-3.5" />
-      <circle cx="12" cy="12.5" r="1" fill="currentColor" stroke="none" />
+      <path d="M3.5 5.5h17l-2.5 8h-12Z" />
+      <path d="M7 16.5v-3" />
+      <path d="M17 16.5v-3" />
+      <circle cx="12" cy="9.5" r="1" fill="currentColor" stroke="none" />
     </svg>
     """
   end
