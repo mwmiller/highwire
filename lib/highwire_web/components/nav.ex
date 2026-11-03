@@ -55,14 +55,24 @@ defmodule HighWireWeb.Components.Nav do
     ~H"""
     <aside class="flex w-56 min-w-0 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-edge bg-panel">
       <div class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4">
-        <.link
-          navigate="/"
-          title="Timeline"
-          aria-label="Timeline"
-          class="flex items-center text-paper"
-        >
-          <img src={~p"/images/highwire-mark.png"} alt="" class="h-7 w-7 rounded" />
-        </.link>
+        <div class="flex items-center gap-3">
+          <.link
+            navigate="/"
+            title="Timeline"
+            aria-label="Timeline"
+            class="text-dim transition hover:text-paper"
+          >
+            <.timeline />
+          </.link>
+          <.link
+            navigate="/games"
+            title="Gameroom"
+            aria-label="Gameroom"
+            class="text-dim transition hover:text-paper"
+          >
+            <.door />
+          </.link>
+        </div>
         <div class="flex items-center gap-2">
           <.link
             :if={@identity}
@@ -77,14 +87,6 @@ defmodule HighWireWeb.Components.Nav do
               image={identity_image(@identity)}
               rev={Profile.rev()}
             />
-          </.link>
-          <.link
-            navigate="/games"
-            title="Gameroom"
-            aria-label="Gameroom"
-            class="text-dim transition hover:text-paper"
-          >
-            <.door />
           </.link>
           <.link
             navigate="/settings"
@@ -179,6 +181,28 @@ defmodule HighWireWeb.Components.Nav do
   defp identity_image(%{"id" => _id, "image" => image}) when is_binary(image), do: image
   defp identity_image(%{"id" => id}), do: Profile.image(id)
   defp identity_image(_identity), do: nil
+
+  # A clock, drawn beside the door and the gear as one of them: the mark of
+  # the app belongs on the app, not on the link to one of its pages. Stacked
+  # rows would read as a menu at this size, and a timeline read newest-first
+  # is what a clock already means.
+  defp timeline(assigns) do
+    ~H"""
+    <svg
+      class="h-4 w-4"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <circle cx="12" cy="12" r="8.2" />
+      <path d="M12 7.4V12l3.3 2.2" />
+    </svg>
+    """
+  end
 
   # A doorway rather than a board or a die: the room is a place you go into,
   # and a door keeps a shape of its own at 16px, where a board would collapse
