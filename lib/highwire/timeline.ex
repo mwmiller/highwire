@@ -118,6 +118,9 @@ defmodule HighWire.Timeline do
   # see @latest_retry_ms.
   @reload_ms :timer.seconds(120)
 
+  # How long a legacy tail must be quiet before its pass counts as done.
+  @legacy_quiet_ms :timer.seconds(8)
+
   # How long to wait before reopening the append tail after it drops.
   # The heartbeat above is a freshness bound, not a watchdog: waiting for
   # it would leave the timeline frozen — no peer's post arriving at all,
@@ -2560,6 +2563,50 @@ defmodule HighWire.Timeline do
   end
 
   # feed history items
+  # The chess the network already carries, in the format it was published
+  # in: four types, each with its own tail, filed as each row lands. The
+  # store folds them on read, so there is no backlog to buffer here — and
+  # the same received-time cursor keeps a restart from re-walking the walk.
+  # The rows come newest first, so the cursor is the *last* thing the pass
+  # can know: advancing it as rows arrive would jump it past a backlog that
+  # has not been read yet. It moves when the stream says the pass is over.
+  def handle_info({Client, ref, {:item, msg}}, %{legacy_refs: refs} = state)
+      when is_list(refs) do
+    if ref in refs do
+      HighWire.Chess.Legacy.Store.observe(msg)
+
+      ts = received_ts(msg)
+      type = get_in(msg, ["value", "content", "type"])
+
+      {:noreply, track_legacy(state, type, ts)}
+    else
+      other_item(state, ref, msg)
+    end
+  end
+
+  def handle_info({:legacy_flush, gen}, %{gen: gen} = state) do
+    {:noreply, flush_legacy(state)}
+  end
+
+  def handle_info({Client, ref, :done}, %{legacy_refs: refs} = state) when is_list(refs) do
+    if ref in refs do
+      {:noreply, flush_legacy(state)}
+    else
+      feed_done(forget_abandoned(state, ref), ref, :done)
+    end
+  end
+
+  def handle_info({Client, ref, {:error, reason}}, %{legacy_refs: refs} = state)
+      when is_list(refs) do
+    if ref in refs do
+      Logger.debug("timeline: chess drain (#{inspect(ref)}) failed: #{inspect(reason)}")
+      {:noreply, state}
+    else
+      Logger.debug("timeline: feed stream error: #{inspect(reason)}")
+      feed_done(forget_abandoned(state, ref), ref, :error)
+    end
+  end
+
   # The store-wide game drains. Each is a live tail whose first pass is a
   # whole-store walk: items are buffered until the sentinel closes it, so
   # one fold answers the walk, and each item folds on its own afterwards.
@@ -2992,8 +3039,18 @@ defmodule HighWire.Timeline do
         state
       end
 
-    if Map.get(state, :chess_ref) == nil do
-      open_chess(state)
+    state =
+      if Map.get(state, :chess_ref) == nil do
+        open_chess(state)
+      else
+        state
+      end
+
+    # The chess already on the network, in the format it was published in.
+    # Four types, so four tails, and no backlog buffering: a row is filed
+    # as it lands and the store folds it on read.
+    if Map.get(state, :legacy_refs) in [nil, []] do
+      open_legacy(state)
     else
       state
     end
@@ -4647,6 +4704,58 @@ defmodule HighWire.Timeline do
   # live tail on the same ref so a challenge or move published later still
   # lands without a re-walk. Both games open the same way; only the type,
   # the store and the ref's name differ.
+  # The network's own chess, four types and four tails behind one
+  # connection. Each resumes from its own cursor, so only what is new is
+  # walked after the first pass.
+
+  # The highest received time seen for a legacy type, held until the
+  # stream has been quiet long enough that the pass is over. These tails
+  # are live, so the engine never says the walk ended — the silence is the
+  # only end there is.
+  defp track_legacy(state, type, ts) when is_binary(type) and is_integer(ts) do
+    state
+    |> cancel_timer(:legacy_timer)
+    |> Map.update(:legacy_max, %{type => ts}, &Map.put(&1, type, max(ts, Map.get(&1, type, 0))))
+    |> Map.put(
+      :legacy_timer,
+      Process.send_after(self(), {:legacy_flush, Map.get(state, :gen)}, @legacy_quiet_ms)
+    )
+  end
+
+  defp track_legacy(state, _type, _ts), do: state
+
+  defp flush_legacy(state) do
+    state
+    |> cancel_timer(:legacy_timer)
+    |> Map.get(:legacy_max, %{})
+    |> Enum.each(fn {type, ts} -> MessageIndex.advance_cursor(type, ts) end)
+
+    Map.put(state, :legacy_max, %{})
+  end
+
+  defp open_legacy(state) do
+    {client, state} = game_endpoint(state, :legacy_client)
+
+    if is_pid(client) do
+      refs =
+        HighWire.Chess.Legacy.types()
+        |> Enum.flat_map(fn type ->
+          params = live_by_type(type, MessageIndex.cursor(type))
+
+          case Client.stream(client, ["messagesByType"], params, self()) do
+            {:ok, ref} -> [ref]
+            _ -> []
+          end
+        end)
+
+      Map.put(state, :legacy_refs, refs)
+    else
+      state
+    end
+  catch
+    _, _ -> state
+  end
+
   defp open_backgammon(state), do: open_game_drain(state, :backgammon)
   defp open_chess(state), do: open_game_drain(state, :chess)
 

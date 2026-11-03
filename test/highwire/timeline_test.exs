@@ -1104,7 +1104,13 @@ defmodule HighWire.TimelineTest do
                {["messagesByType"], [%{"type" => "delete", "live" => true, "old" => true}]},
                {["messagesByType"], [%{"type" => "post-edit", "live" => true, "old" => true}]},
                {["messagesByType"], [%{"type" => "backgammon/*", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "chess/*", "live" => true, "old" => true}]}
+               {["messagesByType"], [%{"type" => "chess/*", "live" => true, "old" => true}]},
+               {["messagesByType"], [%{"type" => "chess_invite", "live" => true, "old" => true}]},
+               {["messagesByType"],
+                [%{"type" => "chess_invite_accept", "live" => true, "old" => true}]},
+               {["messagesByType"], [%{"type" => "chess_move", "live" => true, "old" => true}]},
+               {["messagesByType"],
+                [%{"type" => "chess_game_end", "live" => true, "old" => true}]}
              ]
 
       # the shared connection carries only the per-feed windows

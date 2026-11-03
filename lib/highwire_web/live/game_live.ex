@@ -21,6 +21,7 @@ defmodule HighWireWeb.GameLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(HighWire.PubSub, Store.topic())
       Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Store.topic())
+      Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Legacy.Store.topic())
     end
 
     game = load(game_id)
@@ -45,6 +46,10 @@ defmodule HighWireWeb.GameLive do
     |> assign(:movable, movable(game, socket.assigns.self_id))
     |> assign(:promos, [])
   end
+
+  # Only a game this node writes can be played here. A game read from the
+  # network's own format belongs to its players and has no writer.
+  defp movable(%{writable?: false}, _self_id), do: []
 
   defp movable(%{kind: :chess, status: :playing, mover: mover, position: position}, self_id)
        when is_binary(self_id) and mover == self_id and is_map(position) do
@@ -110,6 +115,10 @@ defmodule HighWireWeb.GameLive do
     {:noreply, assign_board(socket, load(game_id))}
   end
 
+  def handle_info({:chess_legacy, game_id}, %{assigns: %{game_id: game_id}} = socket) do
+    {:noreply, assign_board(socket, load(game_id))}
+  end
+
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp moves_from(game, square) do
@@ -146,10 +155,7 @@ defmodule HighWireWeb.GameLive do
   # The id shape is the same for both games, so the kind is what the store
   # finds rather than what the URL claims.
   defp load(game_id) do
-    case Chess.Store.get(game_id) do
-      nil -> Store.get(game_id)
-      chess -> chess
-    end
+    Chess.Store.get(game_id) || Chess.Legacy.Store.get(game_id) || Store.get(game_id)
   end
 
   defp self_id do

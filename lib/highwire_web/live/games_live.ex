@@ -23,6 +23,7 @@ defmodule HighWireWeb.GamesLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(HighWire.PubSub, Store.topic())
       Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Store.topic())
+      Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Legacy.Store.topic())
     end
 
     self_id = self_id()
@@ -84,7 +85,7 @@ defmodule HighWireWeb.GamesLive do
   defp refresh(games, game_id, self_id) do
     rest = Enum.reject(games, &(&1.game_id == game_id))
 
-    case Chess.Store.get(game_id) || Store.get(game_id) do
+    case Chess.Store.get(game_id) || Chess.Legacy.Store.get(game_id) || Store.get(game_id) do
       nil -> rest
       game -> sort([put_live_status(game, self_id) | rest])
     end
@@ -95,7 +96,7 @@ defmodule HighWireWeb.GamesLive do
   end
 
   defp games(self_id) do
-    (Store.games() ++ Chess.Store.games())
+    (Store.games() ++ Chess.Store.games() ++ Chess.Legacy.Store.games())
     |> Enum.map(&put_live_status(&1, self_id))
     |> sort()
   end
@@ -224,7 +225,7 @@ defmodule HighWireWeb.GamesLive do
         <span :if={@game.last_note not in [nil, ""]} class="truncate italic">{@game.last_note}</span>
 
         <span
-          :if={@game.accepter == nil and @game.kind == :chess}
+          :if={@game.accepter == nil and @game.kind == :chess and Map.get(@game, :writable?, true)}
           class="flex shrink-0 items-center gap-2"
         >
           <span>{phase_label(@game)}</span>
