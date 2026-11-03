@@ -756,6 +756,21 @@ defmodule HighWire.TimelineTest do
           "root" => "%g3.sha256",
           "ply" => 1
         }),
+        msg("@alice", "%g5.sha256", then + 1_800, %{
+          "type" => "chess_invite",
+          "inviting" => "@bob",
+          "myColor" => "white",
+          "gameId" => "abcdef"
+        }),
+        msg("@alice", "%g6.sha256", then + 1_900, %{
+          "type" => "chess_move",
+          "root" => "%g5.sha256",
+          "gameId" => "abcdef",
+          "ply" => 1,
+          "orig" => "e2",
+          "dest" => "e4",
+          "fen" => "start"
+        }),
         post("@alice", "%p1.sha256", then + 2_000)
       ]
 
@@ -764,7 +779,9 @@ defmodule HighWire.TimelineTest do
       # A move carries `root` at the challenge, so left in it would thread a
       # board under the invitation; a challenge alone would collapse into a
       # "sent a … message" run. Neither belongs in the social timeline — the
-      # gameroom reads them from the store.
+      # gameroom reads them from the store. The chess the network already
+      # carries is filed by the same drain in the older format, and is no
+      # more a timeline row than this node's own.
       assert Enum.map(rows, & &1.kind) == [:thread]
       assert hd(rows).msg["key"] == "%p1.sha256"
     end

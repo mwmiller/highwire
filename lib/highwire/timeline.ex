@@ -3922,9 +3922,11 @@ defmodule HighWire.Timeline do
     # Games own their rows. A move is not a post, and a game's messages are
     # threaded on the challenge key, so leaving them in would either thread a
     # board under a challenge or collapse a session into "sent a … message".
-    # The gameroom reads them from the store instead.
-    acc = Enum.reject(acc, &HighWire.Backgammon.Game.message?(content(&1)))
-    acc = Enum.reject(acc, &HighWire.Chess.Game.message?(content(&1)))
+    # The gameroom reads them from the store instead — including the chess
+    # the network already carries in its older format, which the legacy
+    # drain files the same way and which used to leave a bare row here for
+    # every move, in a feed it no longer belongs to.
+    acc = Enum.reject(acc, &game_message?/1)
 
     by_key = Map.new(acc, fn msg -> {msg["key"], msg} end)
     # An edit revises the post named by revisionRoot/revisionBranch/root.
@@ -4321,6 +4323,16 @@ defmodule HighWire.Timeline do
       rooted: true,
       mentioned?: mentions_self?(msg, self_id)
     )
+  end
+
+  # Every message a game's store files, in either of the formats this node
+  # reads: none of them is a timeline row.
+  defp game_message?(msg) do
+    content = content(msg)
+
+    HighWire.Backgammon.Game.message?(content) or
+      HighWire.Chess.Game.message?(content) or
+      HighWire.Chess.Legacy.message?(content)
   end
 
   # A type with no sentence of its own is opaque to the reader, so its
