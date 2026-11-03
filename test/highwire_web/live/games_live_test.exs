@@ -5,6 +5,7 @@ defmodule HighWireWeb.GamesLiveTest do
 
   alias HighWire.Backgammon.{Chain, Game, Store}
   alias HighWire.Chess
+  alias HighWire.Games.Catalog
 
   setup do
     Store.clear()
@@ -151,6 +152,20 @@ defmodule HighWireWeb.GamesLiveTest do
 
     html = view |> element("button[phx-value-to='1']") |> render_click()
     assert html =~ "Showing the position after move 1 of 2"
+  end
+
+  test "a game can be walked to the next one without going back to the room", %{conn: conn} do
+    first = seed_chess()
+    second = seed_chess_unaccepted()
+
+    # The room's order is the catalog's, so open the newest and expect the
+    # other to be one step away from it.
+    [newest | _] = Catalog.recent(10) |> Enum.map(fn {_kind, id} -> id end)
+    other = Enum.find([first, second], &(&1 != newest))
+
+    {:ok, _view, html} = live(conn, "/games/#{newest}")
+
+    assert html =~ "/games/#{other}"
   end
 
   test "one game opens on its own board", %{conn: conn} do

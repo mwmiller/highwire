@@ -13,6 +13,7 @@ defmodule HighWireWeb.GameLive do
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
   alias HighWire.Chess.Engine
+  alias HighWire.Games.Catalog
   alias HighWire.SSB.{Identities, Profile}
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav}
 
@@ -24,15 +25,44 @@ defmodule HighWireWeb.GameLive do
       Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Legacy.Store.topic())
     end
 
-    game = load(game_id)
-
     {:ok,
      socket
      |> assign(:page_title, "Game")
-     |> assign(:game_id, game_id)
      |> assign(:self_id, self_id())
      |> assign(:error, nil)
-     |> assign_board(game)}
+     |> open(game_id)}
+  end
+
+  # Walking from one game to the next is a patch, not a reload: the socket
+  # stays, the subscriptions stay, and only what the page shows changes.
+  @impl true
+  def handle_params(%{"game_id" => game_id}, _uri, socket) do
+    {:noreply, open(socket, game_id)}
+  end
+
+  defp open(socket, game_id) do
+    game = load(game_id)
+    {previous, following} = neighbours(game_id)
+
+    socket
+    |> assign(:game_id, game_id)
+    |> assign(:previous, previous)
+    |> assign(:following, following)
+    |> assign_board(game)
+  end
+
+  # The room's own order, so browsing from a game goes where the room would
+  # have gone. A game the catalog has forgotten has no neighbours rather
+  # than invented ones.
+  defp neighbours(game_id) do
+    ids =
+      Catalog.recent(400)
+      |> Enum.map(fn {_kind, id} -> id end)
+
+    case Enum.find_index(ids, &(&1 == game_id)) do
+      nil -> {nil, nil}
+      at -> {if(at > 0, do: Enum.at(ids, at - 1)), Enum.at(ids, at + 1)}
+    end
   end
 
   # The board's own state: which square is picked up and where that piece
@@ -393,6 +423,8 @@ defmodule HighWireWeb.GameLive do
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-4xl px-6 py-6">
+          <.walk previous={@previous} following={@following} />
+
           <header class="mb-4">
             <div class="grid grid-cols-2 gap-2">
               <.side id={@game.white} color={:white} turn={@game.turn} />
@@ -493,7 +525,7 @@ defmodule HighWireWeb.GameLive do
                 </span>
               </div>
 
-              <div :if={@line != []} class="flex items-center gap-1">
+              <div :if={length(@line) > 1} class="flex items-center gap-1">
                 <button
                   :for={{to, glyph, title} <- steps()}
                   phx-click="replay"
@@ -557,6 +589,8 @@ defmodule HighWireWeb.GameLive do
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-6">
+          <.walk previous={@previous} following={@following} />
+
           <header class="mb-4">
             <div class="flex items-center gap-2">
               <Avatar.face :if={@game.challenger} id={@game.challenger} size={20} />
@@ -626,6 +660,33 @@ defmodule HighWireWeb.GameLive do
           </ol>
         </div>
       </main>
+    </div>
+    """
+  end
+
+  # Walking the games in the room's order. A game is part of a room full of
+  # them, and going back to the list to reach the next one is a detour that
+  # loses your place.
+  attr :previous, :string, default: nil
+  attr :following, :string, default: nil
+
+  defp walk(assigns) do
+    ~H"""
+    <div class="mb-3 flex items-center gap-3 text-[11px]">
+      <.link
+        :if={@previous}
+        navigate={~p"/games/#{@previous}"}
+        class="text-dim transition hover:text-paper"
+      >
+        ‹ previous game
+      </.link>
+      <.link
+        :if={@following}
+        navigate={~p"/games/#{@following}"}
+        class="text-dim transition hover:text-paper"
+      >
+        next game ›
+      </.link>
     </div>
     """
   end
