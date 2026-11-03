@@ -358,6 +358,8 @@ defmodule HighWireWeb.GamesLiveTest do
 
     refute html =~ "stops verifying"
     assert html =~ "2 / 2"
+    # The arrow keys push the same seek the buttons click, through a hook.
+    assert html =~ ~s(phx-hook="ReplayKeys")
 
     # The last position is the live one, so stepping into it leaves replay.
     html = view |> element("button[phx-value-to='1']") |> render_click()

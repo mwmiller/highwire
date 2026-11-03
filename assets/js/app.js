@@ -64,6 +64,34 @@ let FollowMoves = {
   }
 }
 
+// Reading a game back is a keyboard walk: the transport buttons are the same
+// seek, so the keys push the event they click. Keys are left alone while a
+// field has focus — the scrubber under the board is a range input, and the
+// browser moves it itself.
+let ReplayKeys = {
+  mounted() {
+    this.onKey = event => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return
+
+      const el = event.target
+      if (el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) {
+        return
+      }
+
+      const to = {ArrowLeft: "prev", ArrowRight: "next", Home: "first", End: "live"}[event.key]
+      if (!to) return
+
+      event.preventDefault()
+      this.pushEvent("replay", {to: to})
+    }
+
+    window.addEventListener("keydown", this.onKey)
+  },
+  destroyed() {
+    window.removeEventListener("keydown", this.onKey)
+  }
+}
+
 // Client-side preferences (Patchwork's settings page, packaged for the
 // browser). Every pref is one localStorage key applied to the document —
 // data-* attributes or inline styles on <html> — and the root-layout
@@ -1085,7 +1113,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
     FeedScroll,
     ClampRows,
     LandOn,
-    FollowMoves
+    FollowMoves,
+    ReplayKeys
   }
 })
 

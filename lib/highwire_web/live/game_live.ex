@@ -458,7 +458,11 @@ defmodule HighWireWeb.GameLive do
   # uses, so the board, the number and the list never disagree.
   defp transport(assigns) do
     ~H"""
-    <div class="mt-2 flex flex-wrap items-center gap-2 rounded border border-edge bg-panel px-2 py-1.5">
+    <div
+      id="transport"
+      phx-hook="ReplayKeys"
+      class="mt-2 flex flex-wrap items-center gap-2 rounded border border-edge bg-panel px-2 py-1.5"
+    >
       <div class="flex items-stretch overflow-hidden rounded border border-edge">
         <.step to="first" glyph="⏮" title="The position before the first move" off={@at == 0} />
         <.step to="prev" glyph="‹" title="The move before this one" off={@at == 0} />
