@@ -195,12 +195,14 @@ defmodule HighWireWeb.GamesLive do
 
   def handle_info(_other, socket), do: {:noreply, socket}
 
+  # A message names a game, not a store row, and the two do not have to arrive
+  # in step: a touch can be heard before the store it names can answer for the
+  # game. The card the room already has stays where it is in that case — a
+  # room whose rows blink out and back is a room that looks like it forgot.
   defp refresh(games, game_id, self_id) do
-    rest = Enum.reject(games, &(&1.game_id == game_id))
-
     case Chess.Store.get(game_id) || Chess.Legacy.Store.get(game_id) || Store.get(game_id) do
-      nil -> rest
-      game -> [put_live_status(game, self_id) | rest]
+      nil -> games
+      game -> [put_live_status(game, self_id) | Enum.reject(games, &(&1.game_id == game_id))]
     end
   end
 

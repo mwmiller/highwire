@@ -13,9 +13,11 @@ defmodule HighWire.Games.Catalog do
   a game stays in the list for as long as its store keeps it: what the room
   pages through is what this node holds, not a recent sample of it.
 
-  Reads come from ETS directly, because the pages ask constantly and the
-  answer is a handful of rows. The process owns the table and keeps the
-  sequence numbers; nothing else is stored here.
+  A touch moves a game to the front by deleting its old row and inserting a
+  new one, so the table is briefly missing that game. Reads therefore go
+  through the process that owns it rather than straight to the table: a
+  reader that landed in the gap would drop a game from the room and bring it
+  back a moment later, which reads as the node forgetting what it has.
   """
 
   use GenServer
@@ -47,24 +49,25 @@ defmodule HighWire.Games.Catalog do
   """
   @spec recent(pos_integer(), non_neg_integer()) :: [{atom(), binary()}]
   def recent(limit, offset \\ 0) when is_integer(limit) and limit > 0 do
-    table = :ets.whereis(@table)
-
-    if table == :undefined do
-      []
-    else
-      walk(:ets.last(table), table, limit, offset, 0, [])
-    end
-  rescue
-    ArgumentError -> []
+    call({:recent, limit, offset}, [])
   end
 
   @doc "How many games the room can page through."
   @spec count() :: non_neg_integer()
   def count do
-    case :ets.info(@table, :size) do
-      :undefined -> 0
-      size -> size
+    call(:count, 0)
+  end
+
+  # Answered by the process that owns the table, so a read cannot land between
+  # a touch's delete and its insert. With no process running there is nothing
+  # to read, and a caller gets the empty answer rather than an exit.
+  defp call(message, default) do
+    case Process.whereis(__MODULE__) do
+      nil -> default
+      pid -> GenServer.call(pid, message, 5_000)
     end
+  catch
+    :exit, _ -> default
   end
 
   @doc """
@@ -104,6 +107,12 @@ defmodule HighWire.Games.Catalog do
 
   @impl true
   def handle_call(:flush, _from, state), do: {:reply, :ok, state}
+
+  def handle_call({:recent, limit, offset}, _from, state) do
+    {:reply, walk(:ets.last(@table), @table, limit, offset, 0, []), state}
+  end
+
+  def handle_call(:count, _from, state), do: {:reply, map_size(state.index), state}
 
   def handle_call(:clear, _from, state) do
     :ets.delete_all_objects(@table)

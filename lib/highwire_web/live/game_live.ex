@@ -228,15 +228,15 @@ defmodule HighWireWeb.GameLive do
 
   @impl true
   def handle_info({:backgammon, game_id}, %{assigns: %{game_id: game_id}} = socket) do
-    {:noreply, assign(socket, :game, load(game_id))}
+    {:noreply, reload(socket, game_id)}
   end
 
   def handle_info({:chess, game_id}, %{assigns: %{game_id: game_id}} = socket) do
-    {:noreply, assign_board(socket, load(game_id), socket.assigns.at)}
+    {:noreply, reload(socket, game_id)}
   end
 
   def handle_info({:chess_legacy, game_id}, %{assigns: %{game_id: game_id}} = socket) do
-    {:noreply, assign_board(socket, load(game_id), socket.assigns.at)}
+    {:noreply, reload(socket, game_id)}
   end
 
   def handle_info(:tick, %{assigns: %{playing?: true}} = socket) do
@@ -255,6 +255,17 @@ defmodule HighWireWeb.GameLive do
   def handle_info(:tick, socket), do: {:noreply, socket}
 
   def handle_info(_other, socket), do: {:noreply, socket}
+
+  # Hearing a message about this game is not the same as the store being able
+  # to answer for it: a touch can arrive before the row it names. The page
+  # keeps the game it is showing until there is something to replace it with,
+  # so a reader watching a game being folded never sees it fall away.
+  defp reload(socket, game_id) do
+    case load(game_id) do
+      nil -> socket
+      game -> assign_board(socket, game, socket.assigns.at)
+    end
+  end
 
   defp moves_from(game, square) do
     for uci <- Engine.legal_moves(game.position),
@@ -564,7 +575,8 @@ defmodule HighWireWeb.GameLive do
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-10">
           <p class="text-sm text-dim">
-            No game with that id has reached this node.
+            No game with that id has reached this node yet. It opens as soon as its first
+            message does.
           </p>
           <.link navigate={~p"/games"} class="mt-4 inline-block text-xs text-accent hover:underline">
             Back to the gameroom

@@ -50,6 +50,32 @@ defmodule HighWire.Games.CatalogTest do
     end
   end
 
+  describe "reading while writing" do
+    # A touch is a delete and an insert. A reader that looks at the table
+    # between them sees the game missing, and a room re-reading on every
+    # message would blink that card out and back while the node catches up.
+    test "a game is never missing from a read while it is being moved" do
+      touch(:chess, "kept")
+      touch(:chess, "moving")
+
+      reader =
+        Task.async(fn ->
+          for _ <- 1..5_000 do
+            seen = Catalog.recent(10) |> Enum.map(&elem(&1, 1))
+
+            unless Enum.sort(seen) == ["kept", "moving"],
+              do: raise("a game fell out: #{inspect(seen)}")
+          end
+
+          :ok
+        end)
+
+      for _ <- 1..2_000, do: Catalog.touch(:chess, "moving")
+
+      assert Task.await(reader, 10_000) == :ok
+    end
+  end
+
   describe "paging" do
     test "a page is a slice of the order, and paging back continues it" do
       Enum.each(1..10, &touch(:chess, "g#{&1}"))
