@@ -42,14 +42,14 @@ defmodule HighWire.Backgammon.Log do
   def open(opts \\ []) do
     game_id = Keyword.get(opts, :game_id) || Game.new_id()
 
-    with {:ok, chain} <- chain(game_id, "challenger", opts),
-         content =
-           Game.challenge(game_id, Game.hex(Chain.commit(chain)),
-             to: opts[:to],
-             note: opts[:note]
-           ),
-         {:ok, key} <- publish_and_file(content, opts) do
-      {:ok, game_id, key}
+    with {:ok, chain} <- chain(game_id, "challenger", opts) do
+      content =
+        Game.challenge(game_id, Game.hex(Chain.commit(chain)),
+          to: opts[:to],
+          note: opts[:note]
+        )
+
+      with {:ok, key} <- publish_and_file(content, opts), do: {:ok, game_id, key}
     end
   end
 
@@ -60,15 +60,16 @@ defmodule HighWire.Backgammon.Log do
   @spec accept(map(), keyword()) :: {:ok, binary()} | {:error, term()}
   def accept(game, opts \\ []) do
     with :ok <- can_accept(game, me(opts)),
-         {:ok, chain} <- chain(game.game_id, "accepter", opts),
-         content =
-           Game.accept(
-             game.game_id,
-             game.challenge_key,
-             Game.hex(Chain.commit(chain)),
-             Game.hex(List.last(chain)),
-             note: opts[:note]
-           ) do
+         {:ok, chain} <- chain(game.game_id, "accepter", opts) do
+      content =
+        Game.accept(
+          game.game_id,
+          game.challenge_key,
+          Game.hex(Chain.commit(chain)),
+          Game.hex(List.last(chain)),
+          note: opts[:note]
+        )
+
       publish_and_file(content, opts)
     end
   end
@@ -85,17 +86,18 @@ defmodule HighWire.Backgammon.Log do
          :ok <- turn_of(game, me, :opening),
          {:ok, chain} <- chain(game.game_id, role(game, me), opts),
          {:ok, remaining} <- remaining(game, me),
-         {:ok, {r_cur, r_next}} <- reveal(chain, remaining),
-         content =
-           Game.roll(
-             game.game_id,
-             game.challenge_key,
-             opening_round(game),
-             Game.hex(r_cur),
-             Game.hex(r_next),
-             remaining,
-             note: opts[:note]
-           ) do
+         {:ok, {r_cur, r_next}} <- reveal(chain, remaining) do
+      content =
+        Game.roll(
+          game.game_id,
+          game.challenge_key,
+          opening_round(game),
+          Game.hex(r_cur),
+          Game.hex(r_next),
+          remaining,
+          note: opts[:note]
+        )
+
       publish_and_file(content, opts)
     end
   end
@@ -118,19 +120,20 @@ defmodule HighWire.Backgammon.Log do
          {:ok, {r_cur, r_next}} <- reveal(chain, remaining),
          {:ok, dice} <- dice(game, r_cur, me),
          {:ok, moves} <- parse(moves),
-         :ok <- legal?(game, dice, moves),
-         content =
-           Game.turn(
-             game.game_id,
-             game.challenge_key,
-             game.turn_count + 1,
-             Game.roll_string(elem(dice, 0), elem(dice, 1)),
-             Notation.turn(moves),
-             Game.hex(r_cur),
-             Game.hex(r_next),
-             remaining,
-             note: opts[:note]
-           ) do
+         :ok <- legal?(game, dice, moves) do
+      content =
+        Game.turn(
+          game.game_id,
+          game.challenge_key,
+          game.turn_count + 1,
+          Game.roll_string(elem(dice, 0), elem(dice, 1)),
+          Notation.turn(moves),
+          Game.hex(r_cur),
+          Game.hex(r_next),
+          remaining,
+          note: opts[:note]
+        )
+
       publish_and_file(content, opts)
     end
   end
@@ -139,9 +142,10 @@ defmodule HighWire.Backgammon.Log do
   @spec resign(map(), keyword()) :: {:ok, binary()} | {:error, term()}
   def resign(game, opts \\ []) do
     with {:ok, me} <- player(game, me(opts)),
-         :ok <- turn_of(game, me, :playing),
-         content =
-           Game.resign(game.game_id, game.challenge_key, game.turn_count + 1, note: opts[:note]) do
+         :ok <- turn_of(game, me, :playing) do
+      content =
+        Game.resign(game.game_id, game.challenge_key, game.turn_count + 1, note: opts[:note])
+
       publish_and_file(content, opts)
     end
   end
@@ -153,9 +157,8 @@ defmodule HighWire.Backgammon.Log do
 
     with {:ok, game} <- editable(game),
          {:ok, me} <- player(game, me),
-         :ok <- open_challenge(game, me),
-         content = Game.withdraw(game.game_id, game.challenge_key) do
-      publish_and_file(content, opts)
+         :ok <- open_challenge(game, me) do
+      publish_and_file(Game.withdraw(game.game_id, game.challenge_key), opts)
     end
   end
 

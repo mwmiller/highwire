@@ -1,7 +1,7 @@
 defmodule HighWire.Backgammon.LogTest do
   use ExUnit.Case, async: false
 
-  alias HighWire.Backgammon.{Chain, Engine, Game, Log, Store}
+  alias HighWire.Backgammon.{Chain, Engine, Game, Log, Notation, Store}
 
   @challenger "@challenger.ed25519"
   @accepter "@accepter.ed25519"
@@ -159,7 +159,7 @@ defmodule HighWire.Backgammon.LogTest do
       secret = if mover == @challenger, do: challenger_secret, else: accepter_secret
 
       assert {:ok, _key} =
-               Log.play(game, HighWire.Backgammon.Notation.turn(moves), as(mover, secret))
+               Log.play(game, Notation.turn(moves), as(mover, secret))
 
       assert Store.get(game_id).turn_count == 1
     end
