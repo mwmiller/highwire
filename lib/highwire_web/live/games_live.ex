@@ -16,7 +16,7 @@ defmodule HighWireWeb.GamesLive do
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
   alias HighWire.SSB.{Identities, Profile}
-  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav}
+  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Time}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -77,7 +77,7 @@ defmodule HighWireWeb.GamesLive do
     <div class="flex h-screen overflow-hidden bg-app text-ink">
       <Nav.rail>
         <h1 class="sr-only">Games</h1>
-        <div class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint">Games</div>
+        <Nav.rail_label>Games</Nav.rail_label>
         <p class="px-4 pb-4 text-xs leading-relaxed text-dim">
           Backgammon and chess games this node has seen. A game appears once its challenge reaches you.
         </p>
@@ -131,10 +131,14 @@ defmodule HighWireWeb.GamesLive do
       <Board.board :if={@game.kind == :backgammon} position={@game.position} compact />
       <ChessBoard.board :if={@game.kind == :chess} board={@game.board} compact />
 
-      <div class="mt-2 flex items-center justify-between text-[10px] text-faint">
-        <span>{counter(@game)}</span>
+      <div class="mt-2 flex items-center justify-between gap-2 text-[10px] text-faint">
+        <span class="flex shrink-0 items-center gap-1">
+          {counter(@game)}
+          <span class="text-faint">·</span>
+          <Time.age ts={@game.updated_at} />
+        </span>
         <span :if={@game.last_note not in [nil, ""]} class="truncate italic">{@game.last_note}</span>
-        <span>{phase_label(@game)}</span>
+        <span class="shrink-0">{phase_label(@game)}</span>
       </div>
     </.link>
     """

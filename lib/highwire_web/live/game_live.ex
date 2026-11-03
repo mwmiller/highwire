@@ -65,7 +65,7 @@ defmodule HighWireWeb.GameLive do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
       <Nav.rail>
-        <div class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint">Games</div>
+        <Nav.rail_label>Games</Nav.rail_label>
         <Nav.rail_link navigate={~p"/games"}>Gameroom</Nav.rail_link>
       </Nav.rail>
 
@@ -87,7 +87,7 @@ defmodule HighWireWeb.GameLive do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
       <Nav.rail>
-        <div class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint">Games</div>
+        <Nav.rail_label>Games</Nav.rail_label>
         <Nav.rail_link navigate={~p"/games"}>Gameroom</Nav.rail_link>
       </Nav.rail>
 
@@ -156,7 +156,7 @@ defmodule HighWireWeb.GameLive do
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">
       <Nav.rail>
-        <div class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint">Games</div>
+        <Nav.rail_label>Games</Nav.rail_label>
         <Nav.rail_link navigate={~p"/games"}>Gameroom</Nav.rail_link>
       </Nav.rail>
 
