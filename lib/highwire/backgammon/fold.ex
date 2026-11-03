@@ -66,7 +66,9 @@ defmodule HighWire.Backgammon.Fold do
           winner: %{player: String.t(), stake: pos_integer(), type: stake_type()} | nil,
           phase: phase(),
           opener: %{starter: String.t(), dice: [integer()], rounds: non_neg_integer()} | nil,
+          opening_rolls: non_neg_integer(),
           opp_for_next: String.t() | nil,
+          halves: %{String.t() => String.t() | nil},
           remaining: %{String.t() => non_neg_integer()},
           last_note: String.t() | nil,
           history: [history_item()],
@@ -106,7 +108,9 @@ defmodule HighWire.Backgammon.Fold do
           winner: nil,
           phase: :opening,
           opener: nil,
+          opening_rolls: 0,
           opp_for_next: nil,
+          halves: %{},
           remaining: %{},
           last_note: "",
           history: [],
@@ -185,7 +189,13 @@ defmodule HighWire.Backgammon.Fold do
       winner: result_winner(final),
       phase: final.phase,
       opener: result_opener(final),
+      # How many opening rolls have landed, which is the only thing that says
+      # which round the next one belongs to: a tie leaves `opener` nil, and
+      # the round it expects is `div(rolls, 2)`. A writer that guessed from
+      # `opener` would keep naming round 0 and the fold would reject it.
+      opening_rolls: final.rolls_done,
       opp_for_next: final.opp_for_next,
+      halves: result_halves(final),
       remaining: final.remaining,
       last_note: final.last_note,
       history: final.history,
@@ -199,6 +209,14 @@ defmodule HighWire.Backgammon.Fold do
 
   defp result_mover(%{phase: :playing} = st), do: mover_for(st)
   defp result_mover(%{phase: :finished} = st), do: st.winner
+
+  # Each player's most recently published half, hex, for the writer that has
+  # to know the opponent's before it can publish its own: the next turn's
+  # dice are those two halves. It is also how a page shows the dice that are
+  # already determined for the player who is to move.
+  defp result_halves(%{halves: halves}) do
+    Map.new(halves, fn {player, value} -> {player, value && Game.hex(value)} end)
+  end
 
   defp result_winner(%{winner: nil}), do: nil
 
@@ -447,6 +465,7 @@ defmodule HighWire.Backgammon.Fold do
               %{
                 turn: turn,
                 player: author,
+                type: "turn",
                 roll: Map.get(entry, "roll"),
                 moves: Map.get(entry, "moves"),
                 frames: frames,

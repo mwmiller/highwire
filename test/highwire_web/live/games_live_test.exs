@@ -20,9 +20,10 @@ defmodule HighWireWeb.GamesLiveTest do
       {:ok, view, html} = live(conn, "/games")
 
       assert html =~ "No games yet"
-      assert html =~ "new chess game as"
+      assert html =~ "new game"
       assert html =~ ~s(phx-value-color="white")
       assert html =~ ~s(phx-value-color="black")
+      assert html =~ ~s(phx-value-kind="backgammon")
 
       # A challenge nobody has taken is a game to accept, not one to watch.
       challenge = seed_chess_unaccepted()
@@ -39,6 +40,21 @@ defmodule HighWireWeb.GamesLiveTest do
       assert html =~ "1. move"
       assert html =~ "turn 0"
       refute html =~ "No games yet"
+    end
+
+    # A backgammon challenge is a game to take, exactly as a chess one is:
+    # the card offers the answer whichever namespace the challenge is in.
+    test "offers to accept an open backgammon challenge", %{conn: conn} do
+      game_id = seed_unaccepted()
+
+      {:ok, view, _html} = live(conn, "/games")
+
+      assert view
+             |> element(
+               "button[phx-value-id='#{game_id}'][phx-value-kind='backgammon']",
+               "accept"
+             )
+             |> has_element?()
     end
 
     test "puts the game most worth watching first", %{conn: conn} do
@@ -363,6 +379,22 @@ defmodule HighWireWeb.GamesLiveTest do
         do: Application.put_env(:highwire, :game_publisher, previous),
         else: Application.delete_env(:highwire, :game_publisher)
     end)
+  end
+
+  defp seed_unaccepted do
+    spec = %{"length" => 8}
+    game_id = Game.new_id()
+    chall = Chain.generate(:crypto.strong_rand_bytes(32), spec)
+
+    Store.ingest(
+      envelope(
+        "@challenger.ed25519",
+        Game.challenge(game_id, hex(Chain.commit(chall))),
+        "%challenge.sha256"
+      )
+    )
+
+    game_id
   end
 
   defp seed_chess_unaccepted do

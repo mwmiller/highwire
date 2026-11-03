@@ -84,6 +84,22 @@ defmodule HighWire.SSB.Identities do
     end
   end
 
+  @doc """
+  The running identity's secret key material, or nil when there is none.
+
+  One caller wants it: a backgammon game derives each player's reveal
+  chain from this secret, the game id and their role, which is what lets a
+  game carry on from a device that never held the chain. Nothing else in
+  the app reads it — the engine signs the messages.
+  """
+  @spec secret() :: binary() | nil
+  def secret do
+    case secret_keys() do
+      %{secret: secret} when is_binary(secret) -> secret
+      _ -> nil
+    end
+  end
+
   @doc "The active identity's public metadata, or nil when there is none."
   @spec active() :: map() | nil
   def active do

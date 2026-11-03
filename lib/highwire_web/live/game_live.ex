@@ -10,6 +10,7 @@ defmodule HighWireWeb.GameLive do
 
   use HighWireWeb, :live_view
 
+  alias HighWire.Backgammon
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
   alias HighWire.Chess.Engine
@@ -93,6 +94,66 @@ defmodule HighWireWeb.GameLive do
     |> assign(:pairs, pairs((game && game.history) || []))
     |> assign(:at, at)
     |> assign(:playing?, Map.get(socket.assigns, :playing?, false) and at != nil)
+    |> assign_turn(game, socket.assigns.self_id)
+  end
+
+  # A backgammon turn is assembled before it is published. The dice are
+  # already fixed — the mover's next reveal and the opponent's last one are
+  # both known — so the page can put them on the table and let the player
+  # choose the play that the fold will then check against them.
+  defp assign_turn(socket, %{kind: :backgammon, phase: :playing, mover: me} = game, self_id)
+       when is_binary(me) do
+    if me == self_id do
+      case Backgammon.Log.next_dice(game, me) do
+        {:ok, dice} ->
+          dies = Backgammon.Engine.roll_dies(dice)
+
+          assign(socket,
+            dice: dice,
+            dies: dies,
+            die_left: dies,
+            working: game.position,
+            points: [],
+            movable: sources(game.position, dies)
+          )
+
+        {:error, _} ->
+          blank_turn(socket)
+      end
+    else
+      blank_turn(socket)
+    end
+  end
+
+  defp assign_turn(socket, _game, _self_id), do: blank_turn(socket)
+
+  defp blank_turn(socket) do
+    assign(socket, dice: nil, dies: [], die_left: [], working: nil, points: [], movable: [])
+  end
+
+  # The points holding a checker that has somewhere to go on one of the dice
+  # still in hand. A source with no move is not offered, so every click leads
+  # somewhere.
+  defp sources(board, dice) do
+    dice
+    |> Enum.flat_map(&Backgammon.Engine.moves_for(board, &1))
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.uniq()
+  end
+
+  defp targets(board, dice, point) do
+    dice
+    |> Enum.flat_map(&Backgammon.Engine.moves_for(board, &1))
+    |> Enum.filter(&(elem(&1, 0) == point))
+    |> Enum.map(&elem(&1, 1))
+    |> Enum.uniq()
+  end
+
+  defp step(board, dice, from, to) do
+    case Enum.find(dice, fn die -> {from, to} in Backgammon.Engine.moves_for(board, die) end) do
+      nil -> :error
+      die -> {:ok, Backgammon.Engine.apply_move(board, {from, to}), List.delete(dice, die)}
+    end
   end
 
   # Only a game this node writes can be played here. A game read from the
@@ -180,7 +241,7 @@ defmodule HighWireWeb.GameLive do
   end
 
   def handle_event("resign", _params, socket) do
-    case Chess.Log.resign(socket.assigns.game) do
+    case resign(socket.assigns.game) do
       {:ok, _key} ->
         {:noreply, assign_board(socket, load(socket.assigns.game_id))}
 
@@ -188,6 +249,98 @@ defmodule HighWireWeb.GameLive do
         {:noreply, assign(socket, :error, "Could not resign: #{inspect(reason)}")}
     end
   end
+
+  # The opening roll, and the turn it decides: both are one publish each.
+  def handle_event("roll", _params, %{assigns: %{game: %{kind: :backgammon}}} = socket) do
+    case Backgammon.Log.roll(socket.assigns.game) do
+      {:ok, _key} ->
+        {:noreply, assign_board(socket, load(socket.assigns.game_id))}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :error, "That roll did not go out: #{inspect(reason)}")}
+    end
+  end
+
+  # Picking a checker up, then putting it down: the second click is what
+  # moves it, and the play is published once the whole roll is on the board.
+  def handle_event("point", %{"p" => raw}, %{assigns: %{game: %{kind: :backgammon}}} = socket) do
+    point = decode_point(raw)
+
+    case socket.assigns do
+      %{working: nil} ->
+        {:noreply, socket}
+
+      %{selected: nil} = assigns ->
+        if point in assigns.movable do
+          {:noreply,
+           assign(socket,
+             selected: point,
+             targets: targets(assigns.working, assigns.die_left, point)
+           )}
+        else
+          {:noreply, socket}
+        end
+
+      %{selected: ^point} ->
+        {:noreply, assign(socket, selected: nil, targets: [])}
+
+      %{selected: from, working: working, die_left: dice, points: played} = _assigns ->
+        case step(working, dice, from, point) do
+          {:ok, next, rest} ->
+            {:noreply,
+             assign(socket,
+               working: next,
+               die_left: rest,
+               points: played ++ [{from, point}],
+               selected: nil,
+               targets: [],
+               movable: sources(next, rest)
+             )}
+
+          :error ->
+            {:noreply, assign(socket, selected: nil, targets: [])}
+        end
+    end
+  end
+
+  def handle_event("play_turn", _params, %{assigns: %{game: %{kind: :backgammon}}} = socket) do
+    %{game: game, points: points} = socket.assigns
+
+    case Backgammon.Log.play(game, points) do
+      {:ok, _key} ->
+        {:noreply, assign_board(socket, load(game.game_id))}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :error, "That turn did not go out: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("clear_turn", _params, %{assigns: %{game: %{kind: :backgammon}}} = socket) do
+    assigns = socket.assigns
+
+    {:noreply,
+     assign(socket,
+       working: assigns.game.position,
+       die_left: assigns.dies,
+       points: [],
+       selected: nil,
+       targets: [],
+       movable: sources(assigns.game.position, assigns.dies)
+     )}
+  end
+
+  defp decode_point("bar"), do: :bar
+  defp decode_point("off"), do: :off
+
+  defp decode_point(raw) do
+    case Integer.parse(raw) do
+      {n, ""} -> n
+      _ -> nil
+    end
+  end
+
+  defp resign(%{kind: :backgammon} = game), do: Backgammon.Log.resign(game)
+  defp resign(game), do: Chess.Log.resign(game)
 
   defp seek(socket, to) do
     %{line: line, at: at} = socket.assigns
@@ -834,7 +987,86 @@ defmodule HighWireWeb.GameLive do
             This game does not verify: {@game.error}
           </p>
 
-          <Board.board position={@game.position} />
+          <div
+            :if={@game.mover == @self_id and @game.status in [:opening, :playing]}
+            class="mb-3 flex flex-wrap items-center gap-2 rounded border border-edge bg-panel px-3 py-2 text-xs"
+          >
+            <span :if={@game.phase == :opening and @game.accepter == nil} class="text-dim">
+              Waiting for an opponent to accept before the opening roll.
+            </span>
+
+            <span
+              :if={@game.phase == :opening and @game.accepter != nil}
+              class="text-[10px] uppercase tracking-wide text-faint"
+            >
+              opening roll · the higher die starts
+            </span>
+
+            <button
+              :if={@game.phase == :opening and @game.accepter != nil}
+              phx-click="roll"
+              class="rounded border border-edge px-2 py-1 text-muted transition hover:border-focus hover:text-paper"
+            >
+              roll the dice
+            </button>
+
+            <span :if={@game.phase == :playing and @die_left != []} class="flex items-center gap-1.5">
+              <span class="text-[10px] uppercase tracking-wide text-faint">dice</span>
+              <span
+                :for={die <- @die_left}
+                class="grid size-5 place-items-center rounded bg-raised font-mono text-[11px] text-paper"
+              >
+                {die}
+              </span>
+            </span>
+
+            <span :if={@points != []} class="font-mono text-[11px] text-dim">
+              {Backgammon.Notation.turn(@points)}
+            </span>
+
+            <span
+              :if={
+                @game.phase == :playing and @die_left == [] and not turn_ready?(@game, @dice, @points)
+              }
+              class="text-[11px] text-faint"
+            >
+              every die is played — clear to try another line
+            </span>
+
+            <span class="ml-auto flex items-center gap-2">
+              <button
+                :if={@points != []}
+                phx-click="clear_turn"
+                class="rounded border border-edge px-2 py-1 text-faint transition hover:border-focus hover:text-paper"
+              >
+                clear
+              </button>
+
+              <button
+                :if={turn_ready?(@game, @dice, @points)}
+                phx-click="play_turn"
+                class="rounded border border-accent/40 px-2 py-1 text-accent transition hover:bg-accent/15"
+              >
+                play the turn
+              </button>
+
+              <button
+                :if={@game.phase == :playing}
+                phx-click="resign"
+                class="rounded border border-edge px-2 py-1 text-faint transition hover:border-focus hover:text-bad"
+              >
+                resign
+              </button>
+            </span>
+          </div>
+
+          <Board.board
+            position={@working || @game.position}
+            playable={@working != nil and @die_left != []}
+            movable={if @working != nil, do: @movable, else: []}
+            selected={@selected}
+            targets={@targets}
+          />
 
           <dl class="mt-3 grid grid-cols-3 gap-2 text-[11px] text-faint">
             <div>
@@ -982,11 +1214,22 @@ defmodule HighWireWeb.GameLive do
   defp turn_line(%{status: :withdrawn}, _self), do: "Withdrawn by the challenger"
   defp turn_line(%{status: :broken}, _self), do: "The fold stopped on an entry it cannot verify"
 
-  defp turn_line(%{mover: mover, self_id: _}, self) when mover == self,
-    do: "Your move"
+  defp turn_line(%{mover: mover}, self) when mover == self, do: "Your move"
 
   defp turn_line(%{mover: mover}, _self) when is_binary(mover), do: name(mover) <> " to move"
   defp turn_line(_game, _self), do: "Waiting for an opponent"
+
+  # A turn goes out only when the whole roll is spent legally: the fold will
+  # refuse anything less, so the button that would publish it stays off.
+  defp turn_ready?(%{position: position}, dice, points)
+       when is_tuple(dice) and is_list(points) and points != [] do
+    case position do
+      %Backgammon.Engine{} -> Backgammon.Engine.legal_play?(position, dice, points)
+      _ -> false
+    end
+  end
+
+  defp turn_ready?(_game, _dice, _points), do: false
 
   defp reveals(game, player) do
     case game.remaining do

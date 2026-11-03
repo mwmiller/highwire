@@ -137,9 +137,20 @@ defmodule HighWireWeb.GamesLive do
     end
   end
 
-  def handle_event("accept", %{"id" => id}, socket) do
-    with %{} = game <- Chess.Store.get(id),
-         {:ok, _key} <- HighWire.Chess.Log.accept(game) do
+  # Backgammon has no side to choose: the opening roll decides who starts.
+  def handle_event("new", %{"kind" => "backgammon"}, socket) do
+    case HighWire.Backgammon.Log.open() do
+      {:ok, game_id, _key} ->
+        {:noreply, push_navigate(socket, to: ~p"/games/#{game_id}")}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :error, "Could not open a backgammon game: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("accept", %{"id" => id} = params, socket) do
+    with {:ok, game} <- find(params, id),
+         {:ok, _key} <- accept(game) do
       {:noreply, assign_games(socket, page(socket.assigns.self_id, socket.assigns.page))}
     else
       _ -> {:noreply, assign(socket, :error, "Could not accept that game.")}
@@ -175,14 +186,32 @@ defmodule HighWireWeb.GamesLive do
      |> then(&assign(&1, :sections, sections(&1.assigns)))}
   end
 
-  def handle_event("withdraw", %{"id" => id}, socket) do
-    with %{} = game <- Chess.Store.get(id),
-         {:ok, _key} <- HighWire.Chess.Log.withdraw(game) do
+  def handle_event("withdraw", %{"id" => id} = params, socket) do
+    with {:ok, game} <- find(params, id),
+         {:ok, _key} <- withdraw(game) do
       {:noreply, assign_games(socket, page(socket.assigns.self_id, socket.assigns.page))}
     else
       _ -> {:noreply, assign(socket, :error, "Could not withdraw that game.")}
     end
   end
+
+  # The card says which store its game came from, so a game this node can
+  # write is written through the writer that owns its namespace.
+  defp find(params, id) do
+    case Map.get(params, "kind") do
+      "backgammon" -> wrap(Store.get(id))
+      _ -> wrap(Chess.Store.get(id))
+    end
+  end
+
+  defp wrap(nil), do: :error
+  defp wrap(game), do: {:ok, game}
+
+  defp accept(%{kind: :backgammon} = game), do: HighWire.Backgammon.Log.accept(game)
+  defp accept(game), do: HighWire.Chess.Log.accept(game)
+
+  defp withdraw(%{kind: :backgammon} = game), do: HighWire.Backgammon.Log.withdraw(game)
+  defp withdraw(game), do: HighWire.Chess.Log.withdraw(game)
 
   # A message names one game, so one game is re-read: the room keeps the
   # rest of its rows rather than folding every board in the store again on
@@ -537,21 +566,28 @@ defmodule HighWireWeb.GamesLive do
               <span class="text-xs text-faint">
                 {if @total > 0, do: "#{length(@games)} of #{@total} games", else: "0 games"}
               </span>
-              <span class="text-[10px] uppercase tracking-wide text-faint">new chess game as</span>
+              <span class="text-[10px] uppercase tracking-wide text-faint">new game</span>
 
               <button
                 phx-click="new"
                 phx-value-color="white"
                 class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper"
               >
-                white
+                chess as white
               </button>
               <button
                 phx-click="new"
                 phx-value-color="black"
                 class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper"
               >
-                black
+                chess as black
+              </button>
+              <button
+                phx-click="new"
+                phx-value-kind="backgammon"
+                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper"
+              >
+                backgammon
               </button>
             </div>
           </header>
@@ -648,7 +684,7 @@ defmodule HighWireWeb.GamesLive do
         <span :if={@game.last_note not in [nil, ""]} class="truncate italic">{@game.last_note}</span>
 
         <span
-          :if={@game.accepter == nil and @game.kind == :chess and Map.get(@game, :writable?, true)}
+          :if={@game.accepter == nil and Map.get(@game, :writable?, true)}
           class="flex shrink-0 items-center gap-2"
         >
           <span>{phase_label(@game)}</span>
@@ -656,6 +692,7 @@ defmodule HighWireWeb.GamesLive do
             :if={@game.challenger != @self_id}
             phx-click="accept"
             phx-value-id={@game.game_id}
+            phx-value-kind={@game.kind}
             class="rounded border border-edge px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted transition hover:border-focus hover:text-paper"
           >
             accept
@@ -664,13 +701,14 @@ defmodule HighWireWeb.GamesLive do
             :if={@game.challenger == @self_id}
             phx-click="withdraw"
             phx-value-id={@game.game_id}
+            phx-value-kind={@game.kind}
             class="rounded border border-edge px-2 py-0.5 text-[10px] uppercase tracking-wide text-faint transition hover:border-focus hover:text-paper"
           >
             withdraw
           </button>
         </span>
 
-        <span :if={@game.accepter != nil or @game.kind != :chess} class="shrink-0">
+        <span :if={@game.accepter != nil} class="shrink-0">
           {label(@game)}
         </span>
       </div>
