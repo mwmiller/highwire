@@ -34,6 +34,11 @@ defmodule HighWireWeb.Components.ChessBoard do
   attr :board, :map, required: true, doc: "the fold's board: square => {type, colour}"
   attr :compact, :boolean, default: false
 
+  attr :movable, :list, default: [], doc: "squares whose pieces can be picked up"
+  attr :targets, :list, default: [], doc: "squares the picked-up piece can reach"
+  attr :selected, :string, default: nil
+  attr :playable, :boolean, default: false
+
   def board(assigns) do
     squares =
       for rank <- @ranks, file <- @files do
@@ -49,30 +54,58 @@ defmodule HighWireWeb.Components.ChessBoard do
     <div class="rounded border border-edge bg-panel p-1.5">
       <div class="grid grid-cols-8">
         <.square
-          :for={{_square, piece, light?} <- @squares}
+          :for={{square, piece, light?} <- @squares}
+          square={square}
           piece={piece}
           light?={light?}
           compact={@compact}
+          selected={@selected == square}
+          movable={square in @movable}
+          target={square in @targets}
+          playable={@playable}
         />
       </div>
     </div>
     """
   end
 
+  attr :square, :string, required: true
   attr :piece, :any, default: nil
   attr :light?, :boolean, required: true
   attr :compact, :boolean, default: false
+  attr :selected, :boolean, default: false
+  attr :movable, :boolean, default: false
+  attr :target, :boolean, default: false
+  attr :playable, :boolean, default: false
 
   defp square(assigns) do
     ~H"""
-    <div class={[
-      "flex aspect-square items-center justify-center leading-none",
-      @light? && "bg-raised",
-      !@light? && "bg-panel",
-      @compact && "text-[11px]",
-      !@compact && "text-2xl"
-    ]}>
+    <div
+      phx-click={@playable && "square"}
+      phx-value-sq={@square}
+      class={[
+        "relative flex aspect-square items-center justify-center leading-none",
+        @playable && "cursor-pointer",
+        @light? && "bg-raised",
+        !@light? && "bg-panel",
+        @selected && "ring-2 ring-inset ring-focus",
+        @compact && "text-[11px]",
+        !@compact && "text-2xl",
+        @movable && !@selected && "hover:ring-1 hover:ring-inset hover:ring-focus"
+      ]}
+    >
       <span :if={@piece}>{glyph(@piece)}</span>
+
+      <%!-- A reachable square says so under the piece as well as on an
+           empty one, so a capture reads as a move and not as a colour. --%>
+      <span
+        :if={@target && @piece == nil}
+        class="absolute h-2 w-2 rounded-full bg-accent opacity-70"
+      />
+      <span
+        :if={@target && @piece != nil}
+        class="absolute inset-0 rounded-sm ring-2 ring-inset ring-accent"
+      />
     </div>
     """
   end

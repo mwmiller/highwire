@@ -43,6 +43,7 @@ defmodule HighWire.Chess.Fold do
   @type winner :: %{player: String.t(), reason: atom()} | nil
 
   @type fold_result :: %{
+          position: Engine.t(),
           board: map(),
           turn: Engine.color(),
           check?: boolean(),
@@ -183,6 +184,9 @@ defmodule HighWire.Chess.Fold do
       end
 
     %{
+      # The whole position travels with the snapshot: the page that plays a
+      # move asks the same engine the fold used.
+      position: pos,
       board: pos.board,
       turn: pos.turn,
       check?: Engine.in_check?(pos),

@@ -12,6 +12,7 @@ defmodule HighWireWeb.GameLive do
 
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
+  alias HighWire.Chess.Engine
   alias HighWire.SSB.{Identities, Profile}
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav}
 
@@ -22,12 +23,82 @@ defmodule HighWireWeb.GameLive do
       Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Store.topic())
     end
 
+    game = load(game_id)
+
     {:ok,
      socket
      |> assign(:page_title, "Game")
      |> assign(:game_id, game_id)
      |> assign(:self_id, self_id())
-     |> assign(:game, load(game_id))}
+     |> assign(:error, nil)
+     |> assign_board(game)}
+  end
+
+  # The board's own state: which square is picked up and where that piece
+  # can go. Both are derived from the folded position, so the page can only
+  # offer moves the same engine the fold used would accept.
+  defp assign_board(socket, game) do
+    socket
+    |> assign(:game, game)
+    |> assign(:selected, nil)
+    |> assign(:targets, [])
+    |> assign(:movable, movable(game, socket.assigns.self_id))
+    |> assign(:promos, [])
+  end
+
+  defp movable(%{kind: :chess, status: :playing, mover: mover, position: position}, self_id)
+       when is_binary(self_id) and mover == self_id and is_map(position) do
+    position
+    |> Engine.legal_moves()
+    |> Enum.map(&binary_part(&1, 0, 2))
+    |> Enum.uniq()
+  end
+
+  defp movable(_game, _self_id), do: []
+
+  @impl true
+  def handle_event("square", %{"sq" => square}, socket) do
+    %{game: game, selected: selected} = socket.assigns
+
+    cond do
+      game == nil or game.kind != :chess ->
+        {:noreply, socket}
+
+      square == selected ->
+        {:noreply, assign(socket, selected: nil, targets: [], promos: [])}
+
+      square in socket.assigns.movable ->
+        moves = moves_from(game, square)
+
+        {:noreply,
+         assign(socket, selected: square, targets: Enum.map(moves, & &1.to), promos: [])}
+
+      selected != nil and square in socket.assigns.targets ->
+        play(game, Enum.filter(moves_from(game, selected), &(&1.to == square)), socket)
+
+      true ->
+        {:noreply, assign(socket, selected: nil, targets: [], promos: [])}
+    end
+  end
+
+  def handle_event("promote", %{"uci" => uci}, socket) do
+    case Chess.Log.play(socket.assigns.game, uci) do
+      {:ok, _key} ->
+        {:noreply, assign_board(socket, load(socket.assigns.game_id))}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :error, "That move did not go out: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("resign", _params, socket) do
+    case Chess.Log.resign(socket.assigns.game) do
+      {:ok, _key} ->
+        {:noreply, assign_board(socket, load(socket.assigns.game_id))}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :error, "Could not resign: #{inspect(reason)}")}
+    end
   end
 
   @impl true
@@ -36,10 +107,41 @@ defmodule HighWireWeb.GameLive do
   end
 
   def handle_info({:chess, game_id}, %{assigns: %{game_id: game_id}} = socket) do
-    {:noreply, assign(socket, :game, load(game_id))}
+    {:noreply, assign_board(socket, load(game_id))}
   end
 
   def handle_info(_other, socket), do: {:noreply, socket}
+
+  defp moves_from(game, square) do
+    for uci <- Engine.legal_moves(game.position),
+        binary_part(uci, 0, 2) == square,
+        do: %{
+          uci: uci,
+          to: binary_part(uci, 2, 2),
+          promo: binary_part(uci, 4, byte_size(uci) - 4)
+        }
+  end
+
+  # One destination, one move. A promotion offers four, so the page asks
+  # which piece rather than picking one for the player.
+  defp play(game, moves, socket) do
+    case moves do
+      [] ->
+        {:noreply, assign(socket, selected: nil, targets: [], promos: [])}
+
+      [move] ->
+        case Chess.Log.play(game, move.uci) do
+          {:ok, _key} ->
+            {:noreply, assign_board(socket, load(game.game_id))}
+
+          {:error, reason} ->
+            {:noreply, assign(socket, :error, "That move did not go out: #{inspect(reason)}")}
+        end
+
+      many ->
+        {:noreply, socket |> assign(selected: nil, targets: [], promos: many)}
+    end
+  end
 
   # The id shape is the same for both games, so the kind is what the store
   # finds rather than what the URL claims.
@@ -108,7 +210,49 @@ defmodule HighWireWeb.GameLive do
             This game does not verify: {@game.error}
           </p>
 
-          <ChessBoard.board board={@game.board} />
+          <p
+            :if={@error}
+            role="alert"
+            class="mb-3 rounded border border-edge bg-raised px-3 py-2 text-xs text-bad"
+          >
+            {@error}
+          </p>
+
+          <ChessBoard.board
+            board={@game.board}
+            playable={@movable != []}
+            movable={@movable}
+            selected={@selected}
+            targets={@targets}
+          />
+
+          <div
+            :if={@promos != []}
+            class="mt-2 flex items-center gap-2 rounded border border-edge bg-panel px-3 py-2"
+          >
+            <span class="text-[10px] uppercase tracking-wide text-faint">promote to</span>
+            <button
+              :for={move <- @promos}
+              phx-click="promote"
+              phx-value-uci={move.uci}
+              class="rounded border border-edge px-2 py-0.5 text-xs text-muted transition hover:border-focus hover:text-paper"
+            >
+              {piece_name(move.promo)}
+            </button>
+          </div>
+
+          <p :if={@selected != nil} class="mt-2 text-[11px] text-faint">
+            {@selected} picked up — click a marked square to play it.
+          </p>
+
+          <div :if={@movable != []} class="mt-2 flex justify-end">
+            <button
+              phx-click="resign"
+              class="rounded border border-edge px-2 py-1 text-xs text-faint transition hover:border-focus hover:text-bad"
+            >
+              resign
+            </button>
+          </div>
 
           <dl class="mt-3 grid grid-cols-3 gap-2 text-[11px] text-faint">
             <div>
@@ -246,6 +390,12 @@ defmodule HighWireWeb.GameLive do
     </div>
     """
   end
+
+  defp piece_name("q"), do: "queen"
+  defp piece_name("r"), do: "rook"
+  defp piece_name("b"), do: "bishop"
+  defp piece_name("n"), do: "knight"
+  defp piece_name(other), do: other
 
   defp chess_line(%{status: :finished} = game, _self), do: result_sentence(game)
   defp chess_line(%{status: :withdrawn}, _self), do: "Withdrawn by the challenger"

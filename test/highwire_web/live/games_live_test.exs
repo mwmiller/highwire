@@ -50,6 +50,38 @@ defmodule HighWireWeb.GamesLiveTest do
     game_id
   end
 
+  test "the room offers to open a game on either side", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/games")
+
+    assert html =~ "open as"
+    assert html =~ "phx-value-color=\"white\""
+    assert html =~ "phx-value-color=\"black\""
+  end
+
+  test "accepting a challenge publishes it and joins the game", %{conn: conn} do
+    game_id = seed_chess_unaccepted()
+    stub_publisher()
+
+    {:ok, view, _html} = live(conn, "/games")
+
+    view |> element("button[phx-value-id='#{game_id}']", "accept") |> render_click()
+
+    # The store folded the accept the stub filed, so the card moved on from
+    # waiting to the opening position with both players on it.
+    game = Chess.Store.get(game_id)
+    assert game.accepter == "@accepter.ed25519"
+    assert game.status == :playing
+  end
+
+  test "a board you cannot move in takes no clicks", %{conn: conn} do
+    game_id = seed_chess()
+
+    {:ok, _view, html} = live(conn, "/games/#{game_id}")
+
+    refute html =~ "phx-click=\"square\""
+    refute html =~ "resign"
+  end
+
   test "the gameroom starts empty", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/games")
 
@@ -75,6 +107,40 @@ defmodule HighWireWeb.GamesLiveTest do
     assert html =~ "History"
     assert html =~ "No turns played yet"
     assert html =~ "mover&#39;s view"
+  end
+
+  # A publisher standing in for the engine: it files what it was handed so
+  # the store can fold it, exactly as the tail would when the message comes
+  # back from the network.
+  defp stub_publisher do
+    previous = Application.get_env(:highwire, :game_publisher)
+
+    Application.put_env(:highwire, :game_publisher, fn content ->
+      key = "%stub-#{System.unique_integer([:positive])}.sha256"
+
+      Chess.Store.ingest(%{
+        "key" => key,
+        "value" => %{"author" => "@accepter.ed25519", "content" => content}
+      })
+
+      {:ok, key}
+    end)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:highwire, :game_publisher, previous),
+        else: Application.delete_env(:highwire, :game_publisher)
+    end)
+  end
+
+  defp seed_chess_unaccepted do
+    game_id = Chess.Game.new_id()
+
+    Chess.Store.ingest(
+      envelope("@challenger.ed25519", Chess.Game.challenge(game_id, "white"), "%e1.sha256")
+    )
+
+    game_id
   end
 
   defp seed_chess do

@@ -31,7 +31,43 @@ defmodule HighWireWeb.GamesLive do
      socket
      |> assign(:page_title, "Games")
      |> assign(:self_id, self_id)
+     |> assign(:error, nil)
      |> assign(:games, games(self_id))}
+  end
+
+  @impl true
+  def handle_event("open", %{"id" => id}, socket) do
+    {:noreply, push_navigate(socket, to: ~p"/games/#{id}")}
+  end
+
+  # Opening a game publishes the challenge from this identity, so the key
+  # that comes back is the thread root every later move answers to.
+  def handle_event("new", %{"color" => color}, socket) do
+    case HighWire.Chess.Log.open(color) do
+      {:ok, game_id, _key} ->
+        {:noreply, push_navigate(socket, to: ~p"/games/#{game_id}")}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :error, "Could not open a game: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("accept", %{"id" => id}, socket) do
+    with %{} = game <- Chess.Store.get(id),
+         {:ok, _key} <- HighWire.Chess.Log.accept(game) do
+      {:noreply, assign(socket, :games, games(socket.assigns.self_id))}
+    else
+      _ -> {:noreply, assign(socket, :error, "Could not accept that game.")}
+    end
+  end
+
+  def handle_event("withdraw", %{"id" => id}, socket) do
+    with %{} = game <- Chess.Store.get(id),
+         {:ok, _key} <- HighWire.Chess.Log.withdraw(game) do
+      {:noreply, assign(socket, :games, games(socket.assigns.self_id))}
+    else
+      _ -> {:noreply, assign(socket, :error, "Could not withdraw that game.")}
+    end
   end
 
   @impl true
@@ -86,14 +122,41 @@ defmodule HighWireWeb.GamesLive do
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-4xl px-6 py-6">
-          <header class="mb-5 flex items-baseline justify-between">
+          <header class="mb-5 flex items-baseline justify-between gap-3">
             <h2 class="text-lg font-semibold text-paper">Gameroom</h2>
-            <span class="text-xs text-faint">{length(@games)} game(s)</span>
+
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-faint">{length(@games)} game(s)</span>
+              <span class="text-[10px] uppercase tracking-wide text-faint">open as</span>
+
+              <button
+                phx-click="new"
+                phx-value-color="white"
+                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper"
+              >
+                white
+              </button>
+              <button
+                phx-click="new"
+                phx-value-color="black"
+                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper"
+              >
+                black
+              </button>
+            </div>
           </header>
 
+          <p
+            :if={@error}
+            role="alert"
+            class="mb-3 rounded border border-edge bg-raised px-3 py-2 text-xs text-bad"
+          >
+            {@error}
+          </p>
+
           <p :if={@games == []} class="rounded border border-edge bg-panel px-4 py-6 text-sm text-dim">
-            No games yet. When someone challenges you — or you open a game — it shows up here,
-            with the board as it stands.
+            No games yet. Open one above and it appears here at once; when someone challenges you,
+            their game lands here on the next move.
           </p>
 
           <div class="grid gap-3">
@@ -110,26 +173,34 @@ defmodule HighWireWeb.GamesLive do
 
   defp game_card(assigns) do
     ~H"""
-    <.link
-      navigate={~p"/games/#{@game.game_id}"}
-      class="block rounded border border-edge bg-panel p-3 transition hover:border-focus"
-    >
-      <div class="mb-2 flex items-center justify-between gap-3">
-        <div class="flex min-w-0 items-center gap-2">
-          <Avatar.avatar :if={@game.challenger} id={@game.challenger} size={18} />
-          <span class="truncate text-xs text-muted">{name(@game.challenger)}</span>
-          <span class="text-[10px] uppercase tracking-wide text-faint">vs</span>
-          <Avatar.avatar :if={@game.accepter} id={@game.accepter} size={18} />
-          <span class="truncate text-xs text-muted">{name(@game.accepter)}</span>
+    <div class="rounded border border-edge bg-panel p-3 transition hover:border-focus">
+      <div
+        role="link"
+        tabindex="0"
+        phx-click="open"
+        phx-value-id={@game.game_id}
+        class="block cursor-pointer"
+      >
+        <div class="mb-2 flex items-center justify-between gap-3">
+          <div class="flex min-w-0 items-center gap-2">
+            <Avatar.avatar :if={@game.challenger} id={@game.challenger} size={18} />
+            <span class="truncate text-xs text-muted">{name(@game.challenger)}</span>
+            <span class="text-[10px] uppercase tracking-wide text-faint">vs</span>
+            <Avatar.avatar :if={@game.accepter} id={@game.accepter} size={18} />
+            <span class="truncate text-xs text-muted">{name(@game.accepter)}</span>
+          </div>
+
+          <span class={[
+            "shrink-0 rounded px-2 py-0.5 text-[10px] uppercase tracking-wide",
+            chip(@game)
+          ]}>
+            {label(@game)}
+          </span>
         </div>
 
-        <span class={["shrink-0 rounded px-2 py-0.5 text-[10px] uppercase tracking-wide", chip(@game)]}>
-          {label(@game)}
-        </span>
+        <Board.board :if={@game.kind == :backgammon} position={@game.position} compact />
+        <ChessBoard.board :if={@game.kind == :chess} board={@game.board} compact />
       </div>
-
-      <Board.board :if={@game.kind == :backgammon} position={@game.position} compact />
-      <ChessBoard.board :if={@game.kind == :chess} board={@game.board} compact />
 
       <div class="mt-2 flex items-center justify-between gap-2 text-[10px] text-faint">
         <span class="flex shrink-0 items-center gap-1">
@@ -138,9 +209,35 @@ defmodule HighWireWeb.GamesLive do
           <Time.age ts={@game.updated_at} />
         </span>
         <span :if={@game.last_note not in [nil, ""]} class="truncate italic">{@game.last_note}</span>
-        <span class="shrink-0">{phase_label(@game)}</span>
+
+        <span
+          :if={@game.accepter == nil and @game.kind == :chess}
+          class="flex shrink-0 items-center gap-2"
+        >
+          <span>{phase_label(@game)}</span>
+          <button
+            :if={@game.challenger != @self_id}
+            phx-click="accept"
+            phx-value-id={@game.game_id}
+            class="rounded border border-edge px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted transition hover:border-focus hover:text-paper"
+          >
+            accept
+          </button>
+          <button
+            :if={@game.challenger == @self_id}
+            phx-click="withdraw"
+            phx-value-id={@game.game_id}
+            class="rounded border border-edge px-2 py-0.5 text-[10px] uppercase tracking-wide text-faint transition hover:border-focus hover:text-paper"
+          >
+            withdraw
+          </button>
+        </span>
+
+        <span :if={@game.accepter != nil or @game.kind != :chess} class="shrink-0">
+          {phase_label(@game)}
+        </span>
       </div>
-    </.link>
+    </div>
     """
   end
 

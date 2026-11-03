@@ -105,6 +105,7 @@ defmodule HighWire.Chess.Store do
       kind: :chess,
       challenger: row.challenger,
       accepter: row.accepter,
+      challenger_color: row.challenger_color,
       challenge_key: row.challenge_key,
       accept_key: row.accept_key,
       challenge_note: get_in(row, [:challenge, "note"]),
