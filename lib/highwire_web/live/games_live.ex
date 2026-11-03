@@ -20,8 +20,9 @@ defmodule HighWireWeb.GamesLive do
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Time}
 
   # The stores are append-only, so the room shows a page of what changed
-  # recently and pages back through the catalog's window. Nothing here
-  # folds a game it is not showing.
+  # recently and pages back through every game the catalog holds. Nothing
+  # here folds a game it is not showing, and the count is the node's, not a
+  # window's: a participant reading the room sees how much this node has.
   @page_size 40
 
   # The groups review reads the room in. A game falls in exactly one of each
@@ -486,7 +487,7 @@ defmodule HighWireWeb.GamesLive do
 
             <div class="flex items-center gap-2">
               <span class="text-xs text-faint">
-                {if @total > 0, do: "#{length(@games)} of #{@total} recent", else: "0 games"}
+                {if @total > 0, do: "#{length(@games)} of #{@total} games", else: "0 games"}
               </span>
               <span class="text-[10px] uppercase tracking-wide text-faint">new chess game as</span>
 
@@ -531,7 +532,7 @@ defmodule HighWireWeb.GamesLive do
             :if={@filters != %{} and @sections == []}
             class="rounded border border-edge bg-panel px-4 py-6 text-sm text-dim"
           >
-            No game in this window matches that. Widen a filter or load older games.
+            No game matches that. Widen a filter or load older games.
           </p>
 
           <.section
@@ -626,7 +627,7 @@ defmodule HighWireWeb.GamesLive do
            no reason to trust. --%>
       <p
         :if={reasons(@game) != []}
-        class="mt-1 truncate text-[10px] leading-relaxed text-accent/80"
+        class="mt-1 text-[10px] leading-relaxed text-accent/80"
       >
         {Enum.join(reasons(@game), " · ")}
       </p>
@@ -634,7 +635,7 @@ defmodule HighWireWeb.GamesLive do
     """
   end
 
-  defp reasons(%{interest: %{reasons: reasons}}), do: Enum.take(reasons, 2)
+  defp reasons(%{interest: %{reasons: reasons}}), do: reasons
   defp reasons(_game), do: []
 
   defp counter(%{kind: :chess, turn_count: plies}) when plies > 0,

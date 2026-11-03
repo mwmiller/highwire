@@ -427,7 +427,7 @@ defmodule HighWireWeb.GamesLiveTest do
     html = view |> element("button[data-facet='kind'][data-value='backgammon']") |> render_click()
     assert html =~ "0 of 1 shown"
     refute html =~ "phx-value-id"
-    assert html =~ "No game in this window matches"
+    assert html =~ "No game matches that"
 
     html = view |> element("button", "clear") |> render_click()
     assert html =~ "1 of 1 shown"

@@ -8,10 +8,10 @@ defmodule HighWire.Games.Catalog do
   day, and one that renders what it found is a page that gets longer
   forever.
 
-  So the room asks this instead — a bounded, ordered list of what changed
-  most recently. Every touch moves a game to the front and a game that
-  hasn't been touched since it fell off the end is simply not in the
-  window; it is still in its store, and its page still opens.
+  So the room asks this instead — an ordered list of every game the stores
+  have filed, newest touch first. Every touch moves a game to the front, and
+  a game stays in the list for as long as its store keeps it: what the room
+  pages through is what this node holds, not a recent sample of it.
 
   Reads come from ETS directly, because the pages ask constantly and the
   answer is a handful of rows. The process owns the table and keeps the
@@ -21,10 +21,6 @@ defmodule HighWire.Games.Catalog do
   use GenServer
 
   @table :highwire_games_catalog
-
-  # How many games the room can page back through. Older games leave the
-  # window rather than being deleted: the store still has them.
-  @window 400
 
   @doc "Start the catalog."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -45,9 +41,9 @@ defmodule HighWire.Games.Catalog do
   end
 
   @doc """
-  The most recently changed games, newest first, as `{kind, game_id}`.
+  The games this node holds, newest touch first, as `{kind, game_id}`.
 
-  `offset` pages back into the window; past the end is an empty list.
+  `offset` pages back through them; past the end is an empty list.
   """
   @spec recent(pos_integer(), non_neg_integer()) :: [{atom(), binary()}]
   def recent(limit, offset \\ 0) when is_integer(limit) and limit > 0 do
@@ -62,7 +58,7 @@ defmodule HighWire.Games.Catalog do
     ArgumentError -> []
   end
 
-  @doc "How many games the window holds."
+  @doc "How many games the room can page through."
   @spec count() :: non_neg_integer()
   def count do
     case :ets.info(@table, :size) do
@@ -103,8 +99,7 @@ defmodule HighWire.Games.Catalog do
 
   @impl true
   def handle_cast({:touch, kind, game_id}, state) do
-    state = put(state, kind, game_id)
-    {:noreply, prune(state)}
+    {:noreply, put(state, kind, game_id)}
   end
 
   @impl true
@@ -135,25 +130,6 @@ defmodule HighWire.Games.Catalog do
       seq ->
         :ets.delete(@table, seq)
         %{state | index: Map.delete(state.index, key)}
-    end
-  end
-
-  # The window is a bound on how far back the room can page, not on what
-  # the stores keep.
-  defp prune(state) when map_size(state.index) <= @window, do: state
-
-  defp prune(state) do
-    if :ets.info(@table, :size) > @window do
-      case :ets.first(@table) do
-        :"$end_of_table" ->
-          state
-
-        seq ->
-          [{^seq, kind, game_id}] = :ets.lookup(@table, seq)
-          state |> drop({kind, game_id}) |> prune()
-      end
-    else
-      state
     end
   end
 

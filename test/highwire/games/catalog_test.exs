@@ -37,7 +37,7 @@ defmodule HighWire.Games.CatalogTest do
     assert Catalog.recent(10) == [{:chess_legacy, "same"}, {:chess, "same"}]
   end
 
-  test "a page is a window of the order, and paging back continues it" do
+  test "a page is a slice of the order, and paging back continues it" do
     Enum.each(1..10, &touch(:chess, "g#{&1}"))
 
     assert Catalog.recent(4) == for(n <- 10..7//-1, do: {:chess, "g#{n}"})
@@ -50,12 +50,15 @@ defmodule HighWire.Games.CatalogTest do
     assert Catalog.recent(10, 5) == []
   end
 
-  test "the window is bounded: the oldest fall out, the stores keep them" do
+  # What this node holds is what the room can page through: a game that
+  # moved long ago is still a game on this node, and its reader should be
+  # able to reach it and see it counted.
+  test "nothing falls out of the order, however long ago a game moved" do
     Enum.each(1..450, &touch(:chess, "g#{&1}"))
 
-    assert Catalog.count() == 400
+    assert Catalog.count() == 450
     assert Enum.take(Catalog.recent(1), 1) == [{:chess, "g450"}]
-    refute Enum.any?(Catalog.recent(400), &match?({:chess, "g1"}, &1))
+    assert List.last(Catalog.recent(450)) == {:chess, "g1"}
   end
 
   test "reads work before the catalog is running" do
