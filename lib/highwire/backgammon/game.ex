@@ -16,6 +16,8 @@ defmodule HighWire.Backgammon.Game do
   roll and the freshly announced half for the next one.
   """
 
+  alias HighWire.Games.Id
+
   @version 1
   @names ~w(challenge accept roll turn resign withdraw)
 
@@ -39,14 +41,10 @@ defmodule HighWire.Backgammon.Game do
   def message?(_), do: false
 
   @doc "A fresh game id: 32 random bytes as 64 lowercase hex characters."
-  def new_id, do: Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
+  def new_id, do: Id.new()
 
   @doc "Whether a binary is a well-formed game id."
-  def id?(id) when is_binary(id) and byte_size(id) == 64 do
-    match?({:ok, <<_::256>>}, Base.decode16(id, case: :lower))
-  end
-
-  def id?(_), do: false
+  def id?(id), do: Id.valid?(id)
 
   @doc "Hex-encode 32 bytes."
   def hex(bin) when is_binary(bin), do: Base.encode16(bin, case: :lower)

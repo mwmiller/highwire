@@ -18,6 +18,8 @@ defmodule HighWire.Chess.Game do
   order the messages arrive in.
   """
 
+  alias HighWire.Games.Id
+
   @version 1
   @names ~w(challenge accept move resign withdraw)
 
@@ -39,18 +41,13 @@ defmodule HighWire.Chess.Game do
   def message?(_), do: false
 
   @doc """
-  A fresh game id: 32 random bytes as 64 lowercase hex characters — the same
-  shape a backgammon game uses, so a gameroom URL and its route constraint
-  do not care which game it points at.
+  A fresh game id, the same shape a backgammon game uses, so a gameroom URL
+  and its route constraint do not care which game it points at.
   """
-  def new_id, do: Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
+  def new_id, do: Id.new()
 
   @doc "Whether a binary is a well-formed game id."
-  def id?(id) when is_binary(id) and byte_size(id) == 64 do
-    match?({:ok, <<_::256>>}, Base.decode16(id, case: :lower))
-  end
-
-  def id?(_), do: false
+  def id?(id), do: Id.valid?(id)
 
   @doc """
   A challenge. `color` is the side the challenger takes — `"white"` or
