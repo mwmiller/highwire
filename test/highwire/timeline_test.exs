@@ -2661,6 +2661,35 @@ defmodule HighWire.TimelineTest do
       assert st.profile_wants == MapSet.new(["@one=.ed25519", "@two=.ed25519"])
       assert st.profile_fetching? == false
     end
+
+    # The connection is linked, so its death usually arrives as an EXIT — but
+    # a want that lands on a client that is already dead must not wait for an
+    # EXIT that has been and gone: no fetch would ever run and the page would
+    # show a short id for a feed this node could name.
+    test "a want on a dead connection asks for a new one" do
+      dead = spawn(fn -> :ok end)
+      ref = Process.monitor(dead)
+      assert_receive {:DOWN, ^ref, :process, ^dead, _}, 1_000
+
+      state =
+        Map.merge(ensure_state([]), %{
+          status: :ok,
+          client: dead,
+          active: %{},
+          pending: %{},
+          abandoned: MapSet.new(),
+          contacts_ref: nil,
+          contacts_primed?: false,
+          blob_ls_ref: nil,
+          latest_ref: nil
+        })
+
+      {:noreply, st} = Timeline.handle_cast({:ensure_profiles, ["@fresh=.ed25519"]}, state)
+
+      assert st.status == :connecting
+      assert st.client == nil
+      assert st.profile_wants == MapSet.new(["@fresh=.ed25519"])
+    end
   end
 
   describe "root_row" do

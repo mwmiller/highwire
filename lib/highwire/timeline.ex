@@ -3773,15 +3773,28 @@ defmodule HighWire.Timeline do
   defp kick_wanted_profiles(%{profile_fetching?: true} = state), do: state
 
   defp kick_wanted_profiles(state) do
-    known = state |> Map.get(:messages, %{}) |> Map.get(:profiles, %{})
+    # A want parked on a dead connection would wait for a reconnect nothing
+    # had asked for: the page would show a short id for a name this node can
+    # read the moment there is a connection to ask. Rebuild it here, and let
+    # the wants ride the next pass.
+    client = Map.get(state, :client)
 
-    wanted =
-      state
-      |> Map.get(:profile_wants, MapSet.new())
-      |> MapSet.to_list()
-      |> Enum.reject(&Map.has_key?(known, &1))
+    cond do
+      is_pid(client) and not Process.alive?(client) ->
+        Logger.debug("timeline: profile want on a dead connection, reconnecting")
+        reset_connection(state)
 
-    kick_profile_fetch(state, wanted, Map.take(known, wanted), [])
+      true ->
+        known = state |> Map.get(:messages, %{}) |> Map.get(:profiles, %{})
+
+        wanted =
+          state
+          |> Map.get(:profile_wants, MapSet.new())
+          |> MapSet.to_list()
+          |> Enum.reject(&Map.has_key?(known, &1))
+
+        kick_profile_fetch(state, wanted, Map.take(known, wanted), [])
+    end
   end
 
   # -- profiles -----------------------------------------------------------

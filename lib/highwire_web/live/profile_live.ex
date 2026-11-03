@@ -76,13 +76,17 @@ defmodule HighWireWeb.ProfileLive do
   end
 
   @impl true
+  # The name and picture are read, not owned, so a feed whose about lands
+  # while the page is open has to be read again: reading once at load left
+  # anyone fetched a moment later showing as a key until a reload.
   def handle_info({Timeline, :updated, payload}, socket) do
     {:noreply,
      assign(socket,
        blob_rev: Map.get(payload, :blob_rev, 0),
        follows: Map.get(payload, :follows, socket.assigns.follows),
        blocked: Map.get(payload, :blocked, socket.assigns.blocked),
-       self_id: Map.get(payload, :self_id, socket.assigns.self_id)
+       self_id: Map.get(payload, :self_id, socket.assigns.self_id),
+       profile: Timeline.profile(socket.assigns.id) || socket.assigns.profile
      )}
   end
 
@@ -413,7 +417,12 @@ defmodule HighWireWeb.ProfileLive do
     # rows are still on their way. The identity reads from the read
     # model either way; only the posts are outstanding, and until they
     # land the page says so.
-    if connected?(socket), do: queue_posts(id)
+    if connected?(socket) do
+      queue_posts(id)
+      # A feed this node has never fetched would otherwise stay a key until
+      # something else in the app happened to want its profile.
+      Timeline.ensure_profiles([id])
+    end
 
     assign(socket,
       status: viewer.status,
