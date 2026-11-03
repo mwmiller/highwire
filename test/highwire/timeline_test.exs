@@ -1092,7 +1092,8 @@ defmodule HighWire.TimelineTest do
                {["messagesByType"], [%{"type" => "contact"}]},
                {["messagesByType"], [%{"type" => "about", "live" => true, "old" => true}]},
                {["messagesByType"], [%{"type" => "delete", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "post-edit", "live" => true, "old" => true}]}
+               {["messagesByType"], [%{"type" => "post-edit", "live" => true, "old" => true}]},
+               {["messagesByType"], [%{"type" => "backgammon/*", "live" => true, "old" => true}]}
              ]
 
       # the shared connection carries only the per-feed windows
