@@ -99,6 +99,25 @@ defmodule HighWireWeb.GamesLiveTest do
     assert html =~ "turn 0"
   end
 
+  test "a challenge with no opponent is a game to take, not one to watch", %{conn: conn} do
+    seed_chess_unaccepted()
+
+    {:ok, view, html} = live(conn, "/games")
+
+    assert html =~ "Open games"
+    assert view |> element("button", "accept") |> has_element?()
+    refute html =~ "Spectate"
+  end
+
+  test "a game already paired is one to watch", %{conn: conn} do
+    seed_chess()
+
+    {:ok, _view, html} = live(conn, "/games")
+
+    assert html =~ "Spectate"
+    refute html =~ "Open games"
+  end
+
   test "one game opens on its own board", %{conn: conn} do
     game_id = seed_game()
 

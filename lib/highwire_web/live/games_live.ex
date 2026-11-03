@@ -146,7 +146,15 @@ defmodule HighWireWeb.GamesLive do
     do: Enum.filter(games, &(not &1.yours? and mine?(&1, self_id) and in_flight?(&1)))
 
   defp spectate(games, self_id),
-    do: Enum.filter(games, &(not mine?(&1, self_id) and in_flight?(&1)))
+    do: Enum.filter(games, &(not mine?(&1, self_id) and in_flight?(&1) and not open?(&1)))
+
+  # Somebody else's challenge with no opponent yet is not a game to watch; it
+  # is one you can take. Only the games this node can write are offered, so a
+  # challenge read off the network stays an artifact rather than an invitation.
+  defp open_games(games, self_id), do: Enum.filter(games, &(open?(&1) and not mine?(&1, self_id)))
+
+  defp open?(game),
+    do: Map.get(game, :writable?, true) and in_flight?(game) and game.accepter == nil
 
   defp finished(games, _self_id), do: Enum.filter(games, &(not in_flight?(&1)))
 
@@ -172,7 +180,7 @@ defmodule HighWireWeb.GamesLive do
       <h3 class="mb-2 text-[11px] uppercase tracking-wider text-faint">
         {@title} <span class="text-faint">· {length(@games)}</span>
       </h3>
-      <div class="grid gap-3">
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <.game_card :for={game <- @games} game={game} self_id={@self_id} />
       </div>
     </section>
@@ -249,6 +257,12 @@ defmodule HighWireWeb.GamesLive do
             self_id={@self_id}
           />
           <.section
+            :if={open_games(@games, @self_id) != []}
+            title="Open games"
+            games={open_games(@games, @self_id)}
+            self_id={@self_id}
+          />
+          <.section
             :if={spectate(@games, @self_id) != []}
             title="Spectate"
             games={spectate(@games, @self_id)}
@@ -280,7 +294,10 @@ defmodule HighWireWeb.GamesLive do
 
   defp game_card(assigns) do
     ~H"""
-    <div class="rounded border border-edge bg-panel p-3 transition hover:border-focus">
+    <div class={[
+      "rounded border bg-panel p-3 transition hover:border-focus",
+      if(@game.yours?, do: "border-accent/60", else: "border-edge")
+    ]}>
       <div
         role="link"
         tabindex="0"
@@ -296,13 +313,6 @@ defmodule HighWireWeb.GamesLive do
             <Avatar.avatar :if={@game.accepter} id={@game.accepter} size={18} />
             <span class="truncate text-xs text-muted">{name(@game.accepter)}</span>
           </div>
-
-          <span class={[
-            "shrink-0 rounded px-2 py-0.5 text-[10px] uppercase tracking-wide",
-            chip(@game)
-          ]}>
-            {label(@game)}
-          </span>
         </div>
 
         <Board.board :if={@game.kind == :backgammon} position={@game.position} compact />
@@ -341,7 +351,7 @@ defmodule HighWireWeb.GamesLive do
         </span>
 
         <span :if={@game.accepter != nil or @game.kind != :chess} class="shrink-0">
-          {phase_label(@game)}
+          {label(@game)}
         </span>
       </div>
     </div>
@@ -352,11 +362,6 @@ defmodule HighWireWeb.GamesLive do
     do: "#{div(plies + 1, 2)}. move"
 
   defp counter(%{turn_count: turns}), do: "turn #{turns}"
-
-  defp chip(%{status: :finished}), do: "bg-raised text-dim"
-  defp chip(%{status: :broken}), do: "bg-raised text-bad"
-  defp chip(%{yours?: true}), do: "bg-accent text-paper"
-  defp chip(_), do: "bg-raised text-muted"
 
   defp label(%{status: :finished, winner: %{player: player}}) do
     case player do
