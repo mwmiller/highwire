@@ -11,6 +11,7 @@ defmodule HighWireWeb.GamesLiveTest do
     Store.clear()
     Chess.Store.clear()
     Chess.Legacy.Store.clear()
+    Catalog.clear()
     :ok
   end
 
@@ -334,6 +335,73 @@ defmodule HighWireWeb.GamesLiveTest do
     stale_at = :binary.match(html, stale) |> elem(0)
 
     assert fresh_at < stale_at
+  end
+
+  test "the room can be narrowed by how long a game ran", %{conn: conn} do
+    now = System.system_time(:millisecond)
+
+    medium =
+      seed_legacy(
+        [
+          {1, "e2", "e4", "e4"},
+          {2, "e7", "e5", "e5"},
+          {3, "g1", "f3", "Nf3"},
+          {4, "b8", "c6", "Nc6"},
+          {5, "f1", "b5", "Bb5"},
+          {6, "a7", "a6", "a6"},
+          {7, "b5", "a4", "Ba4"},
+          {8, "g8", "f6", "Nf6"},
+          {9, "e1", "g1", "O-O"},
+          {10, "f8", "e7", "Be7"},
+          {11, "f1", "e1", "Re1"},
+          {12, "b7", "b5", "b5"}
+        ],
+        byte: 0xAB,
+        ts: now - 60_000
+      )
+
+    short = seed_legacy([{1, "d2", "d4", "d4"}], byte: 0xCD, ts: now - 60_000)
+
+    {:ok, view, html} = live(conn, "/games")
+
+    assert html =~ "2 of 2 shown"
+
+    html = view |> element("button[data-facet='length'][data-value='short']") |> render_click()
+
+    assert html =~ "1 of 2 shown"
+    assert html =~ short
+    refute html =~ medium
+  end
+
+  test "the room can be read a period at a time", %{conn: conn} do
+    now = System.system_time(:millisecond)
+
+    seed_legacy([{1, "e2", "e4", "e4"}], byte: 0xAB, ts: now - 60_000)
+    seed_legacy([{1, "d2", "d4", "d4"}], byte: 0xCD, ts: now - 3 * 365 * 24 * 60 * 60 * 1000)
+
+    {:ok, view, html} = live(conn, "/games")
+
+    refute html =~ "Today"
+
+    html = view |> element("button[data-group='period']") |> render_click()
+
+    assert html =~ "Today"
+    assert html =~ "Older"
+  end
+
+  test "clearing the filters puts the room back", %{conn: conn} do
+    seed_legacy([{1, "e2", "e4", "e4"}], byte: 0xAB)
+
+    {:ok, view, html} = live(conn, "/games")
+    refute html =~ "clear"
+
+    html = view |> element("button[data-facet='kind'][data-value='backgammon']") |> render_click()
+    assert html =~ "0 of 1 shown"
+    refute html =~ "phx-value-id"
+    assert html =~ "No game in this window matches"
+
+    html = view |> element("button", "clear") |> render_click()
+    assert html =~ "1 of 1 shown"
   end
 
   test "a chess game sits in the same gameroom", %{conn: conn} do

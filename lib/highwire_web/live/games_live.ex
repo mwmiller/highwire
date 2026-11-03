@@ -15,7 +15,7 @@ defmodule HighWireWeb.GamesLive do
 
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
-  alias HighWire.Games.{Catalog, Interest}
+  alias HighWire.Games.{Catalog, Filter, Interest}
   alias HighWire.SSB.{Identities, Profile}
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Time}
 
@@ -23,6 +23,25 @@ defmodule HighWireWeb.GamesLive do
   # recently and pages back through the catalog's window. Nothing here
   # folds a game it is not showing.
   @page_size 40
+
+  # The groups review reads the room in. A game falls in exactly one of each
+  # list, so the titles are the order they appear in rather than sorted by
+  # count.
+  # What a filter can ask for. The chip labels come from these lists, so a
+  # view can never push a facet or a value the module does not know: the
+  # event is matched against the same whitelist before it is turned into an
+  # atom.
+  @facets %{
+    "who" => ~w(any played followed strangers mine),
+    "length" => ~w(any short medium long),
+    "age" => ~w(any today week month year),
+    "kind" => ~w(any chess backgammon)
+  }
+
+  @groups ~w(room period result)
+
+  @periods ["Today", "This week", "This month", "This year", "Older", "Undated"]
+  @results ["Checkmate", "Decided", "Draw", "Unfinished", "Withdrawn", "Does not verify"]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -41,6 +60,8 @@ defmodule HighWireWeb.GamesLive do
      |> assign(:error, nil)
      |> assign(:page, 0)
      |> assign(:total, Catalog.count())
+     |> assign(:filters, %{})
+     |> assign(:group, :room)
      |> assign_games(page(self_id, 0))}
   end
 
@@ -52,7 +73,7 @@ defmodule HighWireWeb.GamesLive do
     socket
     |> assign(:games, games)
     |> assign(:viewer, viewer)
-    |> assign(:sections, sections(socket.assigns.self_id, games, viewer))
+    |> assign(:sections, sections(Map.merge(socket.assigns, %{games: games, viewer: viewer})))
   end
 
   # Who the reader is, who they follow, and who they have played. The follow
@@ -117,6 +138,35 @@ defmodule HighWireWeb.GamesLive do
     end
   end
 
+  # A facet is one question at a time: setting it to the value it already has
+  # is how a reader takes it back off, so a chip never needs a second control.
+  def handle_event("filter", %{"facet" => facet, "value" => value}, socket) do
+    filters = socket.assigns.filters
+    key = facet_atom(facet)
+    value = value_atom(facet, value)
+
+    filters =
+      cond do
+        key == nil or value == nil -> filters
+        value == :any -> Map.delete(filters, key)
+        Map.get(filters, key) == value -> Map.delete(filters, key)
+        true -> Map.put(filters, key, value)
+      end
+
+    {:noreply, assign_filters(socket, filters)}
+  end
+
+  def handle_event("clear_filters", _params, socket) do
+    {:noreply, assign_filters(socket, %{})}
+  end
+
+  def handle_event("group", %{"by" => by}, socket) do
+    {:noreply,
+     socket
+     |> assign(:group, group_atom(by))
+     |> then(&assign(&1, :sections, sections(&1.assigns)))}
+  end
+
   def handle_event("withdraw", %{"id" => id}, socket) do
     with %{} = game <- Chess.Store.get(id),
          {:ok, _key} <- HighWire.Chess.Log.withdraw(game) do
@@ -162,8 +212,14 @@ defmodule HighWireWeb.GamesLive do
   defp snapshot(:backgammon, id), do: Store.get(id)
   defp snapshot(_kind, _id), do: nil
 
+  # A game is yours to move in when you are the one to move. Without an
+  # identity there is no "yours": a game whose mover this node could not name
+  # would otherwise count as yours for a reader with no identity at all.
   defp put_live_status(game, self_id) do
-    Map.put(game, :yours?, game.mover == self_id and game.status in [:playing, :opening])
+    yours? =
+      is_binary(self_id) and game.mover == self_id and game.status in [:playing, :opening]
+
+    Map.put(game, :yours?, yours?)
   end
 
   defp self_id do
@@ -194,11 +250,48 @@ defmodule HighWireWeb.GamesLive do
 
   defp finished(games, _self_id), do: Enum.filter(games, &(not in_flight?(&1)))
 
+  defp facet_atom(facet), do: facet_key(facet)
+
+  defp facet_key("who"), do: :who
+  defp facet_key("length"), do: :length
+  defp facet_key("age"), do: :age
+  defp facet_key("kind"), do: :kind
+  defp facet_key(_facet), do: nil
+
+  defp value_atom(facet, value) do
+    if facet in Map.keys(@facets) and value in Map.fetch!(@facets, facet) do
+      String.to_existing_atom(value)
+    else
+      nil
+    end
+  end
+
+  defp group_atom(by) when by in @groups, do: String.to_existing_atom(by)
+  defp group_atom(_by), do: :room
+
+  defp assign_filters(socket, filters) do
+    socket
+    |> assign(:filters, filters)
+    |> then(&assign(&1, :sections, sections(&1.assigns)))
+  end
+
+  defp sections(assigns) do
+    %{self_id: self_id, games: games, viewer: viewer, filters: filters, group: group} = assigns
+
+    games = Filter.apply(games, viewer, filters)
+
+    case group do
+      :period -> grouped(games, viewer, &Filter.period/1, @periods)
+      :result -> grouped(games, viewer, &Filter.result/1, @results)
+      _ -> room(games, self_id, viewer)
+    end
+  end
+
   # The room in order: what is waiting on you, then games to take, then what
   # there is to watch. The last two are ordered by what this reader is most
   # likely to want — a stranger's abandoned opening does not belong above a
   # game between two people they follow.
-  defp sections(self_id, games, viewer) do
+  defp room(games, self_id, viewer) do
     [
       {"Your move", your_move(games, self_id)},
       {"Waiting on them", waiting(games, self_id)},
@@ -207,6 +300,18 @@ defmodule HighWireWeb.GamesLive do
       {"Finished", Interest.rank(finished(games, self_id), viewer)}
     ]
     |> Enum.reject(fn {_title, list} -> list == [] end)
+  end
+
+  # Review reads the same set as a run: every game in a period together, or
+  # every game that ended the same way, in the order that reader would want
+  # them. Empty groups are dropped rather than titled and left blank.
+  defp grouped(games, viewer, key, order) do
+    by_key = Enum.group_by(games, key)
+
+    order
+    |> Enum.map(fn title -> {title, Map.get(by_key, title, [])} end)
+    |> Enum.reject(fn {_title, list} -> list == [] end)
+    |> Enum.map(fn {title, list} -> {title, Interest.rank(list, viewer)} end)
   end
 
   defp in_flight?(game), do: game.status in [:playing, :opening]
@@ -220,6 +325,126 @@ defmodule HighWireWeb.GamesLive do
   end
 
   defp mine?(_game, _self_id), do: false
+
+  attr :filters, :map, required: true
+  attr :group, :atom, required: true
+  attr :shown, :integer, required: true
+  attr :total, :integer, required: true
+
+  # Narrowing the room is four questions about a game — who is playing, how
+  # long it ran, when it last moved, which game it is — and a fifth about how
+  # to read the answer. One chip per answer, and the chip that is on is the
+  # answer in force; clicking it again takes the question back off.
+  defp filters(assigns) do
+    assigns =
+      assign(assigns,
+        who: [
+          {"anyone", :any},
+          {"you played", :played},
+          {"you follow", :followed},
+          {"strangers", :strangers},
+          {"yours", :mine}
+        ],
+        length: [{"any", :any}, {"under 10", :short}, {"10-39", :medium}, {"40+", :long}],
+        age: [
+          {"any", :any},
+          {"today", :today},
+          {"week", :week},
+          {"month", :month},
+          {"year", :year}
+        ],
+        kind: [{"any", :any}, {"chess", :chess}, {"backgammon", :backgammon}]
+      )
+
+    ~H"""
+    <div class="mb-5 rounded border border-edge bg-panel px-3 py-2">
+      <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
+        <.chip_row title="who" facet="who" key={:who} options={@who} filters={@filters} />
+        <.chip_row title="moves" facet="length" key={:length} options={@length} filters={@filters} />
+        <.chip_row title="when" facet="age" key={:age} options={@age} filters={@filters} />
+        <.chip_row title="game" facet="kind" key={:kind} options={@kind} filters={@filters} />
+      </div>
+
+      <div class="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-edge-soft pt-2">
+        <div class="flex items-center gap-1">
+          <span class="mr-1 text-[10px] uppercase tracking-wider text-faint">group by</span>
+          <.group_chip by={:room} label="room" group={@group} />
+          <.group_chip by={:period} label="period" group={@group} />
+          <.group_chip by={:result} label="result" group={@group} />
+        </div>
+
+        <div class="flex items-center gap-3 text-[10px] text-faint">
+          <span>{@shown} of {@total} shown</span>
+          <button
+            :if={@filters != %{}}
+            phx-click="clear_filters"
+            class="rounded border border-edge px-1.5 py-0.5 uppercase tracking-wide text-muted transition hover:border-focus hover:text-paper"
+          >
+            clear
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr :title, :string, required: true
+  attr :facet, :string, required: true
+  attr :key, :atom, required: true
+  attr :options, :list, required: true
+  attr :filters, :map, required: true
+
+  defp chip_row(assigns) do
+    assigns = assign(assigns, :current, Map.get(assigns.filters, assigns.key, :any))
+
+    ~H"""
+    <div class="flex items-center gap-1">
+      <span class="mr-0.5 text-[10px] uppercase tracking-wider text-faint">{@title}</span>
+      <button
+        :for={{label, value} <- @options}
+        phx-click={
+          Phoenix.LiveView.JS.push("filter", value: %{facet: @facet, value: to_string(value)})
+        }
+        data-facet={@facet}
+        data-value={to_string(value)}
+        class={[
+          "rounded border px-1.5 py-0.5 text-[10px] transition",
+          if(value == @current,
+            do: "border-accent/60 bg-accent/15 text-accent",
+            else: "border-edge text-muted hover:border-focus hover:text-paper"
+          )
+        ]}
+      >
+        {label}
+      </button>
+    </div>
+    """
+  end
+
+  attr :by, :atom, required: true
+  attr :label, :string, required: true
+  attr :group, :atom, required: true
+
+  defp group_chip(assigns) do
+    ~H"""
+    <button
+      phx-click={Phoenix.LiveView.JS.push("group", value: %{by: to_string(@by)})}
+      data-group={to_string(@by)}
+      class={[
+        "rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide transition",
+        if(@by == @group,
+          do: "border-accent/60 bg-accent/15 text-accent",
+          else: "border-edge text-muted hover:border-focus hover:text-paper"
+        )
+      ]}
+    >
+      {@label}
+    </button>
+    """
+  end
+
+  defp count_games(sections),
+    do: sections |> Enum.map(fn {_title, games} -> length(games) end) |> Enum.sum()
 
   attr :title, :string, required: true
   attr :games, :list, required: true
@@ -293,6 +518,20 @@ defmodule HighWireWeb.GamesLive do
           <p :if={@games == []} class="rounded border border-edge bg-panel px-4 py-6 text-sm text-dim">
             No games yet. Open one above and it appears here at once; when someone challenges you,
             their game lands here on the next move.
+          </p>
+
+          <.filters
+            filters={@filters}
+            group={@group}
+            shown={count_games(@sections)}
+            total={length(@games)}
+          />
+
+          <p
+            :if={@filters != %{} and @sections == []}
+            class="rounded border border-edge bg-panel px-4 py-6 text-sm text-dim"
+          >
+            No game in this window matches that. Widen a filter or load older games.
           </p>
 
           <.section
