@@ -24,6 +24,7 @@ defmodule HighWire.Application do
           HighWire.Suggester,
           HighWire.SearchIndex,
           HighWire.SSB.MessageIndex,
+          HighWire.Games.Catalog,
           HighWire.Backgammon.Store,
           HighWire.Chess.Store,
           HighWire.Chess.Legacy.Store,

@@ -140,6 +140,7 @@ defmodule HighWire.Chess.Store do
            {:access, :read_write}
          ]) do
       {:ok, @table} ->
+        seed_catalog()
         {:ok, %{path: path}}
 
       {:error, reason} ->
@@ -171,6 +172,7 @@ defmodule HighWire.Chess.Store do
   end
 
   defp announce(game_id) do
+    HighWire.Games.Catalog.touch(:chess, game_id)
     Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {:chess, game_id})
   end
 
@@ -270,4 +272,17 @@ defmodule HighWire.Chess.Store do
   end
 
   defp dets_path, do: Path.join([HighWire.home_dir(), ".ssberl", "chess.dets"])
+
+  # The catalog is a cache of recency, so a boot rebuilds it from the rows
+  # the store already holds: touching in age order leaves the newest game
+  # at the front, which is where a room starts.
+  defp seed_catalog do
+    @table
+    |> :dets.match_object({{:game, :_}, :_})
+    |> Enum.map(fn {_key, row} -> {row.updated_at || 0, row.game_id} end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.each(fn {_ts, game_id} -> HighWire.Games.Catalog.touch(:chess, game_id) end)
+  rescue
+    ArgumentError -> :ok
+  end
 end

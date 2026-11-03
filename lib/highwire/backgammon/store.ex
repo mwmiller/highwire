@@ -140,6 +140,7 @@ defmodule HighWire.Backgammon.Store do
            {:access, :read_write}
          ]) do
       {:ok, @table} ->
+        seed_catalog()
         {:ok, %{path: path}}
 
       {:error, reason} ->
@@ -170,7 +171,10 @@ defmodule HighWire.Backgammon.Store do
     {:reply, :ok, state}
   end
 
+  # The room's order is the catalog's, so a game moves to the front as it
+  # files rather than when someone asks for the list.
   defp announce(game_id) do
+    HighWire.Games.Catalog.touch(:backgammon, game_id)
     Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {:backgammon, game_id})
   end
 
@@ -282,4 +286,17 @@ defmodule HighWire.Backgammon.Store do
   @doc false
   # Kept for the router's constraints and for tests that need a valid id.
   def valid_id?(id), do: Game.id?(id)
+
+  # The catalog is a cache of recency, so a boot rebuilds it from the rows
+  # the store already holds: touching in age order leaves the newest game
+  # at the front, which is where a room starts.
+  defp seed_catalog do
+    @table
+    |> :dets.match_object({{:game, :_}, :_})
+    |> Enum.map(fn {_key, row} -> {row.updated_at || 0, row.game_id} end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.each(fn {_ts, game_id} -> HighWire.Games.Catalog.touch(:backgammon, game_id) end)
+  rescue
+    ArgumentError -> :ok
+  end
 end

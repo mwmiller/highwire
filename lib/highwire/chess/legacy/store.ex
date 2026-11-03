@@ -80,6 +80,7 @@ defmodule HighWire.Chess.Legacy.Store do
 
     case :dets.open_file(@table, file: String.to_charlist(path), type: :set) do
       {:ok, @table} ->
+        seed_catalog()
         {:ok, %{path: path}}
 
       {:error, reason} ->
@@ -151,7 +152,27 @@ defmodule HighWire.Chess.Legacy.Store do
     ArgumentError -> nil
   end
 
+  # The catalog is a cache of recency: a boot rebuilds it from the rows
+  # already on disk, oldest first, so the newest game ends at the front.
+  defp seed_catalog do
+    @table
+    |> :dets.match_object({{:game, :_}, :_})
+    |> Enum.map(fn {_key, row} -> {updated_at(row.rows), row.game_id} end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.each(fn {_ts, game_id} -> HighWire.Games.Catalog.touch(:chess_legacy, game_id) end)
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp updated_at(rows) do
+    rows
+    |> Enum.map(&(&1.ts || 0))
+    |> Enum.max(fn -> 0 end)
+    |> trunc()
+  end
+
   defp announce(game_id) do
+    HighWire.Games.Catalog.touch(:chess_legacy, game_id)
     Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {:chess_legacy, game_id})
   rescue
     _ -> :ok

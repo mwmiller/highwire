@@ -15,8 +15,14 @@ defmodule HighWireWeb.GamesLive do
 
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
+  alias HighWire.Games.Catalog
   alias HighWire.SSB.{Identities, Profile}
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Time}
+
+  # The stores are append-only, so the room shows a page of what changed
+  # recently and pages back through the catalog's window. Nothing here
+  # folds a game it is not showing.
+  @page_size 40
 
   @impl true
   def mount(_params, _session, socket) do
@@ -33,7 +39,20 @@ defmodule HighWireWeb.GamesLive do
      |> assign(:page_title, "Games")
      |> assign(:self_id, self_id)
      |> assign(:error, nil)
-     |> assign(:games, games(self_id))}
+     |> assign(:page, 0)
+     |> assign(:total, Catalog.count())
+     |> assign(:games, page(self_id, 0))}
+  end
+
+  def handle_event("more", _params, socket) do
+    page = socket.assigns.page + 1
+    more = page_games(socket.assigns.self_id, page)
+
+    {:noreply,
+     socket
+     |> assign(:page, page)
+     |> assign(:games, socket.assigns.games ++ more)
+     |> assign(:total, Catalog.count())}
   end
 
   @impl true
@@ -56,7 +75,7 @@ defmodule HighWireWeb.GamesLive do
   def handle_event("accept", %{"id" => id}, socket) do
     with %{} = game <- Chess.Store.get(id),
          {:ok, _key} <- HighWire.Chess.Log.accept(game) do
-      {:noreply, assign(socket, :games, games(socket.assigns.self_id))}
+      {:noreply, assign(socket, :games, page(socket.assigns.self_id, socket.assigns.page))}
     else
       _ -> {:noreply, assign(socket, :error, "Could not accept that game.")}
     end
@@ -65,7 +84,7 @@ defmodule HighWireWeb.GamesLive do
   def handle_event("withdraw", %{"id" => id}, socket) do
     with %{} = game <- Chess.Store.get(id),
          {:ok, _key} <- HighWire.Chess.Log.withdraw(game) do
-      {:noreply, assign(socket, :games, games(socket.assigns.self_id))}
+      {:noreply, assign(socket, :games, page(socket.assigns.self_id, socket.assigns.page))}
     else
       _ -> {:noreply, assign(socket, :error, "Could not withdraw that game.")}
     end
@@ -87,29 +106,29 @@ defmodule HighWireWeb.GamesLive do
 
     case Chess.Store.get(game_id) || Chess.Legacy.Store.get(game_id) || Store.get(game_id) do
       nil -> rest
-      game -> sort([put_live_status(game, self_id) | rest])
+      game -> [put_live_status(game, self_id) | rest]
     end
   end
 
-  defp sort(games) do
-    Enum.sort_by(games, fn game -> {rank(game), -game.updated_at} end)
+  defp page(self_id, page), do: page_games(self_id, page)
+
+  # A page is a window's worth of ids, and each one is read from the store
+  # that holds it — the cost is the page, not the number of games.
+  defp page_games(self_id, page) do
+    Catalog.recent(@page_size, page * @page_size)
+    |> Enum.map(fn {kind, game_id} -> snapshot(kind, game_id) end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&put_live_status(&1, self_id))
   end
 
-  defp games(self_id) do
-    (Store.games() ++ Chess.Store.games() ++ Chess.Legacy.Store.games())
-    |> Enum.map(&put_live_status(&1, self_id))
-    |> sort()
-  end
+  defp snapshot(:chess, id), do: Chess.Store.get(id)
+  defp snapshot(:chess_legacy, id), do: Chess.Legacy.Store.get(id)
+  defp snapshot(:backgammon, id), do: Store.get(id)
+  defp snapshot(_kind, _id), do: nil
 
   defp put_live_status(game, self_id) do
     Map.put(game, :yours?, game.mover == self_id and game.status in [:playing, :opening])
   end
-
-  defp rank(%{yours?: true}), do: 0
-  defp rank(%{status: :playing}), do: 1
-  defp rank(%{status: :opening}), do: 2
-  defp rank(%{status: :finished}), do: 3
-  defp rank(_), do: 4
 
   defp self_id do
     case Identities.active() do
@@ -140,7 +159,9 @@ defmodule HighWireWeb.GamesLive do
             <h2 class="text-lg font-semibold text-paper">Gameroom</h2>
 
             <div class="flex items-center gap-2">
-              <span class="text-xs text-faint">{length(@games)} game(s)</span>
+              <span class="text-xs text-faint">
+                {if @total > 0, do: "#{length(@games)} of #{@total} recent", else: "0 games"}
+              </span>
               <span class="text-[10px] uppercase tracking-wide text-faint">open as</span>
 
               <button
@@ -175,6 +196,15 @@ defmodule HighWireWeb.GamesLive do
 
           <div class="grid gap-3">
             <.game_card :for={game <- @games} game={game} self_id={@self_id} />
+          </div>
+
+          <div :if={length(@games) < @total} class="mt-4 flex justify-center">
+            <button
+              phx-click="more"
+              class="rounded border border-edge px-3 py-1.5 text-xs text-muted transition hover:border-focus hover:text-paper"
+            >
+              older games
+            </button>
           </div>
         </div>
       </main>
