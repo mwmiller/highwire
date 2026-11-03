@@ -84,7 +84,7 @@ defmodule HighWireWeb.Components.Nav do
             aria-label="Gameroom"
             class="text-dim transition hover:text-paper"
           >
-            <.die />
+            <.door />
           </.link>
           <.link
             navigate="/settings"
@@ -180,17 +180,24 @@ defmodule HighWireWeb.Components.Nav do
   defp identity_image(%{"id" => id}), do: Profile.image(id)
   defp identity_image(_identity), do: nil
 
-  # A die rather than a board: at 16px the pips still read, where a board
-  # would collapse into a grey square.
-  defp die(assigns) do
+  # A doorway rather than a board or a die: the room is a place you go into,
+  # and a door keeps a shape of its own at 16px, where a board would collapse
+  # into a grey square and a die says nothing about what is behind it.
+  defp door(assigns) do
     ~H"""
-    <svg class="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6">
-      <rect x="3.5" y="3.5" width="17" height="17" rx="3.5" />
-      <circle cx="8.5" cy="8.5" r="1.1" fill="currentColor" stroke="none" />
-      <circle cx="15.5" cy="8.5" r="1.1" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
-      <circle cx="8.5" cy="15.5" r="1.1" fill="currentColor" stroke="none" />
-      <circle cx="15.5" cy="15.5" r="1.1" fill="currentColor" stroke="none" />
+    <svg
+      class="h-4 w-4"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="M5 20.5V5.5A2.5 2.5 0 0 1 7.5 3h9A2.5 2.5 0 0 1 19 5.5v15" />
+      <path d="M3 20.5h18" />
+      <path d="M14.75 12h.01" stroke-width="2.4" />
     </svg>
     """
   end
