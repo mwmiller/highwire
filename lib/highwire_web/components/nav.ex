@@ -73,7 +73,7 @@ defmodule HighWireWeb.Components.Nav do
             <.door />
           </.link>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-3">
           <.link
             :if={@identity}
             navigate="/identity"
