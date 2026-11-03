@@ -101,6 +101,7 @@ defmodule HighWire.Backgammon.Store do
 
     %{
       game_id: row.game_id,
+      kind: :backgammon,
       challenger: row.challenger,
       accepter: row.accepter,
       challenge_key: row.challenge_key,

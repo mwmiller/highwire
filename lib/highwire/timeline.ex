@@ -80,6 +80,11 @@ defmodule HighWire.Timeline do
   # only on what arrived since.
   @backgammon_type "backgammon/*"
 
+  # Chess needs the same walk for the same reason, and its own cursor: the
+  # two games land in different stores, and a shared cursor would let one
+  # game's backlog hide the other's.
+  @chess_type "chess/*"
+
   # First-paint: once this many feed streams have reported, broadcast
   # what has arrived instead of waiting for every stream (up to 400).
   @first_paint_feeds 40
@@ -178,6 +183,9 @@ defmodule HighWire.Timeline do
 
   @doc "The store-wide backgammon type used by the backfill drain."
   def backgammon_type, do: @backgammon_type
+
+  @doc "The store-wide chess type used by the backfill drain."
+  def chess_type, do: @chess_type
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -875,7 +883,13 @@ defmodule HighWire.Timeline do
       backgammon_ref: nil,
       backgammon_buf: [],
       backgammon_snapshot?: true,
-      backgammon_client: nil
+      backgammon_client: nil,
+      # Chess has the same shape: one walk of the store per boot, then a
+      # live tail on its own connection.
+      chess_ref: nil,
+      chess_buf: [],
+      chess_snapshot?: true,
+      chess_client: nil
     }
 
     if Sidecar.enabled?() do
@@ -2355,6 +2369,30 @@ defmodule HighWire.Timeline do
     {:noreply, %{stop_backgammon_client(state) | backgammon_ref: nil, backgammon_buf: []}}
   end
 
+  # Items from the store-wide chess drain, folded the same way as the
+  # backgammon backlog: buffered until the sentinel closes the walk.
+  def handle_info({Client, ref, {:item, msg}}, %{chess_ref: ref} = state) do
+    cond do
+      MessageIndex.sentinel?(msg) ->
+        chess_backfilled(%{state | chess_snapshot?: false})
+
+      state.chess_snapshot? ->
+        {:noreply, %{state | chess_buf: [msg | state.chess_buf]}}
+
+      true ->
+        chess_drained(%{state | chess_buf: [msg]})
+    end
+  end
+
+  def handle_info({Client, ref, :done}, %{chess_ref: ref} = state) do
+    chess_backfilled(state)
+  end
+
+  def handle_info({Client, ref, {:error, reason}}, %{chess_ref: ref} = state) do
+    Logger.debug("timeline: chess drain failed: #{inspect(reason)}")
+    {:noreply, %{stop_chess_client(state) | chess_ref: nil, chess_buf: []}}
+  end
+
   def handle_info({Client, ref, {:error, reason}}, %{edit_ref: ref} = state) do
     Logger.debug("timeline: edit stream failed: #{inspect(reason)}")
     {:noreply, %{state | edit_ref: nil, edit_snapshot?: true}}
@@ -2373,6 +2411,7 @@ defmodule HighWire.Timeline do
     # subscribers, which is how a move reaches a board without the timeline's
     # reload heartbeat. It is a cast, so a slow disk never stalls this stream.
     HighWire.Backgammon.Store.observe(msg)
+    HighWire.Chess.Store.observe(msg)
 
     if msg["value"]["author"] in state.follows do
       state = %{state | acc: [msg | state.acc]}
@@ -2618,10 +2657,14 @@ defmodule HighWire.Timeline do
     {:noreply, fail_pages(%{state | pages_client: nil}, pid, :offline)}
   end
 
-  # the dedicated game connection died: clear the ref so the next reload
+  # a dedicated game connection died: clear its ref so the next reload
   # dials a fresh one rather than streaming on a dead client.
   def handle_info({:EXIT, pid, _reason}, %{backgammon_client: pid} = state) do
     {:noreply, %{state | backgammon_client: nil, backgammon_ref: nil, backgammon_buf: []}}
+  end
+
+  def handle_info({:EXIT, pid, _reason}, %{chess_client: pid} = state) do
+    {:noreply, %{state | chess_client: nil, chess_ref: nil, chess_buf: []}}
   end
 
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
@@ -2909,11 +2952,18 @@ defmodule HighWire.Timeline do
         state
       end
 
-    # The game backlog, also a live tail: the store is walked once per
+    # The game backlogs, also live tails: each store is walked once per
     # boot, then the same ref carries every challenge and move published
     # after it, so a game in flight here is never missed.
-    if Map.get(state, :backgammon_ref) == nil do
-      open_backgammon(state)
+    state =
+      if Map.get(state, :backgammon_ref) == nil do
+        open_backgammon(state)
+      else
+        state
+      end
+
+    if Map.get(state, :chess_ref) == nil do
+      open_chess(state)
     else
       state
     end
@@ -3020,16 +3070,19 @@ defmodule HighWire.Timeline do
   # run against hand-built state in tests, which may not carry the field.
   defp latest_open?(state), do: Map.get(state, :latest_ref) != nil
 
-  # The game backlog rides a connection of its own, for the reason the
-  # contact drain has one: a store-wide backgammon walk is ordered frames
-  # ahead of every window stream on a shared connection, and it would
-  # starve them past their timeout.
-  defp backgammon_endpoint(state) do
+  # The game backlogs ride a connection of their own, for the reason the
+  # contact drain has one: a store-wide game walk is ordered frames ahead
+  # of every window stream on a shared connection, and it would starve them
+  # past their timeout.
+  defp backgammon_endpoint(state), do: game_endpoint(state, :backgammon_client)
+  defp chess_endpoint(state), do: game_endpoint(state, :chess_client)
+
+  defp game_endpoint(state, field) do
     drain = Map.get(state, :drain_client)
 
     cond do
-      connected?(Map.get(state, :backgammon_client)) ->
-        {state.backgammon_client, state}
+      connected?(Map.get(state, field)) ->
+        {Map.get(state, field), state}
 
       # Tests, and any config that keeps its drains on one socket: reuse
       # the drain connection rather than the shared one, since the fault
@@ -3042,18 +3095,18 @@ defmodule HighWire.Timeline do
         {nil, state}
 
       true ->
-        dial_backgammon(state)
+        dial_game(state, field)
     end
   end
 
   defp connected?(pid), do: is_pid(pid) and Process.alive?(pid)
 
-  defp dial_backgammon(state) do
+  defp dial_game(state, field) do
     secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
 
     if File.exists?(secret) do
       case start_client(secret) do
-        {:ok, client} -> {client, %{state | backgammon_client: client}}
+        {:ok, client} -> {client, Map.put(state, field, client)}
         _ -> {state.client, state}
       end
     else
@@ -3061,16 +3114,23 @@ defmodule HighWire.Timeline do
     end
   end
 
-  # Best-effort teardown of the dedicated game connection, so a failed
-  # pass does not leak a half-open socket until Timeline restarts.
-  defp stop_backgammon_client(%{backgammon_client: pid} = state) when is_pid(pid) do
-    Client.stop(pid)
-    %{state | backgammon_client: nil}
-  catch
-    _, _ -> %{state | backgammon_client: nil}
-  end
+  # Best-effort teardown of a dedicated game connection, so a failed pass
+  # does not leak a half-open socket until Timeline restarts.
+  defp stop_backgammon_client(state), do: stop_game_client(state, :backgammon_client)
+  defp stop_chess_client(state), do: stop_game_client(state, :chess_client)
 
-  defp stop_backgammon_client(state), do: state
+  defp stop_game_client(state, field) do
+    case Map.get(state, field) do
+      pid when is_pid(pid) ->
+        Client.stop(pid)
+        Map.put(state, field, nil)
+
+      _ ->
+        state
+    end
+  catch
+    _, _ -> Map.put(state, field, nil)
+  end
 
   # The tail dropped: clear it and arm the reopen that recovery runs on.
   defp drop_latest(state) do
@@ -3780,6 +3840,7 @@ defmodule HighWire.Timeline do
     # board under a challenge or collapse a session into "sent a … message".
     # The gameroom reads them from the store instead.
     acc = Enum.reject(acc, &HighWire.Backgammon.Game.message?(content(&1)))
+    acc = Enum.reject(acc, &HighWire.Chess.Game.message?(content(&1)))
 
     by_key = Map.new(acc, fn msg -> {msg["key"], msg} end)
     # An edit revises the post named by revisionRoot/revisionBranch/root.
@@ -4589,6 +4650,38 @@ defmodule HighWire.Timeline do
 
     Enum.each(items, &HighWire.Backgammon.Store.observe/1)
     advance_cursor(@backgammon_type, items)
+
+    {:noreply, state}
+  end
+
+  defp open_chess(state) do
+    {client, state} = chess_endpoint(state)
+
+    params = live_by_type(@chess_type, MessageIndex.cursor(@chess_type))
+
+    with true <- is_pid(client),
+         {:ok, ref} <- Client.stream(client, ["messagesByType"], params, self()) do
+      %{state | chess_ref: ref, chess_buf: [], chess_snapshot?: true}
+    else
+      _ -> state
+    end
+  catch
+    _, _ -> state
+  end
+
+  defp chess_backfilled(state) do
+    if state.chess_buf == [] do
+      {:noreply, state}
+    else
+      chess_drained(%{state | chess_buf: []})
+    end
+  end
+
+  defp chess_drained(state) do
+    items = state.chess_buf
+
+    Enum.each(items, &HighWire.Chess.Store.observe/1)
+    advance_cursor(@chess_type, items)
 
     {:noreply, state}
   end

@@ -746,6 +746,16 @@ defmodule HighWire.TimelineTest do
           "root" => "%g1.sha256",
           "turn" => 1
         }),
+        msg("@alice", "%g3.sha256", then + 1_500, %{
+          "type" => "chess/challenge",
+          "game_id" => String.duplicate("cd", 32)
+        }),
+        msg("@alice", "%g4.sha256", then + 1_750, %{
+          "type" => "chess/move",
+          "game_id" => String.duplicate("cd", 32),
+          "root" => "%g3.sha256",
+          "ply" => 1
+        }),
         post("@alice", "%p1.sha256", then + 2_000)
       ]
 
@@ -1093,7 +1103,8 @@ defmodule HighWire.TimelineTest do
                {["messagesByType"], [%{"type" => "about", "live" => true, "old" => true}]},
                {["messagesByType"], [%{"type" => "delete", "live" => true, "old" => true}]},
                {["messagesByType"], [%{"type" => "post-edit", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "backgammon/*", "live" => true, "old" => true}]}
+               {["messagesByType"], [%{"type" => "backgammon/*", "live" => true, "old" => true}]},
+               {["messagesByType"], [%{"type" => "chess/*", "live" => true, "old" => true}]}
              ]
 
       # the shared connection carries only the per-feed windows

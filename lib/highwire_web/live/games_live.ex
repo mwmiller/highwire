@@ -1,10 +1,10 @@
 defmodule HighWireWeb.GamesLive do
   @moduledoc """
-  The gameroom: every backgammon game this node knows about, in flight or
-  finished, read from the local store rather than from feeds.
+  The gameroom: every game this node knows about — backgammon and chess, in
+  flight or finished — read from the local stores rather than from feeds.
 
-  Nothing here plays a game — it observes. The board is drawn from the fold's
-  snapshot, and the store pushes a change whenever a move lands, so an
+  Nothing here plays a game — it observes. Each board is drawn from its
+  fold's snapshot, and the stores push a change whenever a move lands, so an
   opponent's turn appears in a second instead of on a feed reload.
 
   Games that are waiting on you sort first: that is the only thing this page
@@ -14,12 +14,16 @@ defmodule HighWireWeb.GamesLive do
   use HighWireWeb, :live_view
 
   alias HighWire.Backgammon.Store
+  alias HighWire.Chess
   alias HighWire.SSB.{Identities, Profile}
-  alias HighWireWeb.Components.{Avatar, Board, Nav}
+  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav}
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Phoenix.PubSub.subscribe(HighWire.PubSub, Store.topic())
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(HighWire.PubSub, Store.topic())
+      Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Store.topic())
+    end
 
     self_id = self_id()
 
@@ -35,10 +39,14 @@ defmodule HighWireWeb.GamesLive do
     {:noreply, assign(socket, :games, games(socket.assigns.self_id))}
   end
 
+  def handle_info({:chess, _game_id}, socket) do
+    {:noreply, assign(socket, :games, games(socket.assigns.self_id))}
+  end
+
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp games(self_id) do
-    Store.games()
+    (Store.games() ++ Chess.Store.games())
     |> Enum.map(&put_live_status(&1, self_id))
     |> Enum.sort_by(fn game -> {rank(game), -game.updated_at} end)
   end
@@ -71,7 +79,7 @@ defmodule HighWireWeb.GamesLive do
         <h1 class="sr-only">Games</h1>
         <div class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint">Games</div>
         <p class="px-4 pb-4 text-xs leading-relaxed text-dim">
-          Backgammon games this node has seen. A game appears once its challenge reaches you.
+          Backgammon and chess games this node has seen. A game appears once its challenge reaches you.
         </p>
         <Nav.rail_link navigate={~p"/"}>Timeline</Nav.rail_link>
       </Nav.rail>
@@ -120,16 +128,22 @@ defmodule HighWireWeb.GamesLive do
         </span>
       </div>
 
-      <Board.board position={@game.position} compact />
+      <Board.board :if={@game.kind == :backgammon} position={@game.position} compact />
+      <ChessBoard.board :if={@game.kind == :chess} board={@game.board} compact />
 
       <div class="mt-2 flex items-center justify-between text-[10px] text-faint">
-        <span>turn {@game.turn_count}</span>
+        <span>{counter(@game)}</span>
         <span :if={@game.last_note not in [nil, ""]} class="truncate italic">{@game.last_note}</span>
         <span>{phase_label(@game)}</span>
       </div>
     </.link>
     """
   end
+
+  defp counter(%{kind: :chess, turn_count: plies}) when plies > 0,
+    do: "#{div(plies + 1, 2)}. move"
+
+  defp counter(%{turn_count: turns}), do: "turn #{turns}"
 
   defp chip(%{status: :finished}), do: "bg-raised text-dim"
   defp chip(%{status: :broken}), do: "bg-raised text-bad"
@@ -145,12 +159,35 @@ defmodule HighWireWeb.GamesLive do
 
   defp label(%{status: :withdrawn}), do: "withdrawn"
   defp label(%{status: :broken}), do: "unverified"
+  # A chess invitation waits on the other player, not on a roll of yours.
+  defp label(%{kind: :chess, phase: :opening}), do: "waiting"
   defp label(%{yours?: true, phase: :opening}), do: "your roll"
   defp label(%{yours?: true}), do: "your move"
   defp label(%{phase: :opening}), do: "opening"
   defp label(%{mover: mover}), do: "#{name(mover)} to move"
 
-  defp phase_label(%{phase: :finished}), do: "finished"
+  defp phase_label(%{phase: :finished} = game), do: chess_end(game, "finished")
+  defp phase_label(%{kind: :chess, phase: :opening}), do: "waiting"
   defp phase_label(%{phase: :opening}), do: "opening roll"
   defp phase_label(_), do: "playing"
+
+  # A chess game that is over says how: the verdict is the engine's, not a
+  # sentence someone typed.
+  defp chess_end(%{kind: :chess} = game, fallback) do
+    case game do
+      %{status: :broken} -> "unverified"
+      %{verdict: {:checkmate, _}} -> "checkmate"
+      %{verdict: :stalemate} -> "stalemate"
+      %{verdict: {:draw, reason}} -> draw_reason(reason)
+      %{winner: %{reason: :resign}} -> "resigned"
+      _ -> fallback
+    end
+  end
+
+  defp chess_end(_game, fallback), do: fallback
+
+  defp draw_reason(:fifty_moves), do: "fifty-move draw"
+  defp draw_reason(:insufficient_material), do: "insufficient material"
+  defp draw_reason(:repetition), do: "draw by repetition"
+  defp draw_reason(_), do: "draw"
 end

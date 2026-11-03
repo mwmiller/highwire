@@ -4,9 +4,11 @@ defmodule HighWireWeb.GamesLiveTest do
   import Phoenix.LiveViewTest
 
   alias HighWire.Backgammon.{Chain, Game, Store}
+  alias HighWire.Chess
 
   setup do
     Store.clear()
+    Chess.Store.clear()
     :ok
   end
 
@@ -73,6 +75,66 @@ defmodule HighWireWeb.GamesLiveTest do
     assert html =~ "History"
     assert html =~ "No turns played yet"
     assert html =~ "mover&#39;s view"
+  end
+
+  defp seed_chess do
+    game_id = Chess.Game.new_id()
+    challenger = "@challenger.ed25519"
+    accepter = "@accepter.ed25519"
+
+    Chess.Store.ingest(envelope(challenger, Chess.Game.challenge(game_id, "white"), "%c1.sha256"))
+    Chess.Store.ingest(envelope(accepter, Chess.Game.accept(game_id, "%c1.sha256"), "%c2.sha256"))
+
+    Chess.Store.ingest(
+      envelope(challenger, Chess.Game.move(game_id, "%c1.sha256", 1, "e2e4"), "%c3.sha256")
+    )
+
+    Chess.Store.ingest(
+      envelope(accepter, Chess.Game.move(game_id, "%c1.sha256", 2, "e7e5"), "%c4.sha256")
+    )
+
+    game_id
+  end
+
+  test "a chess game sits in the same gameroom", %{conn: conn} do
+    seed_chess()
+
+    {:ok, _view, html} = live(conn, "/games")
+
+    refute html =~ "No games yet"
+    assert html =~ "1. move"
+  end
+
+  test "a chess game opens on its own board with its moves", %{conn: conn} do
+    game_id = seed_chess()
+
+    {:ok, _view, html} = live(conn, "/games/#{game_id}")
+
+    assert html =~ "Moves"
+    assert html =~ "e4"
+    assert html =~ "e5"
+    assert html =~ "in play"
+    # The board draws pieces, both sides, from the folded squares.
+    assert html =~ "♙"
+    assert html =~ "♟"
+  end
+
+  test "a chess game that does not verify says so", %{conn: conn} do
+    game_id = Chess.Game.new_id()
+    challenger = "@challenger.ed25519"
+    accepter = "@accepter.ed25519"
+
+    Chess.Store.ingest(envelope(challenger, Chess.Game.challenge(game_id, "white"), "%d1.sha256"))
+    Chess.Store.ingest(envelope(accepter, Chess.Game.accept(game_id, "%d1.sha256"), "%d2.sha256"))
+
+    Chess.Store.ingest(
+      envelope(accepter, Chess.Game.move(game_id, "%d1.sha256", 1, "e7e5"), "%d3.sha256")
+    )
+
+    {:ok, _view, html} = live(conn, "/games/#{game_id}")
+
+    assert html =~ "does not verify"
+    assert html =~ "out of turn"
   end
 
   test "an unknown game says so", %{conn: conn} do
