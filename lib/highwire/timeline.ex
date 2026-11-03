@@ -805,14 +805,26 @@ defmodule HighWire.Timeline do
       contacts_primed?: false,
       contact_ref: nil,
       contact_buf: [],
-      contact_msgs: [],
+      # What the store-wide contact drain is allowed to keep. A big node
+      # holds hundreds of thousands of follow edits, and the first version
+      # kept every one of them — here, again inside the collapse, and a
+      # third time in the Suggester — so the client's memory tracked the
+      # node's whole contact history rather than what the reader sees.
+      # Only two things outlive a fold: the keys already folded (to skip
+      # converged history when a drain re-runs) and the follow edges the
+      # rail ranks against, which are one deduplicated pair per
+      # relationship.
+      contact_keys: MapSet.new(),
+      contact_edges: MapSet.new(),
       # The store-wide contact drain folds into one row per author per
       # direction per spate. That fold is the single most expensive step
       # over the 200k+ edits the drain carries, and running it inside
       # every payload rebuilt it from scratch and held the Timeline — so
       # every mount queued behind it. Kept folded here instead: the rows
       # are computed when edits land (and only for the directions those
-      # edits touched), and the payload merges the finished rows.
+      # edits touched), and the payload merges the finished rows. The
+      # spates carry their own time bounds, so a later edit merges into
+      # the spate it belongs to without the messages that formed it.
       collapsed_contacts: %{by_group: %{}, rows: %{}},
       about_ref: nil,
       # True while the about tail's backlog is still arriving: a name
@@ -1037,14 +1049,14 @@ defmodule HighWire.Timeline do
     # read the store-wide drain's collapse and drop the window's own
     # contact messages, so without this fold the row would wait out the
     # drain's next pass — up to @drain_refresh_ms, and only while a tab
-    # is open to heartbeat it. The envelope joins contact_msgs so the
-    # drain's later delivery of the same message is filtered as known
-    # and folds nothing twice.
+    # is open to heartbeat it. Its key joins contact_keys so the drain's
+    # later delivery of the same message is filtered as known.
     state =
       if contact?(envelope) do
         state = %{
           state
-          | contact_msgs: [envelope | state.contact_msgs],
+          | contact_keys: MapSet.put(state.contact_keys, envelope["key"]),
+            contact_edges: fold_edges(state.contact_edges, [envelope]),
             collapsed_contacts: fold_contacts(state.collapsed_contacts, [envelope])
         }
 
@@ -2155,15 +2167,7 @@ defmodule HighWire.Timeline do
     # matters most: following a suggested feed should regenerate the
     # list). Hand it off-process only once the contact graph is loaded —
     # before that there is nothing to rank against.
-    if state.contact_msgs != [] do
-      Suggester.cast_inputs(
-        state.contact_msgs,
-        state.follows,
-        state.self_id,
-        state.about_ids,
-        state.blocked
-      )
-    end
+    cast_contacts(state)
 
     # The rail's contacts are drawn by HighWire.Contacts, which re-draws
     # only when this list actually moves — so feed it the candidates.
@@ -3418,29 +3422,21 @@ defmodule HighWire.Timeline do
   # the rows show now instead of on the next reload; when feeds are
   # still streaming, their own finalize pass picks the messages up.
   defp contact_drained(state) do
-    known = MapSet.new(state.contact_msgs, & &1["key"])
-    fresh = Enum.reject(state.contact_buf, &MapSet.member?(known, &1["key"]))
+    fresh = Enum.reject(state.contact_buf, &MapSet.member?(state.contact_keys, &1["key"]))
 
     state = %{
       state
       | contact_ref: nil,
         contact_buf: [],
-        contact_msgs: state.contact_msgs ++ fresh,
+        contact_keys: Enum.reduce(fresh, state.contact_keys, &MapSet.put(&2, &1["key"])),
+        contact_edges: fold_edges(state.contact_edges, fresh),
         collapsed_contacts: fold_contacts(state.collapsed_contacts, fresh),
         last_drain_at: System.monotonic_time(:millisecond)
     }
 
     # A refilled store-wide contact graph is a new ranking input. Hand it
     # to the Suggester off-process; Timeline never ranks inline.
-    if state.contact_msgs != [] do
-      Suggester.cast_inputs(
-        state.contact_msgs,
-        state.follows,
-        state.self_id,
-        state.about_ids,
-        state.blocked
-      )
-    end
+    cast_contacts(state)
 
     if fresh != [] and state.status == :ok and map_size(state.pending) == 0 do
       {:noreply, finalize(state)}
@@ -3454,15 +3450,7 @@ defmodule HighWire.Timeline do
   # list: one pass answers until the next cycle's, and a feed whose
   # about arrives later joins the set on the pass that sees it.
   defp about_drained(state) do
-    if state.contact_msgs != [] do
-      Suggester.cast_inputs(
-        state.contact_msgs,
-        state.follows,
-        state.self_id,
-        state.about_ids,
-        state.blocked
-      )
-    end
+    cast_contacts(state)
 
     {:noreply, refresh_names(state)}
   end
@@ -3652,7 +3640,7 @@ defmodule HighWire.Timeline do
       |> List.flatten()
       |> Enum.filter(&MapSet.member?(visible, &1.author))
 
-    anchors = Enum.map(contacts, & &1.anchor)
+    anchors = Enum.map(contacts, &row_msg/1)
     acc = Enum.uniq_by(state.acc ++ anchors, & &1["key"])
 
     reply_counts = reply_counts(acc)
@@ -4087,6 +4075,56 @@ defmodule HighWire.Timeline do
   # store holds, and folding all of them into a single row pasted the
   # author's whole graph beside a block made this year: "blocked … +199
   # more".
+  # The rail ranks against the follows the store holds. `Suggest` wants
+  # them as contact messages, but the graph it builds keeps only the
+  # positive edges and discards duplicates — so one message per
+  # relationship says the same thing as the store's whole history at a
+  # fraction of the memory, and it is the same list every cast, which is
+  # what lets the Suggester recognise unchanged inputs.
+  defp cast_contacts(state) do
+    edges = Map.get(state, :contact_edges, MapSet.new())
+
+    if MapSet.size(edges) > 0 do
+      Suggester.cast_inputs(
+        edge_msgs(edges),
+        state.follows,
+        state.self_id,
+        state.about_ids,
+        state.blocked
+      )
+    end
+  end
+
+  defp edge_msgs(edges) do
+    edges
+    |> Enum.sort()
+    |> Enum.map(fn {from, to} ->
+      %{
+        "value" => %{
+          "author" => from,
+          "content" => %{"type" => "contact", "contact" => to, "following" => true}
+        }
+      }
+    end)
+  end
+
+  # Only a positive follow is an edge: an unfollow or a block never
+  # endorses, and `Suggest` reads nothing else from the message.
+  defp fold_edges(edges, msgs) do
+    Enum.reduce(msgs, edges, fn msg, acc ->
+      value = value_of(msg) || %{}
+      c = content(msg)
+
+      with true <- c["following"] == true,
+           from when is_binary(from) <- value["author"],
+           to when is_binary(to) <- c["contact"] do
+        MapSet.put(acc, {from, to})
+      else
+        _ -> acc
+      end
+    end)
+  end
+
   # Fold a fresh batch of contact edits into the stored collapse. Only
   # the directions the batch touched are re-split; every other direction
   # keeps the rows it already had, so a store-wide drain folds each
@@ -4098,12 +4136,60 @@ defmodule HighWire.Timeline do
     {groups, rows} =
       fresh
       |> group_contacts()
-      |> Enum.reduce({groups, rows}, fn {{_author, _action} = group, msgs}, {g, r} ->
-        merged = Map.get(g, group, []) ++ msgs
-        {Map.put(g, group, merged), Map.put(r, group, collapse_group(group, merged))}
+      |> Enum.reduce({groups, rows}, fn {{author, action} = group, msgs}, {g, r} ->
+        spates = merge_spates(Map.get(g, group, []), msgs, author, action)
+        {Map.put(g, group, spates), Map.put(r, group, spates)}
       end)
 
     %{by_group: groups, rows: rows}
+  end
+
+  # A stored spate is the row an edit renders into, the bounds of the
+  # edits it covers, and the feeds it named. Keeping the bounds instead
+  # of the messages lets a later edit join the spate it belongs to: the
+  # fold no longer re-reads a direction's whole history, and it no longer
+  # holds one copy of the store's contact messages per fold.
+  defp merge_spates(existing, msgs, author, action) do
+    added =
+      msgs
+      |> Enum.map(fn msg -> {bump_ts(msg), msg} end)
+      |> Enum.sort_by(&elem(&1, 0), :desc)
+      |> Enum.map(fn {ts, msg} ->
+        %{
+          key: msg["key"],
+          anchor_ts: ts,
+          author: author,
+          action: action,
+          contacts: [content(msg)["contact"]],
+          oldest_ts: ts
+        }
+      end)
+
+    (existing ++ added)
+    |> Enum.sort_by(& &1.anchor_ts, :desc)
+    |> join_spates()
+  end
+
+  # Adjacent spates closer than the cooloff are one line — the same rule
+  # spates/2 applies, measured from the newer spate's anchor.
+  defp join_spates([]), do: []
+
+  defp join_spates([first | rest]) do
+    rest
+    |> Enum.reduce([first], fn spate, [prev | acc] ->
+      if prev.anchor_ts - spate.oldest_ts <= @contact_cooloff_ms do
+        merged = %{
+          prev
+          | oldest_ts: spate.oldest_ts,
+            contacts: Enum.uniq(prev.contacts ++ spate.contacts)
+        }
+
+        [merged | acc]
+      else
+        [spate, prev | acc]
+      end
+    end)
+    |> Enum.reverse()
   end
 
   # Fold raw contact edits into one entry per author per direction per
@@ -4139,25 +4225,43 @@ defmodule HighWire.Timeline do
         |> Enum.uniq()
 
       %{
-        anchor: anchor,
+        key: anchor["key"],
         anchor_ts: anchor_ts,
         author: author,
         action: action,
-        contacts: contacts
+        contacts: contacts,
+        oldest_ts: spate |> List.last() |> elem(0)
       }
     end)
+  end
+
+  # The message a stored row stands for. A row keeps its anchor's key, its
+  # time and whichever feed it named — the four things the row renders —
+  # rather than the envelope itself, which carried a signature and chain
+  # fields no view reads and cost most of a kilobyte per row over the
+  # node's whole contact history.
+  defp row_msg(%{key: key, anchor_ts: ts, author: author, contacts: contacts}) do
+    %{
+      "key" => key,
+      "timestamp" => ts,
+      "value" => %{
+        "author" => author,
+        "timestamp" => ts,
+        "content" => %{"type" => "contact", "contact" => List.first(contacts)}
+      }
+    }
   end
 
   # One collapsed spate as a feed row. Kept apart from the fold so a
   # stored collapse can be rendered into the payload without re-reading
   # the messages it came from.
   defp contact_row(
-         %{anchor: anchor, anchor_ts: anchor_ts, action: action, contacts: contacts},
+         %{anchor_ts: anchor_ts, action: action, contacts: contacts} = row,
          self_id
        ) do
-    author = anchor["value"]["author"]
+    author = row.author
 
-    build_entry(:contact, anchor, anchor_ts, [author], 0, 0, [],
+    build_entry(:contact, row_msg(row), anchor_ts, [author], 0, 0, [],
       self_id: self_id,
       rooted: true
     )

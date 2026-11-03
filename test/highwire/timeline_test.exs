@@ -779,7 +779,8 @@ defmodule HighWire.TimelineTest do
           contacts_primed?: false,
           contact_ref: nil,
           contact_buf: [],
-          contact_msgs: [],
+          contact_keys: MapSet.new(),
+          contact_edges: MapSet.new(),
           collapsed_contacts: %{by_group: %{}, rows: %{}},
           about_ref: nil,
           about_ids: MapSet.new(),
@@ -915,7 +916,8 @@ defmodule HighWire.TimelineTest do
           client: start_supervised!(FakeClient),
           contact_ref: :contact_ref,
           contact_buf: [],
-          contact_msgs: [],
+          contact_keys: MapSet.new(),
+          contact_edges: MapSet.new(),
           collapsed_contacts: %{by_group: %{}, rows: %{}},
           about_ref: nil,
           about_ids: MapSet.new(),
@@ -988,11 +990,11 @@ defmodule HighWire.TimelineTest do
       # then the drain lands
       {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:item, st._follow}}, st)
       assert st.contact_buf == [st._follow]
-      assert st.contact_msgs == []
+      refute MapSet.member?(st.contact_keys, st._follow["key"])
 
       {:noreply, st} = Timeline.handle_info({Client, :contact_ref, :done}, st)
       assert st.contact_ref == nil
-      assert st.contact_msgs == [st._follow]
+      assert MapSet.member?(st.contact_keys, st._follow["key"])
 
       # the rebuild carries follow rows AND the window it already had
       assert Enum.any?(st.messages.feed, &(&1.kind == :contact))
@@ -1031,7 +1033,7 @@ defmodule HighWire.TimelineTest do
       {:noreply, st} = Timeline.handle_info({Client, :contact_ref, :done}, st)
 
       # merged, but no rebuild while the feed window is still streaming
-      assert st.contact_msgs == [st._follow]
+      assert MapSet.member?(st.contact_keys, st._follow["key"])
       assert st.messages.feed == []
 
       # the feed's finalize pass picks the drain up
@@ -1041,34 +1043,135 @@ defmodule HighWire.TimelineTest do
     end
 
     test "a repeat of an already-known contact neither accumulates nor rebroadcasts" do
+      st_follow =
+        msg("@a.ed25519", "%c=.sha256", 1_000, %{
+          "type" => "contact",
+          "contact" => "@b=.ed25519",
+          "following" => true
+        })
+
+      edges = MapSet.new([{"@a.ed25519", "@b=.ed25519"}])
+
       st =
         drain_state(
           status: :ok,
           pending: %{},
-          contact_msgs: [
-            st_follow =
-              msg("@a.ed25519", "%c=.sha256", 1_000, %{
-                "type" => "contact",
-                "contact" => "@b=.ed25519"
-              })
-          ],
+          contact_keys: MapSet.new([st_follow["key"]]),
+          contact_edges: edges,
           messages: %{feed: [:untouched], profiles: %{}}
         )
 
       {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:item, st_follow}}, st)
       {:noreply, st} = Timeline.handle_info({Client, :contact_ref, :done}, st)
 
-      assert st.contact_msgs == [st_follow]
+      assert st.contact_keys == MapSet.new([st_follow["key"]])
+      assert st.contact_edges == edges
       assert st.messages.feed == [:untouched]
     end
 
+    # A spate outlives the messages that formed it. The fold keeps the
+    # row and the bounds of the edits behind it, not a copy of every
+    # contact edit the node holds — so these cover the merge that used to
+    # be a re-read of the direction's whole history.
+    # Each pass is a fresh connection: the drain closes when it ends and
+    # the next reload opens another.
+    defp drain_contacts(st, msgs) do
+      st = %{st | contact_ref: :contact_ref}
+
+      Enum.reduce(msgs, st, fn m, st ->
+        {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:item, m}}, st)
+        st
+      end)
+      |> then(fn st ->
+        {:noreply, st} = Timeline.handle_info({Client, :contact_ref, :done}, st)
+        st
+      end)
+    end
+
+    defp followed_row(st, author \\ "@me.ed25519"),
+      do: st.collapsed_contacts.rows[{author, :followed}]
+
+    defp follow(author, key, ts, contact) do
+      msg(author, key, ts, %{"type" => "contact", "contact" => contact, "following" => true})
+    end
+
+    test "a later drain joins the spate it belongs to" do
+      st =
+        drain_contacts(drain_state(status: :ok, pending: %{}), [
+          follow("@me.ed25519", "%k1.sha256", 10_000, "@b=.ed25519")
+        ])
+
+      assert [%{contacts: ["@b=.ed25519"], anchor_ts: 10_000}] = followed_row(st)
+
+      st =
+        drain_contacts(st, [follow("@me.ed25519", "%k2.sha256", 70_000, "@c=.ed25519")])
+
+      # one line, newest edit named first: the same row a single fold
+      # over both messages produces
+      assert [%{contacts: ["@c=.ed25519", "@b=.ed25519"], anchor_ts: 70_000}] = followed_row(st)
+    end
+
+    test "an edit landing in the gap joins the line above it, not the one below" do
+      st =
+        drain_contacts(drain_state(status: :ok, pending: %{}), [
+          follow("@me.ed25519", "%g1.sha256", 10_000, "@b=.ed25519"),
+          follow("@me.ed25519", "%g2.sha256", 10_000 + :timer.minutes(30), "@c=.ed25519")
+        ])
+
+      # half an hour apart is past the cooloff, so the drain reads as
+      # two sittings
+      assert [_, _] = followed_row(st)
+
+      st =
+        drain_contacts(st, [
+          follow("@me.ed25519", "%g3.sha256", 10_000 + :timer.minutes(25), "@d=.ed25519")
+        ])
+
+      # A spate is measured from its newest edit, so this one is inside
+      # the newer sitting and years clear of the older one: one line, in
+      # the same place a single fold over all three would put it.
+      assert [%{contacts: ["@c=.ed25519", "@d=.ed25519"]}, %{contacts: ["@b=.ed25519"]}] =
+               followed_row(st)
+    end
+
+    test "an edit past the cooloff opens a row of its own" do
+      st =
+        drain_contacts(drain_state(status: :ok, pending: %{}), [
+          follow("@me.ed25519", "%o1.sha256", 10_000, "@b=.ed25519")
+        ])
+
+      st =
+        drain_contacts(st, [follow("@me.ed25519", "%o2.sha256", 10_000_000, "@c=.ed25519")])
+
+      assert [%{contacts: ["@c=.ed25519"]}, %{contacts: ["@b=.ed25519"]}] = followed_row(st)
+    end
+
+    test "directions stay apart: a later follow never joins a block" do
+      st =
+        drain_contacts(drain_state(status: :ok, pending: %{}), [
+          msg("@me.ed25519", "%d1.sha256", 10_000, %{
+            "type" => "contact",
+            "contact" => "@b=.ed25519",
+            "blocking" => true
+          })
+        ])
+
+      st =
+        drain_contacts(st, [follow("@me.ed25519", "%d2.sha256", 10_500, "@c=.ed25519")])
+
+      assert [%{contacts: ["@b=.ed25519"]}] =
+               st.collapsed_contacts.rows[{"@me.ed25519", :blocked}]
+
+      assert [%{contacts: ["@c=.ed25519"]}] = followed_row(st)
+    end
+
     test "a stream error drops the buffer and keeps what already merged" do
-      st = drain_state(contact_msgs: ["kept"], contact_buf: ["partial"])
+      st = drain_state(contact_keys: MapSet.new(["kept"]), contact_buf: ["partial"])
 
       {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:error, :closed}}, st)
       assert st.contact_ref == nil
       assert st.contact_buf == []
-      assert st.contact_msgs == ["kept"]
+      assert st.contact_keys == MapSet.new(["kept"])
     end
 
     test "a reload opens the drain alongside the feed window" do
@@ -1156,12 +1259,17 @@ defmodule HighWire.TimelineTest do
       dedicated =
         start_supervised!(%{id: :fake_error_client, start: {FakeClient, :start_link, [nil]}})
 
-      st = drain_state(contact_msgs: ["kept"], contact_buf: ["partial"], drain_client: dedicated)
+      st =
+        drain_state(
+          contact_keys: MapSet.new(["kept"]),
+          contact_buf: ["partial"],
+          drain_client: dedicated
+        )
 
       {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:error, :closed}}, st)
       assert st.contact_ref == nil
       assert st.contact_buf == []
-      assert st.contact_msgs == ["kept"]
+      assert st.contact_keys == MapSet.new(["kept"])
       assert st.drain_client == nil
     end
 
@@ -1696,7 +1804,8 @@ defmodule HighWire.TimelineTest do
         pages_client: nil,
         self_id: "@me.ed25519",
         follows: [],
-        contact_msgs: [],
+        contact_keys: MapSet.new(),
+        contact_edges: MapSet.new(),
         collapsed_contacts: %{by_group: %{}, rows: %{}},
         contacts_ref: nil,
         contacts_primed?: true,
@@ -2405,7 +2514,8 @@ defmodule HighWire.TimelineTest do
         client: client,
         self_id: "@me=.ed25519",
         follows: [],
-        contact_msgs: [],
+        contact_keys: MapSet.new(),
+        contact_edges: MapSet.new(),
         collapsed_contacts: %{by_group: %{}, rows: %{}},
         acc: [],
         messages: %{profiles: %{}},
@@ -2443,7 +2553,8 @@ defmodule HighWire.TimelineTest do
         follows: [],
         suggestions: [%{"id" => "@ktorn=.ed25519", "followers" => 7}],
         active: %{},
-        contact_msgs: [],
+        contact_keys: MapSet.new(),
+        contact_edges: MapSet.new(),
         collapsed_contacts: %{by_group: %{}, rows: %{}},
         acc: [],
         messages: %{profiles: %{}},
@@ -2487,7 +2598,8 @@ defmodule HighWire.TimelineTest do
 
       # The envelope is filed as known, so the drain's later delivery of
       # the same message folds nothing twice.
-      assert [%{"key" => ^key, "value" => %{"content" => ^follow}} | _] = st2.contact_msgs
+      assert MapSet.member?(st2.contact_keys, key)
+      assert MapSet.member?(st2.contact_edges, {"@me=.ed25519", "@ktorn=.ed25519"})
     end
 
     # The same fold, the other edges. A block retracts the follow with
@@ -2505,7 +2617,8 @@ defmodule HighWire.TimelineTest do
         blocked: [],
         suggestions: [%{"id" => peer, "followers" => 7}],
         active: %{},
-        contact_msgs: [],
+        contact_keys: MapSet.new(),
+        contact_edges: MapSet.new(),
         collapsed_contacts: %{by_group: %{}, rows: %{}},
         acc: [],
         messages: %{profiles: %{}},
@@ -2590,7 +2703,8 @@ defmodule HighWire.TimelineTest do
         reload_timer: nil,
         active: %{self() => make_ref()},
         contact_ref: nil,
-        contact_msgs: [],
+        contact_keys: MapSet.new(),
+        contact_edges: MapSet.new(),
         collapsed_contacts: %{by_group: %{}, rows: %{}},
         contact_buf: [],
         about_ref: nil,
