@@ -22,6 +22,8 @@ defmodule HighWire.Chess.Store do
   require Logger
 
   alias HighWire.Chess.{Fold, Game, Reader}
+  alias HighWire.Games.Catalog
+  alias Phoenix.PubSub
 
   @table :highwire_chess
   @topic "chess"
@@ -172,8 +174,8 @@ defmodule HighWire.Chess.Store do
   end
 
   defp announce(game_id) do
-    HighWire.Games.Catalog.touch(:chess, game_id)
-    Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {:chess, game_id})
+    Catalog.touch(:chess, game_id)
+    PubSub.broadcast(HighWire.PubSub, @topic, {:chess, game_id})
   end
 
   # -- filing ------------------------------------------------------------
@@ -281,7 +283,7 @@ defmodule HighWire.Chess.Store do
     |> :dets.match_object({{:game, :_}, :_})
     |> Enum.map(fn {_key, row} -> {row.updated_at || 0, row.game_id} end)
     |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.each(fn {_ts, game_id} -> HighWire.Games.Catalog.touch(:chess, game_id) end)
+    |> Enum.each(fn {_ts, game_id} -> Catalog.touch(:chess, game_id) end)
   rescue
     ArgumentError -> :ok
   end

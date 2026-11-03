@@ -162,31 +162,7 @@ defmodule HighWire.Chess.Fold do
   defp finish(folded, players, accepter) do
     pos = folded.pos
     verdict = Engine.status(pos)
-    resigned = List.last(folded.history) |> then(&(&1 && &1.type == "resign" && &1))
-
-    {phase, winner, mover} =
-      cond do
-        folded.error != :none ->
-          {:finished, nil, nil}
-
-        resigned ->
-          {:finished, %{player: other_player(players, resigned.player), reason: :resign}, nil}
-
-        match?({:checkmate, _}, verdict) ->
-          {:finished, %{player: players[verdict_color(verdict)], reason: :checkmate}, nil}
-
-        verdict == :stalemate ->
-          {:finished, nil, nil}
-
-        match?({:draw, _}, verdict) ->
-          {:finished, nil, nil}
-
-        accepter == nil ->
-          {:opening, nil, players.white}
-
-        true ->
-          {:playing, nil, players[pos.turn]}
-      end
+    {phase, winner, mover} = ending(folded, players, accepter, verdict)
 
     %{
       # The whole position travels with the snapshot: the page that plays a
@@ -208,7 +184,40 @@ defmodule HighWire.Chess.Fold do
     }
   end
 
-  defp verdict_color({:checkmate, color}), do: color
+  # Broken first — nothing else about a game that does not verify can be
+  # trusted — then whatever the position has decided, and otherwise a game
+  # still being played.
+  defp ending(folded, players, accepter, verdict) do
+    if folded.error != :none do
+      {:finished, nil, nil}
+    else
+      decided(players, verdict, last_resign(folded)) || live(players, folded, accepter)
+    end
+  end
+
+  # The terminal verdicts, or nil while the game is still on. A resignation
+  # outranks a mate the board also shows: the player who gave up chose it.
+  defp decided(players, _verdict, %{player: player}) do
+    {:finished, %{player: other_player(players, player), reason: :resign}, nil}
+  end
+
+  defp decided(players, {:checkmate, color}, _) do
+    {:finished, %{player: players[color], reason: :checkmate}, nil}
+  end
+
+  defp decided(_players, :stalemate, _), do: {:finished, nil, nil}
+  defp decided(_players, {:draw, _}, _), do: {:finished, nil, nil}
+  defp decided(_players, _verdict, _), do: nil
+
+  defp last_resign(folded) do
+    case List.last(folded.history) do
+      %{type: "resign"} = entry -> entry
+      _ -> nil
+    end
+  end
+
+  defp live(players, _folded, nil), do: {:opening, nil, players.white}
+  defp live(players, folded, _accepter), do: {:playing, nil, players[folded.pos.turn]}
 
   defp other_player(players, id) do
     if players.white == id, do: players.black, else: players.white

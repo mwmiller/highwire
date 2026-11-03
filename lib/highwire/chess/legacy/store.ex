@@ -20,6 +20,8 @@ defmodule HighWire.Chess.Legacy.Store do
   require Logger
 
   alias HighWire.Chess.Legacy
+  alias HighWire.Games.Catalog
+  alias Phoenix.PubSub
 
   @table :highwire_chess_legacy
   @topic "chess_legacy"
@@ -159,7 +161,7 @@ defmodule HighWire.Chess.Legacy.Store do
     |> :dets.match_object({{:game, :_}, :_})
     |> Enum.map(fn {_key, row} -> {updated_at(row.rows), row.game_id} end)
     |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.each(fn {_ts, game_id} -> HighWire.Games.Catalog.touch(:chess_legacy, game_id) end)
+    |> Enum.each(fn {_ts, game_id} -> Catalog.touch(:chess_legacy, game_id) end)
   rescue
     ArgumentError -> :ok
   end
@@ -172,8 +174,8 @@ defmodule HighWire.Chess.Legacy.Store do
   end
 
   defp announce(game_id) do
-    HighWire.Games.Catalog.touch(:chess_legacy, game_id)
-    Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {:chess_legacy, game_id})
+    Catalog.touch(:chess_legacy, game_id)
+    PubSub.broadcast(HighWire.PubSub, @topic, {:chess_legacy, game_id})
   rescue
     _ -> :ok
   end

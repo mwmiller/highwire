@@ -216,6 +216,9 @@ defmodule HighWire.Chess.Engine do
   defp pawn_step(:white), do: 1
   defp pawn_step(:black), do: -1
 
+  defp pawn_start(:white), do: 1
+  defp pawn_start(:black), do: 6
+
   @doc "Every legal move in `pos`, as coordinate strings."
   @spec legal_moves(t()) :: [binary()]
   def legal_moves(pos), do: pos |> legal() |> Enum.map(&uci/1)
@@ -288,32 +291,8 @@ defmodule HighWire.Chess.Engine do
     {f, r} = coords(square)
     step = pawn_step(color)
     last = if color == :white, do: 7, else: 0
-    start = if color == :white, do: 1, else: 6
 
-    push =
-      case shift_sq(f, r + step) do
-        nil -> []
-        ahead -> if Map.has_key?(board, ahead), do: [], else: [ahead]
-      end
-
-    double =
-      if r == start and push != [] do
-        case shift_sq(f, r + 2 * step) do
-          nil -> []
-          two -> if Map.has_key?(board, two), do: [], else: [two]
-        end
-      else
-        []
-      end
-
-    captures =
-      for df <- [-1, 1],
-          to = shift_sq(f + df, r + step),
-          to != nil,
-          capturable?(board, to, color, ep),
-          do: to
-
-    targets = push ++ double ++ captures
+    targets = pawn_pushes(board, f, r, step, color) ++ pawn_captures(board, f, r, step, color, ep)
     promoting = Enum.filter(targets, fn to -> elem(coords(to), 1) == last end)
 
     for to <- targets, promo <- promos(to, promoting) do
@@ -380,6 +359,28 @@ defmodule HighWire.Chess.Engine do
     end
   end
 
+  # Forward onto an empty square, and twice over from the starting rank.
+  defp pawn_pushes(board, f, r, step, color) do
+    ahead = shift_sq(f, r + step)
+
+    if ahead && not Map.has_key?(board, ahead),
+      do: [ahead | pawn_double(board, f, r, step, color)],
+      else: []
+  end
+
+  defp pawn_double(board, f, r, step, color) do
+    two = if r == pawn_start(color), do: shift_sq(f, r + 2 * step)
+    if two && not Map.has_key?(board, two), do: [two], else: []
+  end
+
+  defp pawn_captures(board, f, r, step, color, ep) do
+    for df <- [-1, 1],
+        to = shift_sq(f + df, r + step),
+        to != nil,
+        capturable?(board, to, color, ep),
+        do: to
+  end
+
   defp hop(board, square, color, offsets) do
     for {df, dr} <- offsets,
         to = shift(square, df, dr),
@@ -426,41 +427,27 @@ defmodule HighWire.Chess.Engine do
   # Castling: rights still standing, the squares between empty, and the king
   # neither in check, crossing an attacked square, nor landing on one.
   defp castling(pos, color) do
-    {home, rook_k, rook_q, right_k, right_q} =
-      case color do
-        :white -> {"e1", "h1", "a1", :wk, :wq}
-        :black -> {"e8", "h8", "a8", :bk, :bq}
-      end
+    {home, rook_k, rook_q, right_k, right_q} = castle_squares(color)
 
-    cond do
-      Map.get(pos.board, home) != {:king, color} ->
-        []
+    if Map.get(pos.board, home) != {:king, color} or in_check?(pos, color) do
+      []
+    else
+      castle_side(pos, color, home, rook_k, right_k, [1, 2], :king) ++
+        castle_side(pos, color, home, rook_q, right_q, [-1, -2], :queen)
+    end
+  end
 
-      in_check?(pos, color) ->
-        []
+  defp castle_squares(:white), do: {"e1", "h1", "a1", :wk, :wq}
+  defp castle_squares(:black), do: {"e8", "h8", "a8", :bk, :bq}
 
-      true ->
-        king_side =
-          if MapSet.member?(pos.castling, right_k) and
-               empty_between?(pos.board, home, rook_k) and
-               not attacked?(pos.board, shift(home, 1, 0), other(color)) and
-               not attacked?(pos.board, shift(home, 2, 0), other(color)) do
-            [%{from: home, to: shift(home, 2, 0), promo: nil, castle: :king}]
-          else
-            []
-          end
-
-        queen_side =
-          if MapSet.member?(pos.castling, right_q) and
-               empty_between?(pos.board, home, rook_q) and
-               not attacked?(pos.board, shift(home, -1, 0), other(color)) and
-               not attacked?(pos.board, shift(home, -2, 0), other(color)) do
-            [%{from: home, to: shift(home, -2, 0), promo: nil, castle: :queen}]
-          else
-            []
-          end
-
-        king_side ++ queen_side
+  # One side of the castle: the right still standing, the squares between
+  # empty, and every square the king crosses or lands on unattacked.
+  defp castle_side(pos, color, home, rook, right, offsets, side) do
+    if MapSet.member?(pos.castling, right) and empty_between?(pos.board, home, rook) and
+         Enum.all?(offsets, &(not attacked?(pos.board, shift(home, &1, 0), other(color)))) do
+      [%{from: home, to: shift(home, List.last(offsets), 0), promo: nil, castle: side}]
+    else
+      []
     end
   end
 

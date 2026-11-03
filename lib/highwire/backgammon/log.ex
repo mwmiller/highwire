@@ -128,8 +128,7 @@ defmodule HighWire.Backgammon.Log do
           game.turn_count + 1,
           Game.roll_string(elem(dice, 0), elem(dice, 1)),
           Notation.turn(moves),
-          Game.hex(r_cur),
-          Game.hex(r_next),
+          {Game.hex(r_cur), Game.hex(r_next)},
           remaining,
           note: opts[:note]
         )

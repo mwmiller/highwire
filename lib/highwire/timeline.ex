@@ -60,7 +60,9 @@ defmodule HighWire.Timeline do
 
   require Logger
 
+  alias HighWire.Backgammon
   alias HighWire.Blob
+  alias HighWire.Chess
   alias HighWire.Contacts
   alias HighWire.SSB.{Client, Keys, MessageIndex, PrivateBox, Profile, Sidecar}
   alias HighWire.Suggester
@@ -2366,8 +2368,8 @@ defmodule HighWire.Timeline do
     # Games ride the same tail: the store files the message and tells its own
     # subscribers, which is how a move reaches a board without the timeline's
     # reload heartbeat. It is a cast, so a slow disk never stalls this stream.
-    HighWire.Backgammon.Store.observe(msg)
-    HighWire.Chess.Store.observe(msg)
+    Backgammon.Store.observe(msg)
+    Chess.Store.observe(msg)
 
     if msg["value"]["author"] in state.follows do
       state = %{state | acc: [msg | state.acc]}
@@ -2577,7 +2579,7 @@ defmodule HighWire.Timeline do
   def handle_info({Client, ref, {:item, msg}}, %{legacy_refs: refs} = state)
       when is_list(refs) do
     if ref in refs do
-      HighWire.Chess.Legacy.Store.observe(msg)
+      Chess.Legacy.Store.observe(msg)
 
       ts = received_ts(msg)
       type = get_in(msg, ["value", "content", "type"])
@@ -2794,8 +2796,8 @@ defmodule HighWire.Timeline do
     end
   end
 
-  defp game_store(:backgammon), do: HighWire.Backgammon.Store
-  defp game_store(:chess), do: HighWire.Chess.Store
+  defp game_store(:backgammon), do: Backgammon.Store
+  defp game_store(:chess), do: Chess.Store
 
   defp game_type(:backgammon), do: @backgammon_type
   defp game_type(:chess), do: @chess_type
@@ -2997,69 +2999,45 @@ defmodule HighWire.Timeline do
     # the contact drain must never hold one up either. It is a live tail,
     # so once open it needs no re-walk; a `nil` ref means one is not open
     # yet (boot, or a drop to reconnect).
-    state =
-      if state.about_ref == nil do
-        open_about_drain(state)
-      else
-        state
-      end
+    state = open_once(state, :about_ref, &open_about_drain/1)
 
     # Tombstones and edits are live tails, opened once and kept open:
     # the snapshot carries only what arrived since the index's cursor,
-    # so there is nothing to re-walk on a heartbeat. A `nil` ref means
-    # one is not open yet (boot, or a drop to reconnect).
-    state =
-      if state.tombstone_ref == nil do
-        open_tombstone_drain(state)
-      else
-        state
-      end
-
-    state =
-      if state.edit_ref == nil do
-        open_edit_drain(state)
-      else
-        state
-      end
+    # so there is nothing to re-walk on a heartbeat.
+    state = open_once(state, :tombstone_ref, &open_tombstone_drain/1)
+    state = open_once(state, :edit_ref, &open_edit_drain/1)
 
     # The append push: opened once and kept open, like the tails above.
     # This is what carries a peer's new post while the heartbeat is long.
     # Read through Map.get, not the dot: handlers also run against
     # hand-built state in tests, which may not carry the field.
-    state =
-      if Map.get(state, :latest_ref) == nil do
-        open_latest(state)
-      else
-        state
-      end
+    state = open_once(state, :latest_ref, &open_latest/1)
 
     # The game backlogs, also live tails: each store is walked once per
     # boot, then the same ref carries every challenge and move published
     # after it, so a game in flight here is never missed.
-    state =
-      if Map.get(state, :backgammon_ref) == nil do
-        open_backgammon(state)
-      else
-        state
-      end
-
-    state =
-      if Map.get(state, :chess_ref) == nil do
-        open_chess(state)
-      else
-        state
-      end
+    state = open_once(state, :backgammon_ref, &open_backgammon/1)
+    state = open_once(state, :chess_ref, &open_chess/1)
 
     # The chess already on the network, in the format it was published in.
     # Four types, so four tails, and no backlog buffering: a row is filed
     # as it lands and the store folds it on read.
-    if Map.get(state, :legacy_refs) in [nil, []] do
-      open_legacy(state)
-    else
-      state
-    end
+    open_once_empty(state, :legacy_refs, &open_legacy/1)
   catch
     _, _ -> state
+  end
+
+  # A live tail is opened once and kept open: a ref that is missing means one
+  # is not open yet — boot, a drop to reconnect, or a pass that found nothing
+  # to stream.
+  defp open_once(state, field, opener) do
+    if Map.get(state, field) == nil, do: opener.(state), else: state
+  end
+
+  # The legacy tails are a list of refs, so "nothing open" is an empty list as
+  # well as a missing field.
+  defp open_once_empty(state, field, opener) do
+    if Map.get(state, field) in [nil, []], do: opener.(state), else: state
   end
 
   defp open_drain(state) do
@@ -3767,21 +3745,19 @@ defmodule HighWire.Timeline do
     # the wants ride the next pass.
     client = Map.get(state, :client)
 
-    cond do
-      is_pid(client) and not Process.alive?(client) ->
-        Logger.debug("timeline: profile want on a dead connection, reconnecting")
-        reset_connection(state)
+    if is_pid(client) and not Process.alive?(client) do
+      Logger.debug("timeline: profile want on a dead connection, reconnecting")
+      reset_connection(state)
+    else
+      known = state |> Map.get(:messages, %{}) |> Map.get(:profiles, %{})
 
-      true ->
-        known = state |> Map.get(:messages, %{}) |> Map.get(:profiles, %{})
+      wanted =
+        state
+        |> Map.get(:profile_wants, MapSet.new())
+        |> MapSet.to_list()
+        |> Enum.reject(&Map.has_key?(known, &1))
 
-        wanted =
-          state
-          |> Map.get(:profile_wants, MapSet.new())
-          |> MapSet.to_list()
-          |> Enum.reject(&Map.has_key?(known, &1))
-
-        kick_profile_fetch(state, wanted, Map.take(known, wanted), [])
+      kick_profile_fetch(state, wanted, Map.take(known, wanted), [])
     end
   end
 
@@ -4330,9 +4306,9 @@ defmodule HighWire.Timeline do
   defp game_message?(msg) do
     content = content(msg)
 
-    HighWire.Backgammon.Game.message?(content) or
-      HighWire.Chess.Game.message?(content) or
-      HighWire.Chess.Legacy.message?(content)
+    Backgammon.Game.message?(content) or
+      Chess.Game.message?(content) or
+      Chess.Legacy.message?(content)
   end
 
   # A type with no sentence of its own is opaque to the reader, so its
@@ -4866,23 +4842,24 @@ defmodule HighWire.Timeline do
     {client, state} = game_endpoint(state, :legacy_client)
 
     if is_pid(client) do
-      refs =
-        HighWire.Chess.Legacy.types()
-        |> Enum.flat_map(fn type ->
-          params = live_by_type(type, MessageIndex.cursor(type))
-
-          case Client.stream(client, ["messagesByType"], params, self()) do
-            {:ok, ref} -> [ref]
-            _ -> []
-          end
-        end)
-
+      refs = stream_legacy_types(client, Chess.Legacy.types())
       Map.put(state, :legacy_refs, refs)
     else
       state
     end
   catch
     _, _ -> state
+  end
+
+  defp stream_legacy_types(client, types) do
+    Enum.flat_map(types, fn type ->
+      params = live_by_type(type, MessageIndex.cursor(type))
+
+      case Client.stream(client, ["messagesByType"], params, self()) do
+        {:ok, ref} -> [ref]
+        _ -> []
+      end
+    end)
   end
 
   defp open_backgammon(state), do: open_game_drain(state, :backgammon)

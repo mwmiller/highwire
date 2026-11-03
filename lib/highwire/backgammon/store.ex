@@ -24,6 +24,8 @@ defmodule HighWire.Backgammon.Store do
   require Logger
 
   alias HighWire.Backgammon.{Fold, Game, Reader}
+  alias HighWire.Games.Catalog
+  alias Phoenix.PubSub
 
   @table :highwire_backgammon
   @topic "backgammon"
@@ -174,8 +176,8 @@ defmodule HighWire.Backgammon.Store do
   # The room's order is the catalog's, so a game moves to the front as it
   # files rather than when someone asks for the list.
   defp announce(game_id) do
-    HighWire.Games.Catalog.touch(:backgammon, game_id)
-    Phoenix.PubSub.broadcast(HighWire.PubSub, @topic, {:backgammon, game_id})
+    Catalog.touch(:backgammon, game_id)
+    PubSub.broadcast(HighWire.PubSub, @topic, {:backgammon, game_id})
   end
 
   # -- filing ------------------------------------------------------------
@@ -295,7 +297,7 @@ defmodule HighWire.Backgammon.Store do
     |> :dets.match_object({{:game, :_}, :_})
     |> Enum.map(fn {_key, row} -> {row.updated_at || 0, row.game_id} end)
     |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.each(fn {_ts, game_id} -> HighWire.Games.Catalog.touch(:backgammon, game_id) end)
+    |> Enum.each(fn {_ts, game_id} -> Catalog.touch(:backgammon, game_id) end)
   rescue
     ArgumentError -> :ok
   end

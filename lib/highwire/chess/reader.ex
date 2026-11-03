@@ -63,10 +63,12 @@ defmodule HighWire.Chess.Reader do
   end
 
   defp entry("resign", c, author) do
-    with ply when is_integer(ply) and ply > 0 <- c["ply"] do
-      %{"type" => "resign", "player" => author, "ply" => ply, "note" => c["note"]}
-    else
-      _ -> nil
+    case c["ply"] do
+      ply when is_integer(ply) and ply > 0 ->
+        %{"type" => "resign", "player" => author, "ply" => ply, "note" => c["note"]}
+
+      _ ->
+        nil
     end
   end
 

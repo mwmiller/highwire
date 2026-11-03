@@ -102,8 +102,11 @@ defmodule HighWire.Backgammon.Game do
     })
   end
 
-  @doc "A turn: the roll as played, and the reveal pair that proves it."
-  def turn(game_id, root, turn, roll, moves, r_cur, r_next, reveals, opts \\ []) do
+  @doc """
+  A turn: the roll as played, and the reveal pair that proves it. `pair` is
+  `{r_cur, r_next}`.
+  """
+  def turn(game_id, root, turn, roll, moves, {r_cur, r_next}, reveals, opts \\ []) do
     base(%{
       "type" => type("turn"),
       "game_id" => game_id,

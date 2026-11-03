@@ -345,30 +345,7 @@ defmodule HighWireWeb.GameLive do
   defp seek(socket, to) do
     %{line: line, at: at} = socket.assigns
     last = length(line) - 1
-
-    at =
-      case to do
-        "first" ->
-          0
-
-        "prev" ->
-          min(max((at || last) - 1, 0), last)
-
-        "next" ->
-          min((at || last) + 1, last)
-
-        "live" ->
-          last
-
-        n when is_integer(n) ->
-          min(max(n, 0), last)
-
-        ply ->
-          case Integer.parse(ply) do
-            {n, ""} -> min(max(n, 0), last)
-            _ -> at || last
-          end
-      end
+    at = position(to, at, last)
 
     socket
     |> assign(:at, if(at == last, do: nil, else: at))
@@ -376,6 +353,23 @@ defmodule HighWireWeb.GameLive do
     |> assign(:targets, [])
     |> assign(:promos, [])
   end
+
+  # Where a step lands: either end of the line, one either side of where the
+  # reader is, or the ply they named — clamped to what the line holds.
+  defp position("first", _at, _last), do: 0
+  defp position("prev", at, last), do: clamp((at || last) - 1, last)
+  defp position("next", at, last), do: clamp((at || last) + 1, last)
+  defp position("live", _at, last), do: last
+  defp position(n, _at, last) when is_integer(n), do: clamp(n, last)
+
+  defp position(ply, at, last) do
+    case Integer.parse(ply) do
+      {n, ""} -> clamp(n, last)
+      _ -> at || last
+    end
+  end
+
+  defp clamp(n, last), do: min(max(n, 0), last)
 
   defp stop(socket), do: assign(socket, :playing?, false)
 
@@ -716,6 +710,32 @@ defmodule HighWireWeb.GameLive do
   defp name(nil), do: "unknown"
   defp name(id), do: Profile.display_name(id)
 
+  # Live is the end of the line, so the highlighted move is the last one
+  # played whether or not the reader has stepped back. A game the node holds
+  # only the tail of has no line to index, so its log supplies the number.
+  defp current(%{at: at}) when at != nil, do: at
+
+  defp current(%{line: line, game: game}) do
+    case List.last(line) do
+      %{ply: ply} -> ply
+      nil -> game.history |> List.last() |> then(&((&1 && &1.ply) || 0))
+    end
+  end
+
+  # The facts beside the board belong to the position drawn on it: showing
+  # move 0 and calling it black's move would be a lie the picture does not
+  # tell.
+  defp now(%{at: nil, game: game}) do
+    %{live?: true, ply: game.turn_count, side: side_word(game)}
+  end
+
+  defp now(%{at: at, line: line}) do
+    case Enum.at(line, at) do
+      %{ply: ply, turn: turn} -> %{live?: false, ply: ply, side: to_string(turn)}
+      _ -> %{live?: false, ply: 0, side: "—"}
+    end
+  end
+
   @impl true
   def render(%{game: nil} = assigns) do
     ~H"""
@@ -741,37 +761,7 @@ defmodule HighWireWeb.GameLive do
   end
 
   def render(%{game: %{kind: :chess}} = assigns) do
-    # Live is the end of the line, so the highlighted move is the last one
-    # played whether or not the reader has stepped back. A game the node holds
-    # only the tail of has no line to index, so its log supplies the number.
-    current =
-      case assigns.at do
-        nil ->
-          case List.last(assigns.line) do
-            %{ply: ply} -> ply
-            nil -> assigns.game.history |> List.last() |> then(&((&1 && &1.ply) || 0))
-          end
-
-        at ->
-          at
-      end
-
-    # The facts beside the board belong to the position drawn on it: showing
-    # move 0 and calling it black's move would be a lie the picture does not
-    # tell.
-    now =
-      case assigns.at do
-        nil ->
-          %{live?: true, ply: assigns.game.turn_count, side: side_word(assigns.game)}
-
-        at ->
-          case Enum.at(assigns.line, at) do
-            %{ply: ply, turn: turn} -> %{live?: false, ply: ply, side: to_string(turn)}
-            _ -> %{live?: false, ply: 0, side: "—"}
-          end
-      end
-
-    assigns = assign(assigns, current: current, now: now)
+    assigns = assign(assigns, current: current(assigns), now: now(assigns))
 
     ~H"""
     <div class="flex h-screen overflow-hidden bg-app text-ink">

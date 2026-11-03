@@ -27,6 +27,8 @@ defmodule HighWire.Games.Interest do
   list, and the games themselves.
   """
 
+  alias HighWire.SSB.Profile
+
   # What each signal is worth. Lopsided on purpose: who is playing decides
   # the order between two games, and everything else decides the order among
   # strangers.
@@ -127,7 +129,7 @@ defmodule HighWire.Games.Interest do
   # the room can show.
   defp faces(players) do
     Enum.reduce(players, 0, fn id, acc ->
-      case HighWire.SSB.Profile.get(id) do
+      case Profile.get(id) do
         %{name: name} when is_binary(name) and name != "" -> acc + @named
         %{image: image} when is_binary(image) and image != "" -> acc + @named
         _ -> acc - @faceless

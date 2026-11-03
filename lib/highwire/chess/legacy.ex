@@ -70,7 +70,7 @@ defmodule HighWire.Chess.Legacy do
     invite = Enum.find(rows, &(type(&1) == "chess_invite"))
     accept = Enum.find(rows, &(type(&1) == "chess_invite_accept"))
 
-    root_key = (invite && invite.key) || Enum.find_value(rows, & &1.content["root"])
+    root_key = root_key(invite, rows)
 
     # One root can carry more than one line — a game restarted, or a
     # message re-sent on a different branch. Each message names the one it
@@ -82,9 +82,7 @@ defmodule HighWire.Chess.Legacy do
     ending = line |> Enum.filter(&(type(&1) == "chess_game_end")) |> List.last()
     {white, black} = players(invite, accept)
 
-    last = latest(moves) || ending
-    position = position(last && last.content["fen"])
-    ply = (last && last.content["ply"]) || length(moves)
+    {_last, position, ply} = head(moves, ending)
 
     winner = winner(ending, position, white, black)
 
@@ -100,7 +98,7 @@ defmodule HighWire.Chess.Legacy do
       position: position,
       board: position.board,
       turn: position.turn,
-      mover: if(ply > 0, do: if(position.turn == :white, do: white, else: black)),
+      mover: mover(ply, position, white, black),
       turn_count: ply,
       phase: phase(accept, ending),
       status: status(ending),
@@ -153,6 +151,26 @@ defmodule HighWire.Chess.Legacy do
   # -- parsing -----------------------------------------------------------
 
   defp type(%{content: content}), do: content["type"]
+
+  # The challenge opens the thread; a game whose invite never arrived still
+  # names its root on every message that follows it.
+  defp root_key(invite, rows) do
+    if invite, do: invite.key, else: Enum.find_value(rows, & &1.content["root"])
+  end
+
+  # The latest move, or the ending when only an ending arrived, the board it
+  # left, and the ply it was played at.
+  defp head(moves, ending) do
+    last = latest(moves) || ending
+    position = position(last && last.content["fen"])
+    ply = (last && last.content["ply"]) || length(moves)
+    {last, position, ply}
+  end
+
+  # Nobody is to move until a move has been played.
+  defp mover(0, _position, _white, _black), do: nil
+  defp mover(_ply, %{turn: :white}, white, _black), do: white
+  defp mover(_ply, _position, _white, black), do: black
 
   defp latest([]), do: nil
   defp latest(rows), do: Enum.max_by(rows, &(&1.ts || 0))
@@ -277,29 +295,26 @@ defmodule HighWire.Chess.Legacy do
     placement
     |> String.split("/")
     |> Enum.with_index()
-    |> Enum.reduce(%{}, fn {row, index}, board ->
-      rank = 8 - index
-
-      row
-      |> String.graphemes()
-      |> Enum.reduce({1, board}, fn char, {file, acc} ->
-        case Integer.parse(char) do
-          {n, ""} ->
-            {file + n, acc}
-
-          _ ->
-            acc =
-              case piece(char) do
-                nil -> acc
-                piece -> Map.put(acc, square(file, rank), piece)
-              end
-
-            {file + 1, acc}
-        end
-      end)
-      |> elem(1)
-    end)
+    |> Enum.reduce(%{}, fn {row, index}, board -> place_row(row, 8 - index, board) end)
   end
+
+  defp place_row(row, rank, board) do
+    row
+    |> String.graphemes()
+    |> Enum.reduce({1, board}, fn char, {file, acc} -> place(char, file, rank, acc) end)
+    |> elem(1)
+  end
+
+  # A digit is a run of empty files; a letter is the piece standing here.
+  defp place(char, file, rank, board) do
+    case Integer.parse(char) do
+      {n, ""} -> {file + n, board}
+      _ -> {file + 1, put_piece(board, square(file, rank), piece(char))}
+    end
+  end
+
+  defp put_piece(board, _square, nil), do: board
+  defp put_piece(board, square, piece), do: Map.put(board, square, piece)
 
   defp square(file, rank), do: <<?a + file - 1>> <> Integer.to_string(rank)
 
