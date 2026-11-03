@@ -182,10 +182,11 @@ defmodule HighWireWeb.Components.Nav do
   defp identity_image(%{"id" => id}), do: Profile.image(id)
   defp identity_image(_identity), do: nil
 
-  # A clock, drawn beside the door and the gear as one of them: the mark of
-  # the app belongs on the app, not on the link to one of its pages. Stacked
-  # rows would read as a menu at this size, and a timeline read newest-first
-  # is what a clock already means.
+  # A window and a door: both openings in the same wall, drawn as the same
+  # frame with one detail inside it — a mullion for the feed you look
+  # through, a handle for the room you walk into. A clock beside a door said
+  # two unrelated things in two unrelated shapes; this pair says the two are
+  # the same kind of thing, which is what they are.
   defp timeline(assigns) do
     ~H"""
     <svg
@@ -198,15 +199,16 @@ defmodule HighWireWeb.Components.Nav do
       stroke-linecap="round"
       stroke-linejoin="round"
     >
-      <circle cx="12" cy="12" r="8.2" />
-      <path d="M12 7.4V12l3.3 2.2" />
+      <rect x="4" y="4.5" width="16" height="12" rx="1.8" />
+      <path d="M12 4.5v12" />
+      <path d="M4 10.5h16" />
+      <path d="M4 20.5h16" />
     </svg>
     """
   end
 
-  # A doorway rather than a board or a die: the room is a place you go into,
-  # and a door keeps a shape of its own at 16px, where a board would collapse
-  # into a grey square and a die says nothing about what is behind it.
+  # The room is the doorway you go through; the feed is the window onto what
+  # this node has seen.
   defp door(assigns) do
     ~H"""
     <svg
@@ -219,9 +221,9 @@ defmodule HighWireWeb.Components.Nav do
       stroke-linecap="round"
       stroke-linejoin="round"
     >
-      <path d="M5 20.5V5.5A2.5 2.5 0 0 1 7.5 3h9A2.5 2.5 0 0 1 19 5.5v15" />
-      <path d="M3 20.5h18" />
-      <path d="M14.75 12h.01" stroke-width="2.4" />
+      <path d="M5.5 20.5V5.5A2 2 0 0 1 7.5 3.5h9a2 2 0 0 1 2 2v15" />
+      <path d="M4 20.5h16" />
+      <circle cx="14.6" cy="11.6" r="1" fill="currentColor" stroke="none" />
     </svg>
     """
   end
