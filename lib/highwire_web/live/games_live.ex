@@ -15,7 +15,7 @@ defmodule HighWireWeb.GamesLive do
 
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
-  alias HighWire.Games.Catalog
+  alias HighWire.Games.{Catalog, Interest}
   alias HighWire.SSB.{Identities, Profile}
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Time}
 
@@ -41,7 +41,43 @@ defmodule HighWireWeb.GamesLive do
      |> assign(:error, nil)
      |> assign(:page, 0)
      |> assign(:total, Catalog.count())
-     |> assign(:games, page(self_id, 0))}
+     |> assign_games(page(self_id, 0))}
+  end
+
+  # The room's sections are what this reader should see, in that order, so
+  # they are worked out once per change of games rather than per render.
+  defp assign_games(socket, games) do
+    viewer = viewer(socket.assigns.self_id, games)
+
+    socket
+    |> assign(:games, games)
+    |> assign(:viewer, viewer)
+    |> assign(:sections, sections(socket.assigns.self_id, games, viewer))
+  end
+
+  # Who the reader is, who they follow, and who they have played. The follow
+  # list is the Timeline's, which is already reading the contact graph; the
+  # played list is read off the games in hand, which is what the ranking is
+  # about to order anyway.
+  defp viewer(self_id, games) do
+    follows =
+      case Process.whereis(HighWire.Timeline) do
+        nil -> []
+        _pid -> HighWire.Timeline.viewer().follows
+      end
+
+    %{self_id: self_id, follows: follows, played: played(self_id, games)}
+  end
+
+  defp played(nil, _games), do: MapSet.new()
+
+  defp played(self_id, games) do
+    for game <- games,
+        mine?(game, self_id),
+        id <- Interest.players(game),
+        id != self_id,
+        into: MapSet.new(),
+        do: id
   end
 
   def handle_event("more", _params, socket) do
@@ -51,8 +87,8 @@ defmodule HighWireWeb.GamesLive do
     {:noreply,
      socket
      |> assign(:page, page)
-     |> assign(:games, socket.assigns.games ++ more)
-     |> assign(:total, Catalog.count())}
+     |> assign(:total, Catalog.count())
+     |> assign_games(socket.assigns.games ++ more)}
   end
 
   @impl true
@@ -75,7 +111,7 @@ defmodule HighWireWeb.GamesLive do
   def handle_event("accept", %{"id" => id}, socket) do
     with %{} = game <- Chess.Store.get(id),
          {:ok, _key} <- HighWire.Chess.Log.accept(game) do
-      {:noreply, assign(socket, :games, page(socket.assigns.self_id, socket.assigns.page))}
+      {:noreply, assign_games(socket, page(socket.assigns.self_id, socket.assigns.page))}
     else
       _ -> {:noreply, assign(socket, :error, "Could not accept that game.")}
     end
@@ -84,7 +120,7 @@ defmodule HighWireWeb.GamesLive do
   def handle_event("withdraw", %{"id" => id}, socket) do
     with %{} = game <- Chess.Store.get(id),
          {:ok, _key} <- HighWire.Chess.Log.withdraw(game) do
-      {:noreply, assign(socket, :games, page(socket.assigns.self_id, socket.assigns.page))}
+      {:noreply, assign_games(socket, page(socket.assigns.self_id, socket.assigns.page))}
     else
       _ -> {:noreply, assign(socket, :error, "Could not withdraw that game.")}
     end
@@ -96,7 +132,7 @@ defmodule HighWireWeb.GamesLive do
   @impl true
   def handle_info({_kind, game_id}, socket) do
     games = refresh(socket.assigns.games, game_id, socket.assigns.self_id)
-    {:noreply, assign(socket, :games, games)}
+    {:noreply, assign_games(socket, games)}
   end
 
   def handle_info(_other, socket), do: {:noreply, socket}
@@ -157,6 +193,21 @@ defmodule HighWireWeb.GamesLive do
     do: Map.get(game, :writable?, true) and in_flight?(game) and game.accepter == nil
 
   defp finished(games, _self_id), do: Enum.filter(games, &(not in_flight?(&1)))
+
+  # The room in order: what is waiting on you, then games to take, then what
+  # there is to watch. The last two are ordered by what this reader is most
+  # likely to want — a stranger's abandoned opening does not belong above a
+  # game between two people they follow.
+  defp sections(self_id, games, viewer) do
+    [
+      {"Your move", your_move(games, self_id)},
+      {"Waiting on them", waiting(games, self_id)},
+      {"Open games", open_games(games, self_id)},
+      {"Spectate", Interest.rank(spectate(games, self_id), viewer)},
+      {"Finished", Interest.rank(finished(games, self_id), viewer)}
+    ]
+    |> Enum.reject(fn {_title, list} -> list == [] end)
+  end
 
   defp in_flight?(game), do: game.status in [:playing, :opening]
 
@@ -245,33 +296,9 @@ defmodule HighWireWeb.GamesLive do
           </p>
 
           <.section
-            :if={your_move(@games, @self_id) != []}
-            title="Your move"
-            games={your_move(@games, @self_id)}
-            self_id={@self_id}
-          />
-          <.section
-            :if={waiting(@games, @self_id) != []}
-            title="Waiting on them"
-            games={waiting(@games, @self_id)}
-            self_id={@self_id}
-          />
-          <.section
-            :if={open_games(@games, @self_id) != []}
-            title="Open games"
-            games={open_games(@games, @self_id)}
-            self_id={@self_id}
-          />
-          <.section
-            :if={spectate(@games, @self_id) != []}
-            title="Spectate"
-            games={spectate(@games, @self_id)}
-            self_id={@self_id}
-          />
-          <.section
-            :if={finished(@games, @self_id) != []}
-            title="Finished"
-            games={finished(@games, @self_id)}
+            :for={{title, games} <- @sections}
+            title={title}
+            games={games}
             self_id={@self_id}
           />
 
@@ -354,9 +381,22 @@ defmodule HighWireWeb.GamesLive do
           {label(@game)}
         </span>
       </div>
+
+      <%!-- Why this game is where it is. The order is a judgement, and a
+           judgement the reader cannot see the grounds for is one they have
+           no reason to trust. --%>
+      <p
+        :if={reasons(@game) != []}
+        class="mt-1 truncate text-[10px] leading-relaxed text-accent/80"
+      >
+        {Enum.join(reasons(@game), " · ")}
+      </p>
     </div>
     """
   end
+
+  defp reasons(%{interest: %{reasons: reasons}}), do: Enum.take(reasons, 2)
+  defp reasons(_game), do: []
 
   defp counter(%{kind: :chess, turn_count: plies}) when plies > 0,
     do: "#{div(plies + 1, 2)}. move"

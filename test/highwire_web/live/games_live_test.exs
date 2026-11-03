@@ -295,17 +295,17 @@ defmodule HighWireWeb.GamesLiveTest do
 
   # A game in the network's own format, as the timeline files it: one row per
   # move, naming the game it belongs to and the ply it was played as.
-  defp seed_legacy(moves) do
-    bytes = :binary.copy(<<0xAB>>, 32)
+  defp seed_legacy(moves, opts \\ []) do
+    bytes = :binary.copy(<<Keyword.get(opts, :byte, 0xAB)>>, 32)
+    ts = Keyword.get(opts, :ts, 1_000)
     root = "%" <> Base.encode64(bytes) <> ".sha256"
-    HighWire.Chess.Legacy.Store.clear()
 
     for {ply, orig, dest, san} <- moves do
       HighWire.Chess.Legacy.Store.ingest(%{
         "key" => "%m#{ply}.sha256",
         "value" => %{
           "author" => "@legacy.ed25519",
-          "timestamp" => 1_000 + ply,
+          "timestamp" => ts + ply,
           "content" => %{
             "type" => "chess_move",
             "root" => root,
@@ -319,6 +319,21 @@ defmodule HighWireWeb.GamesLiveTest do
     end
 
     Base.encode16(bytes, case: :lower)
+  end
+
+  test "the room puts the game most worth watching first", %{conn: conn} do
+    now = System.system_time(:millisecond)
+    moves = [{1, "e2", "e4", "e4"}, {2, "e7", "e5", "e5"}]
+
+    stale = seed_legacy(moves, byte: 0xAB, ts: now - 5 * 365 * 24 * 60 * 60 * 1000)
+    fresh = seed_legacy(moves, byte: 0xCD, ts: now - 60_000)
+
+    {:ok, _view, html} = live(conn, "/games")
+
+    fresh_at = :binary.match(html, fresh) |> elem(0)
+    stale_at = :binary.match(html, stale) |> elem(0)
+
+    assert fresh_at < stale_at
   end
 
   test "a chess game sits in the same gameroom", %{conn: conn} do
