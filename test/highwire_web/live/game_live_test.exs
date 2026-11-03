@@ -3,7 +3,7 @@ defmodule HighWireWeb.GameLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias HighWire.Backgammon.{Chain, Game, Log, Store}
+  alias HighWire.Backgammon.{Chain, Engine, Game, Log, Store}
   alias HighWire.Games.Catalog
 
   setup do
@@ -52,53 +52,38 @@ defmodule HighWireWeb.GameLiveTest do
   # A game opened, accepted, rolled out and played a turn — through the
   # writer, so the messages are the ones the client would really publish.
   defp seed_played do
-    secret = :crypto.strong_rand_bytes(32)
-    other_secret = :crypto.strong_rand_bytes(32)
-    publish = fn _content -> {:ok, "%#{System.unique_integer([:positive])}.sha256"} end
+    secrets = %{
+      "@challenger.ed25519" => :crypto.strong_rand_bytes(32),
+      "@accepter.ed25519" => :crypto.strong_rand_bytes(32)
+    }
 
-    {:ok, game_id, _} =
-      Log.open(author: "@challenger.ed25519", secret: secret, publish: publish)
-
-    {:ok, _} =
-      Log.accept(Store.get(game_id),
-        author: "@accepter.ed25519",
-        secret: other_secret,
-        publish: publish
-      )
-
-    game = roll_out(game_id, secret, other_secret, publish)
-
-    if game.mover == "@challenger.ed25519" do
-      [d1, d2] = game.opener.dice
-      [moves | _] = HighWire.Backgammon.Engine.legal_plays(game.position, {d1, d2})
-
-      {:ok, _} =
-        Log.play(game, moves, author: "@challenger.ed25519", secret: secret, publish: publish)
-    else
-      [d1, d2] = game.opener.dice
-      [moves | _] = HighWire.Backgammon.Engine.legal_plays(game.position, {d1, d2})
-
-      {:ok, _} =
-        Log.play(game, moves, author: "@accepter.ed25519", secret: other_secret, publish: publish)
+    as = fn player ->
+      [
+        author: player,
+        secret: secrets[player],
+        publish: fn _content -> {:ok, "%#{System.unique_integer([:positive])}.sha256"} end
+      ]
     end
+
+    {:ok, game_id, _} = Log.open(as.("@challenger.ed25519"))
+    {:ok, _} = Log.accept(Store.get(game_id), as.("@accepter.ed25519"))
+
+    game = roll_until_playing(game_id, as)
+    [d1, d2] = game.opener.dice
+    [moves | _] = Engine.legal_plays(game.position, {d1, d2})
+    {:ok, _} = Log.play(game, moves, as.(game.mover))
 
     game_id
   end
 
-  defp roll_out(game_id, secret, other_secret, publish) do
+  defp roll_until_playing(game_id, as) do
     game = Store.get(game_id)
 
     if game.phase == :playing do
       game
     else
-      if game.mover == "@challenger.ed25519" do
-        {:ok, _} = Log.roll(game, author: "@challenger.ed25519", secret: secret, publish: publish)
-      else
-        {:ok, _} =
-          Log.roll(game, author: "@accepter.ed25519", secret: other_secret, publish: publish)
-      end
-
-      roll_out(game_id, secret, other_secret, publish)
+      {:ok, _} = Log.roll(game, as.(game.mover))
+      roll_until_playing(game_id, as)
     end
   end
 
