@@ -656,6 +656,7 @@ defmodule HighWireWeb.GameLive do
           <div class="grid gap-6 md:grid-cols-[minmax(0,1fr)_16rem]">
             <div>
               <ChessBoard.board
+                id={"board-" <> @game.game_id}
                 board={board_at(@line, @at, @game.board)}
                 last={last_move(@line, @at, @game)}
                 playable={@at == nil and @movable != []}

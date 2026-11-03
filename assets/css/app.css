@@ -305,18 +305,24 @@
   .chess-square {
     container-type: inline-size;
   }
+  /* The font's glyphs are not drawn to a common size, so each piece carries a
+     scale and a shift of its own, measured once by the PieceInk hook. Until
+     it runs, a piece is 84% of its square on the font's own terms. */
   .chess-piece {
-    font-size: 84cqi;
+    /* Out of the flow: a glyph's line box can be taller than the square, and
+       a square that grows to fit its tallest piece is no longer a square. */
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: calc(84cqi * var(--piece-scale, 1));
+    transform: translateY(var(--piece-shift, 0em));
     line-height: 0.82;
     -webkit-text-stroke-width: 0.03em;
     -webkit-text-stroke-color: var(--piece-white-edge);
     color: var(--piece-white);
     user-select: none;
-  }
-  /* A pawn's glyph carries a descender the other pieces do not, so its ink
-     sits high in a line box centred on the font. */
-  .chess-piece[data-type="pawn"] {
-    transform: translateY(0.055em);
   }
   .chess-piece[data-colour="black"] {
     -webkit-text-stroke-color: var(--piece-black-edge);

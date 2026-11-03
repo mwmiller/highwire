@@ -622,7 +622,12 @@ defmodule HighWireWeb.GamesLive do
         </div>
 
         <Board.board :if={@game.kind == :backgammon} position={@game.position} compact />
-        <ChessBoard.board :if={@game.kind == :chess} board={@game.board} compact />
+        <ChessBoard.board
+          :if={@game.kind == :chess}
+          id={"board-" <> @game.game_id}
+          board={@game.board}
+          compact
+        />
       </div>
 
       <div class="mt-2 flex items-center justify-between gap-2 text-[10px] text-faint">

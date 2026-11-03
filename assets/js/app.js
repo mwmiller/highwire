@@ -64,6 +64,67 @@ let FollowMoves = {
   }
 }
 
+// A font draws its chess glyphs at whatever size its designer chose, and the
+// system fallback is worse than most: the king comes out a fifth shorter than
+// a pawn and the knight sits higher in its line. Each piece is measured once
+// and given a scale and a shift that put its ink at the same share of the
+// square, centred in it, so a piece looks the same wherever it appears and at
+// whatever size the board is drawn.
+const PIECE_INK = 0.78 // of the square
+const PIECE_EM = 0.84 // of the square, the size the stylesheet asks for
+const PIECE_LINE = 0.82 // the line box the stylesheet gives a piece
+
+let PieceInk = {
+  mounted() {
+    this.measure()
+    // Glyphs can change when a fallback font finishes loading.
+    document.fonts && document.fonts.ready.then(() => this.measure())
+  },
+  updated() {
+    this.measure()
+  },
+  measure() {
+    const pieces = Array.from(this.el.querySelectorAll(".chess-piece"))
+    if (pieces.length === 0) return
+
+    // Measured at a size of the hook's own choosing, because every number it
+    // needs is a ratio: a board drawn small would answer in whole pixels.
+    const size = 100
+    const canvas = document.createElement("canvas").getContext("2d")
+    const measured = new Map()
+
+    for (const el of pieces) {
+      const glyph = el.textContent.trim()
+      if (measured.has(glyph)) continue
+
+      canvas.font = `${size}px ${getComputedStyle(el).fontFamily}`
+      const metrics = canvas.measureText(glyph)
+      const ink = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent
+      if (!ink) continue
+
+      // Where the ink sits inside a line box of PIECE_LINE ems, measured from
+      // the line box's top.
+      const ascent = metrics.fontBoundingBoxAscent ?? size * 0.8
+      const descent = metrics.fontBoundingBoxDescent ?? size * 0.2
+      const line = PIECE_LINE * size
+      const baseline = (line - ascent - descent) / 2 + ascent
+      const inkCentre = baseline + (metrics.actualBoundingBoxDescent - metrics.actualBoundingBoxAscent) / 2
+
+      measured.set(glyph, {
+        scale: PIECE_INK / ((ink / size) * PIECE_EM),
+        shift: (line / 2 - inkCentre) / size
+      })
+    }
+
+    for (const el of pieces) {
+      const ink = measured.get(el.textContent.trim())
+      if (!ink) continue
+      el.style.setProperty("--piece-scale", ink.scale)
+      el.style.setProperty("--piece-shift", `${ink.shift}em`)
+    }
+  }
+}
+
 // Reading a game back is a keyboard walk: the transport buttons are the same
 // seek, so the keys push the event they click. Keys are left alone while a
 // field has focus — the scrubber under the board is a range input, and the
@@ -1114,7 +1175,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
     ClampRows,
     LandOn,
     FollowMoves,
-    ReplayKeys
+    ReplayKeys,
+    PieceInk
   }
 })
 

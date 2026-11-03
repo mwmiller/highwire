@@ -12,6 +12,10 @@ defmodule HighWireWeb.Components.ChessBoard do
   at a share of the square's width: a font that draws white as an outline and
   black as a solid offers two piece sets, and the outlined one fades out on
   the board.
+
+  A font's glyphs are drawn to no common measure, so the board hands each
+  piece to the `PieceInk` hook, which sizes every one of them to the same
+  share of its square.
   """
 
   use Phoenix.Component
@@ -28,6 +32,7 @@ defmodule HighWireWeb.Components.ChessBoard do
     pawn: "♟"
   }
 
+  attr :id, :string, default: nil, doc: "names the board so the piece hook can find it"
   attr :board, :map, required: true, doc: "the fold's board: square => {type, colour}"
   attr :compact, :boolean, default: false
 
@@ -49,7 +54,7 @@ defmodule HighWireWeb.Components.ChessBoard do
     assigns = assign(assigns, :squares, squares)
 
     ~H"""
-    <div class="rounded border border-edge bg-panel p-1.5">
+    <div id={@id} phx-hook={@id && "PieceInk"} class="rounded border border-edge bg-panel p-1.5">
       <div class="grid grid-cols-8">
         <.square
           :for={{square, piece, light?} <- @squares}
