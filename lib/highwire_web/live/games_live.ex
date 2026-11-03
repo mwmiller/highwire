@@ -336,6 +336,11 @@ defmodule HighWireWeb.GamesLive do
   # long it ran, when it last moved, which game it is — and a fifth about how
   # to read the answer. One chip per answer, and the chip that is on is the
   # answer in force; clicking it again takes the question back off.
+  # The filters read as a sentence rather than a panel of switches: four
+  # words you can open, the grouping, and how much of the room survives them.
+  # A facet says its own name while it is asking for nothing, and the answer
+  # once it has one — so a room that is not being filtered reads as four
+  # quiet words, and one that is says what it is asking.
   defp filters(assigns) do
     assigns =
       assign(assigns,
@@ -358,33 +363,31 @@ defmodule HighWireWeb.GamesLive do
       )
 
     ~H"""
-    <div class="mb-5 rounded border border-edge bg-panel px-3 py-2">
-      <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
-        <.chip_row title="who" facet="who" key={:who} options={@who} filters={@filters} />
-        <.chip_row title="moves" facet="length" key={:length} options={@length} filters={@filters} />
-        <.chip_row title="when" facet="age" key={:age} options={@age} filters={@filters} />
-        <.chip_row title="game" facet="kind" key={:kind} options={@kind} filters={@filters} />
-      </div>
+    <div class="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+      <.facet_menu title="who" facet="who" key={:who} options={@who} filters={@filters} />
+      <.facet_menu title="when" facet="age" key={:age} options={@age} filters={@filters} />
+      <.facet_menu title="moves" facet="length" key={:length} options={@length} filters={@filters} />
+      <.facet_menu title="game" facet="kind" key={@kind} options={@kind} filters={@filters} />
 
-      <div class="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-edge-soft pt-2">
-        <div class="flex items-center gap-1">
-          <span class="mr-1 text-[10px] uppercase tracking-wider text-faint">group by</span>
-          <.group_chip by={:room} label="room" group={@group} />
-          <.group_chip by={:period} label="period" group={@group} />
-          <.group_chip by={:result} label="result" group={@group} />
-        </div>
+      <span class="h-3 w-px shrink-0 bg-edge" aria-hidden="true" />
 
-        <div class="flex items-center gap-3 text-[10px] text-faint">
-          <span>{@shown} of {@total} shown</span>
-          <button
-            :if={@filters != %{}}
-            phx-click="clear_filters"
-            class="rounded border border-edge px-1.5 py-0.5 uppercase tracking-wide text-muted transition hover:border-focus hover:text-paper"
-          >
-            clear
-          </button>
-        </div>
-      </div>
+      <span class="flex items-center gap-1.5">
+        <span class="text-[10px] uppercase tracking-wider text-faint">by</span>
+        <.group_chip by={:room} label="room" group={@group} />
+        <.group_chip by={:period} label="period" group={@group} />
+        <.group_chip by={:result} label="result" group={@group} />
+      </span>
+
+      <span class="ml-auto flex items-center gap-2 text-[10px] text-faint">
+        <span>{@shown} of {@total} shown</span>
+        <button
+          :if={@filters != %{}}
+          phx-click="clear_filters"
+          class="rounded px-1 py-0.5 uppercase tracking-wide text-muted transition hover:text-paper"
+        >
+          clear
+        </button>
+      </span>
     </div>
     """
   end
@@ -395,30 +398,55 @@ defmodule HighWireWeb.GamesLive do
   attr :options, :list, required: true
   attr :filters, :map, required: true
 
-  defp chip_row(assigns) do
-    assigns = assign(assigns, :current, Map.get(assigns.filters, assigns.key, :any))
+  # A facet is a word that opens. The chevron and the word carry the whole
+  # affordance at rest; the menu is the choices, with the current one marked.
+  defp facet_menu(assigns) do
+    current = Map.get(assigns.filters, assigns.key, :any)
+    {answered, _} = List.keyfind(assigns.options, current, 1, {nil, current})
+
+    assigns =
+      assigns
+      |> assign(:current, current)
+      |> assign(:current_label, if(answered, do: answered, else: "any"))
 
     ~H"""
-    <div class="flex items-center gap-1">
-      <span class="mr-0.5 text-[10px] uppercase tracking-wider text-faint">{@title}</span>
-      <button
-        :for={{label, value} <- @options}
-        phx-click={
-          Phoenix.LiveView.JS.push("filter", value: %{facet: @facet, value: to_string(value)})
-        }
-        data-facet={@facet}
-        data-value={to_string(value)}
-        class={[
-          "rounded border px-1.5 py-0.5 text-[10px] transition",
-          if(value == @current,
-            do: "border-accent/60 bg-accent/15 text-accent",
-            else: "border-edge text-muted hover:border-focus hover:text-paper"
-          )
-        ]}
-      >
-        {label}
-      </button>
-    </div>
+    <details class="group relative">
+      <summary class="flex cursor-pointer list-none items-center gap-1 rounded px-1 py-0.5 transition hover:text-paper [&::-webkit-details-marker]:hidden">
+        <span class="text-[10px] uppercase tracking-wider text-faint">{@title}</span>
+        <span :if={@current != :any} class="text-accent">{@current_label}</span>
+        <svg
+          class="h-2.5 w-2.5 text-faint transition group-open:rotate-180"
+          viewBox="0 0 10 10"
+          aria-hidden="true"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+        >
+          <path d="M2 4l3 3 3-3" />
+        </svg>
+      </summary>
+      <div class="absolute left-0 top-full z-20 mt-1 w-40 rounded border border-edge bg-panel py-1 shadow-lg shadow-black/30">
+        <button
+          :for={{label, value} <- @options}
+          phx-click={
+            Phoenix.LiveView.JS.push("filter", value: %{facet: @facet, value: to_string(value)})
+          }
+          onclick="this.closest('details').removeAttribute('open')"
+          data-facet={@facet}
+          data-value={to_string(value)}
+          class={[
+            "block w-full px-2 py-1 text-left text-[11px] transition",
+            if(value == @current,
+              do: "text-accent",
+              else: "text-muted hover:bg-raised hover:text-paper"
+            )
+          ]}
+        >
+          {label}
+        </button>
+      </div>
+    </details>
     """
   end
 
@@ -431,11 +459,12 @@ defmodule HighWireWeb.GamesLive do
     <button
       phx-click={Phoenix.LiveView.JS.push("group", value: %{by: to_string(@by)})}
       data-group={to_string(@by)}
+      aria-pressed={@by == @group}
       class={[
-        "rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide transition",
+        "rounded px-1 py-0.5 text-[10px] uppercase tracking-wide transition",
         if(@by == @group,
-          do: "border-accent/60 bg-accent/15 text-accent",
-          else: "border-edge text-muted hover:border-focus hover:text-paper"
+          do: "text-accent",
+          else: "text-faint hover:text-paper"
         )
       ]}
     >
