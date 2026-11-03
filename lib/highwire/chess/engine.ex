@@ -234,6 +234,26 @@ defmodule HighWire.Chess.Engine do
 
   def move(_pos, _uci), do: {:error, :malformed}
 
+  @doc """
+  Play a coordinate move the way a game does: one generation of the legal
+  moves, one application, and the notation for what happened.
+
+  A fold replays every ply, and each one needs all three. Asking the
+  position three times — to find the move, to name it, to apply it — triples
+  the cost of reading a game, so they travel together here.
+  """
+  @spec play(t(), binary()) :: {:ok, t(), binary()} | {:error, atom()}
+  def play(pos, uci) when is_binary(uci) do
+    moves = legal(pos)
+
+    case Enum.find(moves, &(uci(&1) == uci)) do
+      nil -> {:error, :illegal}
+      mv -> {:ok, note(apply_move(pos, mv)), san(pos, moves, mv)}
+    end
+  end
+
+  def play(_pos, _uci), do: {:error, :malformed}
+
   @doc "The coordinate string for a move."
   @spec uci(move()) :: binary()
   def uci(%{from: from, to: to, promo: nil}), do: from <> to
@@ -449,6 +469,10 @@ defmodule HighWire.Chess.Engine do
   `legal/1` produced.
   """
   @spec apply_move(t(), move()) :: t()
+  # `apply_move/2` is the move itself: board, turn, rights, clocks. It is
+  # called once per candidate by every legality filter, so it does no more
+  # than that — repetition history belongs to `play/2`, which is where a
+  # game's positions are actually reached.
   def apply_move(pos, %{castle: :king} = mv) do
     castle(pos, mv, if(pos.turn == :white, do: {"h1", "f1"}, else: {"h8", "f8"}))
   end
@@ -477,7 +501,6 @@ defmodule HighWire.Chess.Engine do
     |> Map.put(:halfmove, halfmove(pos.halfmove, piece, captured))
     |> Map.put(:turn, other(color))
     |> Map.update!(:fullmove, fn n -> if color == :black, do: n + 1, else: n end)
-    |> count()
   end
 
   defp castle(pos, mv, {rook_from, rook_to}) do
@@ -500,10 +523,11 @@ defmodule HighWire.Chess.Engine do
     |> Map.put(:halfmove, pos.halfmove + 1)
     |> Map.put(:turn, other(pos.turn))
     |> Map.update!(:fullmove, fn n -> if pos.turn == :black, do: n + 1, else: n end)
-    |> count()
   end
 
-  defp count(pos) do
+  # Only a played move counts toward repetition: the candidates a legality
+  # filter applies on the way are never positions a game stands in.
+  defp note(pos) do
     k = key(pos)
     seen = Map.get(pos, :seen, %{})
     Map.put(pos, :seen, Map.update(seen, k, 1, fn n -> n + 1 end))
@@ -576,12 +600,23 @@ defmodule HighWire.Chess.Engine do
   @spec status(t()) :: :playing | {:checkmate, color()} | :stalemate | {:draw, atom()}
   def status(pos) do
     cond do
-      legal(pos) == [] and in_check?(pos) -> {:checkmate, other(pos.turn)}
-      legal(pos) == [] -> :stalemate
-      pos.halfmove >= 100 -> {:draw, :fifty_moves}
-      insufficient?(pos) -> {:draw, :insufficient_material}
-      Map.get(pos.seen, key(pos), 0) >= 3 -> {:draw, :repetition}
-      true -> :playing
+      pos.halfmove >= 100 ->
+        {:draw, :fifty_moves}
+
+      insufficient?(pos) ->
+        {:draw, :insufficient_material}
+
+      Map.get(pos.seen, key(pos), 0) >= 3 ->
+        {:draw, :repetition}
+
+      legal(pos) != [] ->
+        :playing
+
+      in_check?(pos) ->
+        {:checkmate, other(pos.turn)}
+
+      true ->
+        :stalemate
     end
   end
 
@@ -598,7 +633,9 @@ defmodule HighWire.Chess.Engine do
   def other(:white), do: :black
   def other(:black), do: :white
 
-  defp coords(<<f, r>>), do: {Enum.find_index(@files, &(&1 == <<f>>)), r - ?1}
+  # Arithmetic, not a search: this runs for every square a rule looks at,
+  # and `a`..`h` are already the file numbers.
+  defp coords(<<f, r>>), do: {f - ?a, r - ?1}
 
   @doc """
   A move written the way a player writes it — `Nf3`, `exd5`, `O-O`, `e8=Q+`.
@@ -612,11 +649,17 @@ defmodule HighWire.Chess.Engine do
     end
   end
 
-  def san(pos, %{castle: side} = mv) when side != nil do
+  def san(pos, mv), do: san(pos, legal(pos), mv)
+
+  @doc false
+  # The same notation when the caller already holds the legal moves: a fold
+  # asks for them once per ply and passes them in, rather than making the
+  # engine generate them a second time.
+  def san(pos, _moves, %{castle: side} = mv) when side != nil do
     if(side == :king, do: "O-O", else: "O-O-O") <> check_mark(pos, mv)
   end
 
-  def san(pos, mv) do
+  def san(pos, moves, mv) do
     {type, _color} = Map.fetch!(pos.board, mv.from)
     capture? = Map.has_key?(pos.board, mv.to) or en_passant_capture?(pos, mv)
 
@@ -626,7 +669,7 @@ defmodule HighWire.Chess.Engine do
           if capture?, do: file(mv.from) <> "x" <> mv.to, else: mv.to
 
         _ ->
-          hint = disambiguation(pos, mv, type)
+          hint = disambiguation(pos, moves, mv, type)
           capture = if capture?, do: "x", else: ""
           piece_letter(type) <> hint <> capture <> mv.to
       end
@@ -637,9 +680,9 @@ defmodule HighWire.Chess.Engine do
 
   # Two pieces of the same kind can reach one square: name the file, or the
   # rank when they share it too.
-  defp disambiguation(pos, mv, type) do
+  defp disambiguation(pos, moves, mv, type) do
     rivals =
-      for candidate <- legal(pos),
+      for candidate <- moves,
           candidate.from != mv.from,
           candidate.to == mv.to,
           match?({^type, _color}, Map.get(pos.board, candidate.from)),

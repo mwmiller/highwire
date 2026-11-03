@@ -70,21 +70,34 @@ defmodule HighWireWeb.GamesLive do
     end
   end
 
+  # A message names one game, so one game is re-read: the room keeps the
+  # rest of its rows rather than folding every board in the store again on
+  # each event, which is what a busy tail would ask it to do.
   @impl true
-  def handle_info({:backgammon, _game_id}, socket) do
-    {:noreply, assign(socket, :games, games(socket.assigns.self_id))}
-  end
-
-  def handle_info({:chess, _game_id}, socket) do
-    {:noreply, assign(socket, :games, games(socket.assigns.self_id))}
+  def handle_info({_kind, game_id}, socket) do
+    games = refresh(socket.assigns.games, game_id, socket.assigns.self_id)
+    {:noreply, assign(socket, :games, games)}
   end
 
   def handle_info(_other, socket), do: {:noreply, socket}
 
+  defp refresh(games, game_id, self_id) do
+    rest = Enum.reject(games, &(&1.game_id == game_id))
+
+    case Chess.Store.get(game_id) || Store.get(game_id) do
+      nil -> rest
+      game -> sort([put_live_status(game, self_id) | rest])
+    end
+  end
+
+  defp sort(games) do
+    Enum.sort_by(games, fn game -> {rank(game), -game.updated_at} end)
+  end
+
   defp games(self_id) do
     (Store.games() ++ Chess.Store.games())
     |> Enum.map(&put_live_status(&1, self_id))
-    |> Enum.sort_by(fn game -> {rank(game), -game.updated_at} end)
+    |> sort()
   end
 
   defp put_live_status(game, self_id) do

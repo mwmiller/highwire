@@ -126,19 +126,24 @@ defmodule HighWire.Chess.Fold do
 
       true ->
         uci = Map.get(entry, "uci")
-        san = Engine.san(pos, uci)
 
-        with true <- san != nil or {:error, "ply #{expected}: #{uci} is not a legal move"},
-             {:ok, next} <- Engine.move(pos, uci) do
-          {:ok,
-           %{
-             acc
-             | pos: next,
-               history: acc.history ++ [item(entry, expected, san)],
-               last_note: entry["note"]
-           }}
-        else
-          {:error, reason} -> {:error, reason}
+        # One pass: the position is asked once for the move, and answers
+        # with the position after it and its notation.
+        case Engine.play(pos, uci) do
+          {:ok, next, san} ->
+            {:ok,
+             %{
+               acc
+               | pos: next,
+                 history: acc.history ++ [item(entry, expected, san)],
+                 last_note: entry["note"]
+             }}
+
+          {:error, :illegal} ->
+            {:error, "ply #{expected}: #{uci} is not a legal move"}
+
+          {:error, reason} ->
+            {:error, "ply #{expected}: #{inspect(reason)}"}
         end
     end
   end
