@@ -38,6 +38,7 @@ defmodule HighWireWeb.Components.ChessBoard do
   attr :targets, :list, default: [], doc: "squares the picked-up piece can reach"
   attr :selected, :string, default: nil
   attr :playable, :boolean, default: false
+  attr :last, :list, default: [], doc: "squares the last move touched"
 
   def board(assigns) do
     squares =
@@ -60,6 +61,7 @@ defmodule HighWireWeb.Components.ChessBoard do
           light?={light?}
           compact={@compact}
           selected={@selected == square}
+          last={square in @last}
           movable={square in @movable}
           target={square in @targets}
           playable={@playable}
@@ -77,6 +79,7 @@ defmodule HighWireWeb.Components.ChessBoard do
   attr :movable, :boolean, default: false
   attr :target, :boolean, default: false
   attr :playable, :boolean, default: false
+  attr :last, :boolean, default: false
 
   defp square(assigns) do
     ~H"""
@@ -94,6 +97,10 @@ defmodule HighWireWeb.Components.ChessBoard do
         @movable && !@selected && "hover:ring-1 hover:ring-inset hover:ring-focus"
       ]}
     >
+      <%!-- The squares the move being looked at touched, so replaying a
+           game shows where the piece came from. --%>
+      <span :if={@last} class="absolute inset-0 bg-accent/20" />
+
       <span :if={@piece}>{glyph(@piece)}</span>
 
       <%!-- A reachable square says so under the piece as well as on an

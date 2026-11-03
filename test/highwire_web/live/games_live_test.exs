@@ -118,6 +118,41 @@ defmodule HighWireWeb.GamesLiveTest do
     refute html =~ "Open games"
   end
 
+  test "a game's moves are listed in numbered pairs", %{conn: conn} do
+    game_id = seed_chess()
+
+    {:ok, _view, html} = live(conn, "/games/#{game_id}")
+
+    assert html =~ "1."
+    assert html =~ "e4"
+    assert html =~ "e5"
+  end
+
+  test "stepping back shows the position the game came from", %{conn: conn} do
+    game_id = seed_chess()
+
+    {:ok, view, html} = live(conn, "/games/#{game_id}")
+    refute html =~ "Showing the position after move"
+
+    html = view |> element("button[phx-value-to='first']") |> render_click()
+    assert html =~ "Showing the position after move 0 of 2"
+
+    # The board is a picture of an earlier position, so it takes no clicks.
+    refute html =~ ~s(phx-click="square")
+
+    html = view |> element("button[phx-value-to='live']") |> render_click()
+    refute html =~ "Showing the position after move"
+  end
+
+  test "a move in the list jumps to the position it made", %{conn: conn} do
+    game_id = seed_chess()
+
+    {:ok, view, _html} = live(conn, "/games/#{game_id}")
+
+    html = view |> element("button[phx-value-to='1']") |> render_click()
+    assert html =~ "Showing the position after move 1 of 2"
+  end
+
   test "one game opens on its own board", %{conn: conn} do
     game_id = seed_game()
 
