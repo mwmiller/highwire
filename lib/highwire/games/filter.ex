@@ -32,6 +32,17 @@ defmodule HighWire.Games.Filter do
   @month 30 * @day
   @year 365 * @day
 
+  # What a game in one band answers to when asked about a period: an hour ago
+  # is today, and this week, and this month, and this year.
+  @reaches %{
+    today: [:today, :week, :month, :year],
+    week: [:week, :month, :year],
+    month: [:month, :year],
+    year: [:year],
+    older: [:older],
+    unknown: [:unknown]
+  }
+
   @facets [:who, :length, :age, :kind]
 
   @doc "The facet names, in the order the room shows them."
@@ -69,14 +80,20 @@ defmodule HighWire.Games.Filter do
     }
   end
 
-  @doc "The period a game's last move falls in, as the group titles read."
+  @doc """
+  The period a game's last move falls in, as the group titles read.
+
+  Groups partition the room — one heading per game — so each is the stretch
+  before the one above it, and says so. "This week" would name a stretch that
+  includes today, which already has a heading of its own.
+  """
   @spec period(map()) :: binary()
   def period(game) do
     case age_band(game) do
       :today -> "Today"
-      :week -> "This week"
-      :month -> "This month"
-      :year -> "This year"
+      :week -> "Earlier this week"
+      :month -> "Earlier this month"
+      :year -> "Earlier this year"
       :older -> "Older"
       _ -> "Undated"
     end
@@ -138,9 +155,12 @@ defmodule HighWire.Games.Filter do
 
   defp age?(game, band), do: age?(game, band, age_band(game))
 
+  # A period is asked about a game as a stretch of time, not as a slot: a game
+  # that moved an hour ago is a game from today, and also one from this week,
+  # this month and this year. Asked "this week", a room that hid today's games
+  # would be answering a question nobody asked.
   defp age?(_game, :any, _actual), do: true
-  defp age?(_game, band, band), do: true
-  defp age?(_game, _band, _actual), do: false
+  defp age?(_game, band, actual), do: band in Map.get(@reaches, actual, [])
 
   defp age_band(game) do
     case Map.get(game, :updated_at) do

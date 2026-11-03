@@ -97,8 +97,9 @@ defmodule HighWireWeb.GamesLiveTest do
       assert html =~ "Older"
 
       # A period is a rung on a scale, so a week with nothing in it is said
-      # out loud rather than dropped from the ladder.
-      assert html =~ ~r/This week <span[^>]*>· none/
+      # out loud rather than dropped from the ladder. The heading names the
+      # stretch before it, because Today already has one.
+      assert html =~ ~r/Earlier this week <span[^>]*>· none/
     end
   end
 

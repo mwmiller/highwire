@@ -41,7 +41,14 @@ defmodule HighWireWeb.GamesLive do
 
   @groups ~w(room period result)
 
-  @periods ["Today", "This week", "This month", "This year", "Older", "Undated"]
+  @periods [
+    "Today",
+    "Earlier this week",
+    "Earlier this month",
+    "Earlier this year",
+    "Older",
+    "Undated"
+  ]
   @results ["Checkmate", "Decided", "Draw", "Unfinished", "Withdrawn", "Does not verify"]
 
   @impl true

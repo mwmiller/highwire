@@ -58,6 +58,30 @@ defmodule HighWire.Games.FilterTest do
       assert Filter.facets_of(game(updated_at: @now - 3 * @day), viewer()).age == :week
       assert Filter.facets_of(game(updated_at: @now - 3 * @year), viewer()).age == :older
     end
+
+    test "a period reaches back, so today is also this week and this month" do
+      today = game(updated_at: @now - @hour)
+      three_days = game(game_id: "three", updated_at: @now - 3 * @day)
+      three_years = game(game_id: "years", updated_at: @now - 3 * @year)
+
+      games = [today, three_days, three_years]
+      ids = fn band -> Filter.apply(games, viewer(), %{age: band}) |> Enum.map(& &1.game_id) end
+
+      assert ids.(:today) == ["g"]
+      assert ids.(:week) == ["g", "three"]
+      assert ids.(:year) == ["g", "three"]
+      refute "years" in ids.(:year)
+      assert ids.(:any) == ["g", "three", "years"]
+    end
+
+    test "a grouped period is the stretch before the one above it, and says so" do
+      assert Filter.period(game(updated_at: @now - @hour)) == "Today"
+      assert Filter.period(game(updated_at: @now - 3 * @day)) == "Earlier this week"
+      assert Filter.period(game(updated_at: @now - 20 * @day)) == "Earlier this month"
+      assert Filter.period(game(updated_at: @now - 100 * @day)) == "Earlier this year"
+      assert Filter.period(game(updated_at: @now - 3 * @year)) == "Older"
+      assert Filter.period(game(updated_at: nil)) == "Undated"
+    end
   end
 
   describe "narrowing" do
@@ -81,11 +105,7 @@ defmodule HighWire.Games.FilterTest do
   end
 
   describe "titles" do
-    test "periods and results wear the words the room groups by" do
-      assert Filter.period(game(updated_at: @now - @hour)) == "Today"
-      assert Filter.period(game(updated_at: @now - 3 * @year)) == "Older"
-      assert Filter.period(game(updated_at: nil)) == "Undated"
-
+    test "results wear the words the room groups by" do
       assert Filter.result(game(verdict: {:checkmate, :white})) == "Checkmate"
       assert Filter.result(game(status: :playing)) == "Unfinished"
       assert Filter.result(game(status: :broken)) == "Does not verify"
