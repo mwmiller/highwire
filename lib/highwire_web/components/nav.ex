@@ -55,20 +55,21 @@ defmodule HighWireWeb.Components.Nav do
     ~H"""
     <aside class="flex w-56 min-w-0 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-edge bg-panel">
       <div class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center overflow-hidden rounded-md border border-edge">
           <.link
             navigate="/"
             title="Timeline"
             aria-label="Timeline"
-            class="text-dim transition hover:text-paper"
+            class="flex h-6 items-center px-2 text-dim transition hover:bg-raised hover:text-paper"
           >
             <.timeline />
           </.link>
+          <span class="h-4 w-px shrink-0 bg-edge" aria-hidden="true"></span>
           <.link
             navigate="/games"
             title="Gameroom"
             aria-label="Gameroom"
-            class="text-dim transition hover:text-paper"
+            class="flex h-6 items-center px-2 text-dim transition hover:bg-raised hover:text-paper"
           >
             <.table />
           </.link>
