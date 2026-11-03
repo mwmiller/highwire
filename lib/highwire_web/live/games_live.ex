@@ -282,7 +282,7 @@ defmodule HighWireWeb.GamesLive do
     games = Filter.apply(games, viewer, filters)
 
     case group do
-      :period -> grouped(games, viewer, &Filter.period/1, @periods)
+      :period -> grouped(games, viewer, &Filter.period/1, @periods, keep_empty: true)
       :result -> grouped(games, viewer, &Filter.result/1, @results)
       _ -> room(games, self_id, viewer)
     end
@@ -305,13 +305,19 @@ defmodule HighWireWeb.GamesLive do
 
   # Review reads the same set as a run: every game in a period together, or
   # every game that ended the same way, in the order that reader would want
-  # them. Empty groups are dropped rather than titled and left blank.
-  defp grouped(games, viewer, key, order) do
+  # them.
+  #
+  # Periods keep their empty groups, because a period is a position on a
+  # scale: a week with nothing in it is a fact about what this node holds, and
+  # dropping the heading makes the scale look like it has a missing rung.
+  # Results do not — a room with no draws does not need to say so six times.
+  defp grouped(games, viewer, key, order, opts \\ []) do
     by_key = Enum.group_by(games, key)
+    keep_empty? = Keyword.get(opts, :keep_empty, false)
 
     order
     |> Enum.map(fn title -> {title, Map.get(by_key, title, [])} end)
-    |> Enum.reject(fn {_title, list} -> list == [] end)
+    |> Enum.reject(fn {_title, list} -> list == [] and not keep_empty? end)
     |> Enum.map(fn {title, list} -> {title, Interest.rank(list, viewer)} end)
   end
 
@@ -484,14 +490,18 @@ defmodule HighWireWeb.GamesLive do
     ~H"""
     <section class="mb-6">
       <h3 class="mb-2 text-[11px] uppercase tracking-wider text-faint">
-        {@title} <span class="text-faint">· {length(@games)}</span>
+        {@title} <span class="text-faint">· {count(@games)}</span>
       </h3>
-      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div :if={@games != []} class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <.game_card :for={game <- @games} game={game} self_id={@self_id} />
       </div>
     </section>
     """
   end
+
+  # A group with nothing in it says so in a word, rather than wearing a 0.
+  defp count([]), do: "none"
+  defp count(games), do: length(games)
 
   defp name(nil), do: "unknown"
   defp name(id), do: Profile.display_name(id)
@@ -558,7 +568,7 @@ defmodule HighWireWeb.GamesLive do
           />
 
           <p
-            :if={@filters != %{} and @sections == []}
+            :if={@filters != %{} and count_games(@sections) == 0}
             class="rounded border border-edge bg-panel px-4 py-6 text-sm text-dim"
           >
             No game matches that. Widen a filter or load older games.

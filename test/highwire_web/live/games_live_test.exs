@@ -95,6 +95,10 @@ defmodule HighWireWeb.GamesLiveTest do
 
       assert html =~ "Today"
       assert html =~ "Older"
+
+      # A period is a rung on a scale, so a week with nothing in it is said
+      # out loud rather than dropped from the ladder.
+      assert html =~ ~r/This week <span[^>]*>· none/
     end
   end
 
