@@ -307,10 +307,10 @@ defmodule HighWireWeb.GamesLive do
       >
         <div class="mb-2 flex items-center justify-between gap-3">
           <div class="flex min-w-0 items-center gap-2">
-            <Avatar.avatar :if={@game.challenger} id={@game.challenger} size={18} />
+            <Avatar.face :if={@game.challenger} id={@game.challenger} size={18} />
             <span class="truncate text-xs text-muted">{name(@game.challenger)}</span>
             <span class="text-[10px] uppercase tracking-wide text-faint">vs</span>
-            <Avatar.avatar :if={@game.accepter} id={@game.accepter} size={18} />
+            <Avatar.face :if={@game.accepter} id={@game.accepter} size={18} />
             <span class="truncate text-xs text-muted">{name(@game.accepter)}</span>
           </div>
         </div>

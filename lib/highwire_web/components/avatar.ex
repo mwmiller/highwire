@@ -17,6 +17,7 @@ defmodule HighWireWeb.Components.Avatar do
   use Phoenix.Component
 
   alias HighWire.Avatar, as: Ident
+  alias HighWire.SSB.Profile
 
   attr :id, :string, required: true
   attr :size, :integer, default: 40
@@ -25,6 +26,11 @@ defmodule HighWireWeb.Components.Avatar do
   attr :class, :any, default: nil, doc: "extra classes for the tile"
 
   def avatar(assigns) do
+    # The feed is the one place that knows what someone looks like, so a tile
+    # drawn anywhere in the app shows their face rather than an identicon
+    # standing in for a face we already have.
+    assigns = assign(assigns, :image, assigns.image || Profile.image(assigns.id))
+
     ~H"""
     <div
       class={[

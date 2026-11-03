@@ -559,10 +559,10 @@ defmodule HighWireWeb.GameLive do
         <div class="mx-auto max-w-2xl px-6 py-6">
           <header class="mb-4">
             <div class="flex items-center gap-2">
-              <Avatar.avatar :if={@game.challenger} id={@game.challenger} size={20} />
+              <Avatar.face :if={@game.challenger} id={@game.challenger} size={20} />
               <span class="text-sm text-paper">{name(@game.challenger)}</span>
               <span class="text-[10px] uppercase tracking-wide text-faint">vs</span>
-              <Avatar.avatar :if={@game.accepter} id={@game.accepter} size={20} />
+              <Avatar.face :if={@game.accepter} id={@game.accepter} size={20} />
               <span class="text-sm text-paper">{name(@game.accepter)}</span>
             </div>
             <p class="mt-1 flex items-center gap-2 text-xs text-dim">
@@ -641,7 +641,7 @@ defmodule HighWireWeb.GameLive do
       @turn == @color && "border-focus bg-raised",
       @turn != @color && "border-edge bg-panel"
     ]}>
-      <Avatar.avatar :if={@id} id={@id} size={20} />
+      <Avatar.face :if={@id} id={@id} size={24} />
       <div class="min-w-0">
         <div class="text-[10px] uppercase tracking-wide text-faint">{@color}</div>
         <div class="truncate text-sm text-paper">{name(@id)}</div>
