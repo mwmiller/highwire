@@ -49,6 +49,21 @@ let InfiniteScroll = {
   }
 }
 
+// The move list follows the board: whatever ply is showing is kept in view, so
+// a game long enough to overflow is followed rather than hunted for.
+let FollowMoves = {
+  mounted() {
+    this.reveal()
+  },
+  updated() {
+    this.reveal()
+  },
+  reveal() {
+    const active = this.el.querySelector("[data-active='true']")
+    if (active) active.scrollIntoView({block: "nearest"})
+  }
+}
+
 // Client-side preferences (Patchwork's settings page, packaged for the
 // browser). Every pref is one localStorage key applied to the document —
 // data-* attributes or inline styles on <html> — and the root-layout
@@ -1069,7 +1084,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
     SkyScroll,
     FeedScroll,
     ClampRows,
-    LandOn
+    LandOn,
+    FollowMoves
   }
 })
 

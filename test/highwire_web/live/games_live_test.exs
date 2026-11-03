@@ -10,6 +10,7 @@ defmodule HighWireWeb.GamesLiveTest do
   setup do
     Store.clear()
     Chess.Store.clear()
+    Chess.Legacy.Store.clear()
     :ok
   end
 
@@ -141,7 +142,9 @@ defmodule HighWireWeb.GamesLiveTest do
     # The board is a picture of an earlier position, so it takes no clicks.
     refute html =~ ~s(phx-click="square")
 
-    html = view |> element("button[phx-value-to='live']") |> render_click()
+    # Two ways back to the end of the line: the transport's last button and
+    # the chip that appears once you have stepped away from it.
+    html = view |> element("button[title='The latest position']") |> render_click()
     refute html =~ "Showing the position after move"
   end
 
@@ -152,6 +155,63 @@ defmodule HighWireWeb.GamesLiveTest do
 
     html = view |> element("button[phx-value-to='1']") |> render_click()
     assert html =~ "Showing the position after move 1 of 2"
+  end
+
+  test "playing the game back walks the line a ply at a time and stops at the end", %{conn: conn} do
+    game_id = seed_chess()
+
+    {:ok, view, html} = live(conn, "/games/#{game_id}")
+
+    refute html =~ "Stop playing back"
+
+    html = view |> element("button[title='Play the game from here']") |> render_click()
+    assert html =~ "Stop playing back"
+    assert html =~ "Looking back at move 0 of 2"
+
+    send(view.pid, :tick)
+    assert render(view) =~ "Looking back at move 1 of 2"
+
+    # The last position is the live one, so reaching it ends playback rather
+    # than leaving the reader pinned to a copy of the board.
+    send(view.pid, :tick)
+    html = render(view)
+    refute html =~ "Looking back at move"
+    refute html =~ "Stop playing back"
+  end
+
+  test "a move arriving while the game is being looked back keeps the reader's place", %{
+    conn: conn
+  } do
+    game_id = seed_chess()
+
+    {:ok, view, _html} = live(conn, "/games/#{game_id}")
+    view |> element("button[phx-value-to='first']") |> render_click()
+
+    Chess.Store.ingest(
+      envelope(challenger(), Chess.Game.move(game_id, "%c1.sha256", 3, "b1c3"), "%c5.sha256")
+    )
+
+    assert render(view) =~ "Looking back at move 0 of 3"
+  end
+
+  test "a log that stops verifying keeps the moves before the break", %{conn: conn} do
+    # The network's own games arrive with their moves already written down,
+    # so a ply this node cannot follow is found on the way through the log
+    # rather than refused at the door.
+    game_id =
+      seed_legacy([
+        {1, "e2", "e4", "e4"},
+        {2, "e7", "e5", "e5"},
+        {3, "e2", "e4", "e4"}
+      ])
+
+    {:ok, view, html} = live(conn, "/games/#{game_id}")
+
+    assert html =~ "The log stops verifying at move 3"
+    assert html =~ ~r/runs as far as\s+move 2/
+
+    html = view |> element("button[phx-value-to='1']") |> render_click()
+    assert html =~ "Looking back at move 1 of 2"
   end
 
   test "a game can be walked to the next one without going back to the room", %{conn: conn} do
@@ -212,9 +272,11 @@ defmodule HighWireWeb.GamesLiveTest do
     game_id
   end
 
+  defp challenger, do: "@challenger.ed25519"
+
   defp seed_chess do
     game_id = Chess.Game.new_id()
-    challenger = "@challenger.ed25519"
+    challenger = challenger()
     accepter = "@accepter.ed25519"
 
     Chess.Store.ingest(envelope(challenger, Chess.Game.challenge(game_id, "white"), "%c1.sha256"))
@@ -229,6 +291,34 @@ defmodule HighWireWeb.GamesLiveTest do
     )
 
     game_id
+  end
+
+  # A game in the network's own format, as the timeline files it: one row per
+  # move, naming the game it belongs to and the ply it was played as.
+  defp seed_legacy(moves) do
+    bytes = :binary.copy(<<0xAB>>, 32)
+    root = "%" <> Base.encode64(bytes) <> ".sha256"
+    HighWire.Chess.Legacy.Store.clear()
+
+    for {ply, orig, dest, san} <- moves do
+      HighWire.Chess.Legacy.Store.ingest(%{
+        "key" => "%m#{ply}.sha256",
+        "value" => %{
+          "author" => "@legacy.ed25519",
+          "timestamp" => 1_000 + ply,
+          "content" => %{
+            "type" => "chess_move",
+            "root" => root,
+            "ply" => ply,
+            "orig" => orig,
+            "dest" => dest,
+            "pgnMove" => san
+          }
+        }
+      })
+    end
+
+    Base.encode16(bytes, case: :lower)
   end
 
   test "a chess game sits in the same gameroom", %{conn: conn} do

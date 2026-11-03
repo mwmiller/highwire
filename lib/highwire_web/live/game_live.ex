@@ -17,6 +17,10 @@ defmodule HighWireWeb.GameLive do
   alias HighWire.SSB.{Identities, Profile}
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav}
 
+  # How long one ply of playback stays on the board: fast enough to read a
+  # game, slow enough to see the move land.
+  @tick 700
+
   @impl true
   def mount(%{"game_id" => game_id}, _session, socket) do
     if connected?(socket) do
@@ -68,16 +72,26 @@ defmodule HighWireWeb.GameLive do
   # The board's own state: which square is picked up and where that piece
   # can go. Both are derived from the folded position, so the page can only
   # offer moves the same engine the fold used would accept.
-  defp assign_board(socket, game) do
+  defp assign_board(socket, game, keep_at \\ nil) do
+    {line, stop} = line(game)
+    last = length(line) - 1
+
+    # A move arriving while the reader is looking back leaves them where they
+    # are; only the new end of the line is out of reach. Reaching that end is
+    # how the page goes live again, so play stops there too.
+    at = if is_integer(keep_at) and keep_at < last, do: keep_at, else: nil
+
     socket
     |> assign(:game, game)
     |> assign(:selected, nil)
     |> assign(:targets, [])
     |> assign(:movable, movable(game, socket.assigns.self_id))
     |> assign(:promos, [])
-    |> assign(:line, line(game))
+    |> assign(:line, line)
+    |> assign(:line_stop, stop)
     |> assign(:pairs, pairs((game && game.history) || []))
-    |> assign(:at, nil)
+    |> assign(:at, at)
+    |> assign(:playing?, Map.get(socket.assigns, :playing?, false) and at != nil)
   end
 
   # Only a game this node writes can be played here. A game read from the
@@ -123,36 +137,35 @@ defmodule HighWireWeb.GameLive do
   # arriving there leaves replay rather than pinning the page to a copy of the
   # board it is already showing.
   def handle_event("replay", %{"to" => to}, socket) do
+    {:noreply, socket |> stop() |> seek(to)}
+  end
+
+  def handle_event("scrub", %{"to" => to}, socket) do
+    {:noreply, socket |> stop() |> seek(to)}
+  end
+
+  # Playing the game back is the same walk the buttons take, a ply at a time.
+  # From live, play starts over at the top, which is what a finished game's
+  # audience wants; from anywhere else it carries on from there.
+  def handle_event("play", _params, socket) do
     %{line: line, at: at} = socket.assigns
     last = length(line) - 1
 
-    at =
-      case to do
-        "first" ->
-          0
+    cond do
+      socket.assigns.playing? ->
+        {:noreply, stop(socket)}
 
-        "prev" ->
-          min(max((at || last) - 1, 0), last)
+      last <= 0 ->
+        {:noreply, socket}
 
-        "next" ->
-          min((at || last) + 1, last)
+      at == nil or at >= last ->
+        Process.send_after(self(), :tick, @tick)
+        {:noreply, socket |> seek(0) |> assign(:playing?, true)}
 
-        "live" ->
-          last
-
-        ply ->
-          case Integer.parse(ply) do
-            {n, ""} -> min(max(n, 0), last)
-            _ -> at || last
-          end
-      end
-
-    {:noreply,
-     socket
-     |> assign(:at, if(at == last, do: nil, else: at))
-     |> assign(:selected, nil)
-     |> assign(:targets, [])
-     |> assign(:promos, [])}
+      true ->
+        Process.send_after(self(), :tick, @tick)
+        {:noreply, assign(socket, :playing?, true)}
+    end
   end
 
   def handle_event("promote", %{"uci" => uci}, socket) do
@@ -175,18 +188,70 @@ defmodule HighWireWeb.GameLive do
     end
   end
 
+  defp seek(socket, to) do
+    %{line: line, at: at} = socket.assigns
+    last = length(line) - 1
+
+    at =
+      case to do
+        "first" ->
+          0
+
+        "prev" ->
+          min(max((at || last) - 1, 0), last)
+
+        "next" ->
+          min((at || last) + 1, last)
+
+        "live" ->
+          last
+
+        n when is_integer(n) ->
+          min(max(n, 0), last)
+
+        ply ->
+          case Integer.parse(ply) do
+            {n, ""} -> min(max(n, 0), last)
+            _ -> at || last
+          end
+      end
+
+    socket
+    |> assign(:at, if(at == last, do: nil, else: at))
+    |> assign(:selected, nil)
+    |> assign(:targets, [])
+    |> assign(:promos, [])
+  end
+
+  defp stop(socket), do: assign(socket, :playing?, false)
+
   @impl true
   def handle_info({:backgammon, game_id}, %{assigns: %{game_id: game_id}} = socket) do
     {:noreply, assign(socket, :game, load(game_id))}
   end
 
   def handle_info({:chess, game_id}, %{assigns: %{game_id: game_id}} = socket) do
-    {:noreply, assign_board(socket, load(game_id))}
+    {:noreply, assign_board(socket, load(game_id), socket.assigns.at)}
   end
 
   def handle_info({:chess_legacy, game_id}, %{assigns: %{game_id: game_id}} = socket) do
-    {:noreply, assign_board(socket, load(game_id))}
+    {:noreply, assign_board(socket, load(game_id), socket.assigns.at)}
   end
+
+  def handle_info(:tick, %{assigns: %{playing?: true}} = socket) do
+    %{line: line, at: at} = socket.assigns
+    last = length(line) - 1
+    next = (at || 0) + 1
+
+    if next >= last do
+      {:noreply, socket |> stop() |> seek("live")}
+    else
+      Process.send_after(self(), :tick, @tick)
+      {:noreply, socket |> seek(next) |> assign(:playing?, true)}
+    end
+  end
+
+  def handle_info(:tick, socket), do: {:noreply, socket}
 
   def handle_info(_other, socket), do: {:noreply, socket}
 
@@ -232,18 +297,19 @@ defmodule HighWireWeb.GameLive do
   # than pretending the fragment is the whole game.
   defp line(%{kind: :chess, history: [%{ply: 1} | _]} = game) do
     start = Engine.initial()
-    [step(0, start, nil) | walk(game.history, start, [])]
+    {steps, stop} = walk(game.history, start, [])
+    {[step(0, start, nil) | steps], stop}
   end
 
-  defp line(%{kind: :chess, history: []}), do: [step(0, Engine.initial(), nil)]
-  defp line(_game), do: []
+  defp line(%{kind: :chess, history: []}), do: {[step(0, Engine.initial(), nil)], nil}
+  defp line(_game), do: {[], nil}
 
-  defp walk([], _pos, acc), do: Enum.reverse(acc)
+  defp walk([], _pos, acc), do: {Enum.reverse(acc), nil}
 
   defp walk([%{uci: uci} = item | rest], pos, acc) when is_binary(uci) do
     case Engine.play(pos, uci) do
       {:ok, next, _san} -> walk(rest, next, [step(item.ply, next, item) | acc])
-      {:error, _reason} -> []
+      {:error, reason} -> {Enum.reverse(acc), %{ply: item.ply, reason: reason}}
     end
   end
 
@@ -324,15 +390,6 @@ defmodule HighWireWeb.GameLive do
     end
   end
 
-  # The four ways through the line, in the order they sit on the page.
-  defp steps do
-    [
-      {"first", "⏮", "The position before the first move"},
-      {"prev", "‹", "The move before this one"},
-      {"next", "›", "The move after this one"}
-    ]
-  end
-
   attr :step, :map, default: nil
   attr :current, :integer, default: 0
 
@@ -342,6 +399,7 @@ defmodule HighWireWeb.GameLive do
       :if={@step}
       phx-click="replay"
       phx-value-to={@step.ply}
+      data-active={to_string(@step.ply == @current)}
       class={[
         "truncate rounded px-1.5 py-0.5 text-left font-mono text-[11px] transition",
         if(@step.ply == @current,
@@ -351,6 +409,105 @@ defmodule HighWireWeb.GameLive do
       ]}
     >
       {@step.san}
+    </button>
+    """
+  end
+
+  attr :at, :integer, default: nil
+  attr :current, :integer, required: true
+  attr :last, :integer, required: true
+  attr :playing?, :boolean, default: false
+  attr :status, :atom, default: nil
+
+  # The line is the game, so the transport walks it: one position per ply, a
+  # scrubber for the jumps nobody wants to click through, and a play button
+  # that runs it forwards. Every part of it is the same seek the move list
+  # uses, so the board, the number and the list never disagree.
+  defp transport(assigns) do
+    ~H"""
+    <div class="mt-2 flex flex-wrap items-center gap-2 rounded border border-edge bg-panel px-2 py-1.5">
+      <div class="flex items-stretch overflow-hidden rounded border border-edge">
+        <.step to="first" glyph="⏮" title="The position before the first move" off={@at == 0} />
+        <.step to="prev" glyph="‹" title="The move before this one" off={@at == 0} />
+        <button
+          phx-click="play"
+          title={if @playing?, do: "Stop playing back", else: "Play the game from here"}
+          aria-label={if @playing?, do: "Stop playing back", else: "Play the game from here"}
+          class={[
+            "grid h-7 w-8 place-items-center border-x border-edge text-xs transition",
+            if(@playing?,
+              do: "bg-accent/20 text-accent hover:bg-accent/30",
+              else: "text-muted hover:bg-raised hover:text-paper"
+            )
+          ]}
+        >
+          {if @playing?, do: "❚❚", else: "▶"}
+        </button>
+        <.step to="next" glyph="›" title="The move after this one" off={@at == nil} />
+        <.step to="live" glyph="⏭" title="The latest position" off={@at == nil} />
+      </div>
+
+      <%!-- The slider reports through a form: change events are how a range
+           input says where it was dragged to, and a bare input does not
+           report them. --%>
+      <form id="scrub" phx-change="scrub" class="min-w-24 flex-1">
+        <input
+          type="range"
+          name="to"
+          min="0"
+          max={@last}
+          value={@at || @last}
+          aria-label="Position in the game"
+          class="w-full cursor-pointer accent-accent"
+          style="accent-color: var(--accent)"
+        />
+      </form>
+
+      <span class="shrink-0 font-mono text-[11px] tabular-nums text-faint">
+        {@current} / {@last}
+      </span>
+
+      <button
+        :if={@at != nil}
+        phx-click="replay"
+        phx-value-to="live"
+        class="shrink-0 rounded border border-accent/40 px-2 py-0.5 text-[10px] uppercase tracking-wide text-accent transition hover:bg-accent/15"
+      >
+        {if @status == :playing, do: "back to live", else: "latest"}
+      </button>
+
+      <span
+        :if={@at == nil and @status == :playing}
+        class="flex shrink-0 items-center gap-1.5 text-[10px] uppercase tracking-wide text-faint"
+      >
+        <span class="size-1.5 rounded-full bg-accent"></span> live
+      </span>
+    </div>
+    """
+  end
+
+  attr :to, :string, required: true
+  attr :glyph, :string, required: true
+  attr :title, :string, required: true
+  attr :off, :boolean, default: false
+
+  defp step(assigns) do
+    ~H"""
+    <button
+      phx-click="replay"
+      phx-value-to={@to}
+      title={@title}
+      aria-label={@title}
+      disabled={@off}
+      class={[
+        "grid h-7 w-7 place-items-center border-r border-edge text-xs transition last:border-r-0",
+        if(@off,
+          do: "cursor-default text-faint/40",
+          else: "text-muted hover:bg-raised hover:text-paper"
+        )
+      ]}
+    >
+      {@glyph}
     </button>
     """
   end
@@ -470,6 +627,15 @@ defmodule HighWireWeb.GameLive do
                 targets={@targets}
               />
 
+              <.transport
+                :if={length(@line) > 1}
+                at={@at}
+                current={@current}
+                last={length(@line) - 1}
+                playing?={@playing?}
+                status={@game.status}
+              />
+
               <div
                 :if={@promos != []}
                 class="mt-2 flex items-center gap-2 rounded border border-edge bg-panel px-3 py-2"
@@ -525,25 +691,6 @@ defmodule HighWireWeb.GameLive do
                 </span>
               </div>
 
-              <div :if={length(@line) > 1} class="flex items-center gap-1">
-                <button
-                  :for={{to, glyph, title} <- steps()}
-                  phx-click="replay"
-                  phx-value-to={to}
-                  title={title}
-                  class="rounded border border-edge px-2 py-0.5 text-xs text-muted transition hover:border-focus hover:text-paper"
-                >
-                  {glyph}
-                </button>
-                <button
-                  phx-click="replay"
-                  phx-value-to="live"
-                  class="ml-auto rounded border border-edge px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted transition hover:border-focus hover:text-paper"
-                >
-                  latest
-                </button>
-              </div>
-
               <p :if={@pairs == []} class="text-xs italic text-faint">
                 No moves played yet.
               </p>
@@ -561,7 +708,27 @@ defmodule HighWireWeb.GameLive do
                 positions before that are not in it. Every move since is listed below.
               </p>
 
-              <ol class="max-h-[26rem] min-w-0 overflow-y-auto pr-1">
+              <%!-- The same courtesy for a game this node has from the start
+                   but cannot walk all the way through: the moves it can show
+                   are worth stepping through, and the break is worth naming
+                   rather than leaving as a transport that stops early for no
+                   stated reason. --%>
+              <p :if={@line_stop} class="text-[11px] leading-relaxed text-faint">
+                <span :if={length(@line) > 1}>
+                  The log stops verifying at move {@line_stop.ply}, so the line runs as far as
+                  move {length(@line) - 1}.
+                </span>
+                <span :if={length(@line) <= 1}>
+                  This game's first move does not verify here, so there is no line to walk. Its
+                  moves are still listed below.
+                </span>
+              </p>
+
+              <ol
+                id="moves"
+                phx-hook="FollowMoves"
+                class="max-h-[26rem] min-w-0 overflow-y-auto pr-1"
+              >
                 <li
                   :for={pair <- @pairs}
                   class="grid grid-cols-[1.75rem_minmax(0,1fr)_minmax(0,1fr)] items-center gap-1"
