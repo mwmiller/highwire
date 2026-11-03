@@ -70,7 +70,7 @@ defmodule HighWireWeb.Components.Nav do
             aria-label="Gameroom"
             class="text-dim transition hover:text-paper"
           >
-            <.door />
+            <.table />
           </.link>
         </div>
         <div class="flex items-center gap-3">
@@ -182,11 +182,10 @@ defmodule HighWireWeb.Components.Nav do
   defp identity_image(%{"id" => id}), do: Profile.image(id)
   defp identity_image(_identity), do: nil
 
-  # A window and a door: both openings in the same wall, drawn as the same
-  # frame with one detail inside it — a mullion for the feed you look
-  # through, a handle for the room you walk into. A clock beside a door said
-  # two unrelated things in two unrelated shapes; this pair says the two are
-  # the same kind of thing, which is what they are.
+  # A newspaper and a table: the same move the rest of the rail makes in
+  # words — the timeline is what this node has read, the room is the tables
+  # it has laid out. Both are ordinary objects drawn in one stroke, so the
+  # pair reads as two ways to spend an evening rather than two abstractions.
   defp timeline(assigns) do
     ~H"""
     <svg
@@ -199,17 +198,18 @@ defmodule HighWireWeb.Components.Nav do
       stroke-linecap="round"
       stroke-linejoin="round"
     >
-      <rect x="4" y="4.5" width="16" height="12" rx="1.8" />
-      <path d="M12 4.5v12" />
-      <path d="M4 10.5h16" />
-      <path d="M4 20.5h16" />
+      <path d="M4 5.5h13.5A2.5 2.5 0 0 1 20 8v10.5H6.5A2.5 2.5 0 0 1 4 16V5.5Z" />
+      <path d="M4 16a2.5 2.5 0 0 1 2.5-2.5H20" />
+      <path d="M7 8.5h8" />
+      <path d="M7 11.5h5" />
     </svg>
     """
   end
 
-  # The room is the doorway you go through; the feed is the window onto what
-  # this node has seen.
-  defp door(assigns) do
+  # A table seen from standing height with one piece on it: the view you have
+  # walking past the tables in the room. A table seen from directly above
+  # turns into a blob at 16px, and a row of them into an app grid.
+  defp table(assigns) do
     ~H"""
     <svg
       class="h-4 w-4"
@@ -221,9 +221,10 @@ defmodule HighWireWeb.Components.Nav do
       stroke-linecap="round"
       stroke-linejoin="round"
     >
-      <path d="M5.5 20.5V5.5A2 2 0 0 1 7.5 3.5h9a2 2 0 0 1 2 2v15" />
-      <path d="M4 20.5h16" />
-      <circle cx="14.6" cy="11.6" r="1" fill="currentColor" stroke="none" />
+      <path d="M3.5 8.5h17l-2.5 8h-12Z" />
+      <path d="M7 20v-3.5" />
+      <path d="M17 20v-3.5" />
+      <circle cx="12" cy="12.5" r="1" fill="currentColor" stroke="none" />
     </svg>
     """
   end
