@@ -29,28 +29,41 @@ defmodule HighWireWeb.IdentityLive do
   use HighWireWeb, :live_view
 
   alias HighWire.Avatar, as: Ident
-  alias HighWire.SSB.{Identities, Profile, Sidecar}
+  alias HighWire.SSB.{Identities, Profile}
   alias HighWire.Timeline
   alias HighWireWeb.Components.{Avatar, Nav}
+  alias HighWireWeb.IdentitySwitch
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
     # The registry catches up to whatever secret is running — the page
     # is the place that can heal a first-run install's missing entry.
     _ = Identities.ensure_boot()
 
-    {:ok,
-     socket
-     |> assign(
-       page_title: "Identity",
-       switching: false,
-       confirming: nil,
-       exported: nil,
-       notice: nil,
-       form_label: ""
-     )
-     |> reload()
-     |> resolve()}
+    socket =
+      socket
+      |> assign(
+        page_title: "Identity",
+        switching: false,
+        confirming: nil,
+        exported: nil,
+        notice: nil,
+        form_label: ""
+      )
+      |> reload()
+      |> resolve()
+
+    # `?use=<id>` is how the desktop shell's menu switches identity: the
+    # menu is a list of ids, and this page is what knows how to switch.
+    case params do
+      %{"use" => id} when is_binary(id) and id != "" ->
+        if connected?(socket), do: send(self(), {:identity_use, id})
+
+      _ ->
+        :ok
+    end
+
+    {:ok, socket}
   end
 
   @impl true
@@ -65,12 +78,9 @@ defmodule HighWireWeb.IdentityLive do
       true ->
         socket = assign(socket, notice: {:info, "Switching to #{label(socket, id)}…"})
 
-        if Sidecar.enabled?() do
-          queue_engine_switch(id)
-          {:noreply, assign(socket, switching: true)}
-        else
-          # No engine to restart: the secret write is the whole switch.
-          {:noreply, switched(socket, Sidecar.switch_identity(id), id)}
+        case IdentitySwitch.switch(id) do
+          :async -> {:noreply, assign(socket, switching: true)}
+          {:sync, result} -> {:noreply, switched(socket, result, id)}
         end
     end
   end
@@ -159,27 +169,12 @@ defmodule HighWireWeb.IdentityLive do
     end
   end
 
-  # The engine stop → write → start takes seconds; the LiveView stays
-  # responsive and the result comes back as a message.
-  defp queue_engine_switch(id) do
-    parent = self()
-
-    Task.start(fn ->
-      result =
-        try do
-          Sidecar.switch_identity(id)
-        catch
-          kind, reason -> {:error, {kind, reason}}
-        end
-
-      send(parent, {:identity_switch, result, id})
-    end)
-  end
-
   @impl true
   def handle_info({:identity_switch, result, id}, socket) do
     {:noreply, switched(socket, result, id)}
   end
+
+  def handle_info({:identity_use, id}, socket), do: handle_event("switch", %{"id" => id}, socket)
 
   # Fresh profile answers ride the timeline topic. The Timeline shadows
   # them into the read model ahead of this broadcast, so re-reading

@@ -1,14 +1,18 @@
 defmodule HighWireWeb.Components.Nav do
   @moduledoc """
   The shared left rail: the crab mark at the top left (linking to the
-  timeline) and, at the top right beside the settings gear — the other
-  identity-adjacent control — the current identity's avatar (linking to
-  the identity page, `/identity`); and, pinned to the bottom, the
-  current network badge, which links to the network page (`/network`)
-  — the general place to manage dialing and the network profile. Pages
-  add their own content to the rail through the default slot; pages
-  that pass none get the same wide frame, so the column never jumps
-  between pages.
+  timeline), the settings gear at the top right, and, pinned to the
+  bottom, the current network badge, which links to the network page
+  (`/network`) — the general place to manage dialing and the network
+  profile. Pages add their own content to the rail through the default
+  slot; pages that pass none get the same wide frame, so the column
+  never jumps between pages.
+
+  The current identity's avatar (linking to the identity page,
+  `/identity`) is window chrome rather than rail content: it is pinned
+  to the far right of the window's top edge, so the rail stays a column
+  of places to go and the identity stays at the opposite corner from
+  the set of places, wherever the rail's own content runs.
 
   The avatar and its title show what followers see: the resolved alias
   and image from the `HighWire.SSB.Profile` read model, with the local
@@ -76,20 +80,6 @@ defmodule HighWireWeb.Components.Nav do
         </div>
         <div class="flex items-center gap-3">
           <.link
-            :if={@identity}
-            navigate="/identity"
-            title={identity_title(@identity)}
-            aria-label="Identity"
-            class="block transition hover:opacity-80"
-          >
-            <Avatar.avatar
-              id={@identity["id"]}
-              size={28}
-              image={identity_image(@identity)}
-              rev={Profile.rev()}
-            />
-          </.link>
-          <.link
             navigate="/settings"
             title="Settings"
             aria-label="Settings"
@@ -124,6 +114,20 @@ defmodule HighWireWeb.Components.Nav do
             · {@gossip.connected}
           </span>
         </span>
+      </.link>
+      <.link
+        :if={@identity}
+        navigate="/identity"
+        title={identity_title(@identity)}
+        aria-label="Identity"
+        class="fixed right-3 top-2.5 z-20 block transition hover:opacity-80"
+      >
+        <Avatar.avatar
+          id={@identity["id"]}
+          size={28}
+          image={identity_image(@identity)}
+          rev={Profile.rev()}
+        />
       </.link>
     </aside>
     """

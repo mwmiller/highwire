@@ -170,8 +170,48 @@ fn sweep_sidecar_engine() {
 const BACKEND_URL: &str = "http://localhost:24042";
 const BACKEND_ADDR: &str = "127.0.0.1:24042";
 
+// One identity the shell can switch to, as the backend reports it on
+// GET /identities.json. The label is this install's own name for the
+// key; `active` marks the one being posted as.
+#[derive(Clone, PartialEq, serde::Deserialize)]
+struct IdentityEntry {
+    id: String,
+    label: String,
+    #[serde(default)]
+    active: bool,
+}
+
+// The list the menu was last built for. The webview reports the
+// identities on every page load; the menu is rebuilt only when the
+// list changed, so ordinary navigation leaves the menu bar alone.
+#[derive(Default)]
+struct MenuIdentities(Mutex<Vec<IdentityEntry>>);
+
+// Query values carry identity ids, which are base64 with `+`, `/` and
+// `=` in them; `+` decodes as a space unless it is escaped.
+fn url_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+
+    out
+}
+
 fn build_menu(app: &tauri::App) -> tauri::Result<()> {
-    let handle = app.handle();
+    let menu = menu_for(app)?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
+fn menu_for<M: Manager<tauri::Wry>>(app: &M) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    let handle = app;
 
     let timeline = MenuItemBuilder::with_id("timeline", "Timeline")
         .accelerator("CmdOrCtrl+1")
@@ -188,6 +228,42 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
     let profile = MenuItemBuilder::with_id("profile", "My Profile")
         .accelerator("CmdOrCtrl+Shift+P")
         .build(handle)?;
+    let identities_manage = MenuItemBuilder::with_id("identities", "Manage Identities…")
+        .accelerator("CmdOrCtrl+Shift+I")
+        .build(handle)?;
+
+    // Each identity gets its own item so switching does not require a
+    // detour through the identity page. The one posting now is marked
+    // rather than hidden: the item still navigates, it just says so.
+    // Setup runs before any page has reported an identity list, so the
+    // menu starts with only the way to manage them.
+    let entries = app
+        .try_state::<MenuIdentities>()
+        .map(|known| known.0.lock().unwrap().clone())
+        .unwrap_or_default();
+    let mut identity_items = Vec::with_capacity(entries.len());
+
+    for entry in &entries {
+        let text = if entry.active {
+            format!("{} — posting now", entry.label)
+        } else {
+            entry.label.clone()
+        };
+
+        identity_items
+            .push(MenuItemBuilder::with_id(format!("identity:{}", entry.id), text).build(handle)?);
+    }
+
+    let mut identities = SubmenuBuilder::new(handle, "Identities").item(&identities_manage);
+
+    if !identity_items.is_empty() {
+        identities = identities.separator();
+        for item in &identity_items {
+            identities = identities.item(item);
+        }
+    }
+
+    let identities = identities.build()?;
     let reload = MenuItemBuilder::with_id("reload", "Reload")
         .accelerator("CmdOrCtrl+R")
         .build(handle)?;
@@ -241,6 +317,7 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
     let go = SubmenuBuilder::new(handle, "Go")
         .item(&timeline)
         .item(&profile)
+        .item(&identities)
         .item(&network)
         .item(&go_settings)
         .separator()
@@ -251,16 +328,45 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
         .item(&close_window)
         .build()?;
 
-    let menu = MenuBuilder::new(handle)
+    MenuBuilder::new(handle)
         .item(&highwire)
         .item(&go)
         .item(&edit)
         .item(&view)
         .item(&window)
-        .build()?;
+        .build()
+}
 
-    app.set_menu(menu)?;
-    Ok(())
+// The webview reports the identities it can post as on every page
+// load, because only the backend knows them. The menu is rebuilt when
+// the list differs from the one it was built for — a switch, a new
+// identity, a rename — and left alone otherwise, so navigating the app
+// never disturbs the menu bar.
+#[tauri::command]
+async fn set_identities(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, MenuIdentities>,
+    items: Vec<IdentityEntry>,
+) -> Result<(), String> {
+    {
+        let mut known = state.0.lock().unwrap();
+
+        if *known == items {
+            return Ok(());
+        }
+
+        *known = items;
+    }
+
+    let handle = app.clone();
+
+    // Menus belong to the main thread, whatever thread the command ran on.
+    app.run_on_main_thread(move || {
+        if let Ok(menu) = menu_for(&handle) {
+            let _ = handle.set_menu(menu);
+        }
+    })
+    .map_err(|err| err.to_string())
 }
 
 // Opens the macOS Character Viewer at the current insertion point. The
@@ -414,7 +520,8 @@ pub fn run() {
     let exit_pid = backend_pid.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![open_external])
+        .manage(MenuIdentities::default())
+        .invoke_handler(tauri::generate_handler![open_external, set_identities])
         .setup(move |app| {
             build_menu(app)?;
             // Spawn synchronously so the PID is recorded before any event
@@ -440,12 +547,20 @@ pub fn run() {
                     let _ = window.eval(format!("window.location.href = \"{path}\""));
                 }
             };
-            match event.id().as_ref() {
+            let id = event.id().as_ref().to_string();
+
+            if let Some(identity) = id.strip_prefix("identity:") {
+                navigate(&format!("/identity?use={}", url_encode(identity)));
+                return;
+            }
+
+            match id.as_str() {
                 "timeline" => navigate("/"),
                 "network" => navigate("/network"),
                 "dashboard" => navigate("/dashboard"),
                 "prefs" => navigate("/settings"),
                 "profile" => navigate("/profile"),
+                "identities" => navigate("/identity"),
                 "reload" => {
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.reload();

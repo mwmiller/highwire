@@ -1160,6 +1160,26 @@ document.addEventListener("auxclick", e => {
   if (e.button === 1) openExternally(e)
 })
 
+// The Go menu lists every identity this install can post as, which only
+// the backend knows. Each page load reports the list to the shell, which
+// rebuilds the menu's identity items when it changed and ignores it
+// otherwise, so ordinary navigation leaves the menu bar alone.
+const syncIdentitiesMenu = () => {
+  if (!window.__TAURI__) return
+
+  fetch("/identities.json", {headers: {accept: "application/json"}})
+    .then(res => (res.ok ? res.json() : null))
+    .then(items => {
+      if (Array.isArray(items)) {
+        window.__TAURI__.core.invoke("set_identities", {items}).catch(() => {})
+      }
+    })
+    .catch(() => {})
+}
+
+syncIdentitiesMenu()
+document.addEventListener("phx:page-loading-stop", syncIdentitiesMenu)
+
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
   hooks: {

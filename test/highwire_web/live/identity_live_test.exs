@@ -30,7 +30,7 @@ defmodule HighWireWeb.IdentityLiveTest do
   defp secret_path(home), do: Path.join([home, ".ssberl", "secret"])
 
   describe "the identity page" do
-    test "lists identities and links the rail avatar to itself", %{conn: conn} do
+    test "lists identities and links the identity avatar to itself", %{conn: conn} do
       {:ok, main} = Identities.create("Main")
       {:ok, bot} = Identities.create("Bot")
 
@@ -40,10 +40,10 @@ defmodule HighWireWeb.IdentityLiveTest do
       assert html =~ "Main"
       assert html =~ "Bot"
 
-      # The rail avatar is the entry point: it links back here, and its
-      # title pairs the name followers see with the local label in
-      # parentheses after it. Nothing has resolved for this key yet, so
-      # the name is the short id — what a feed with no profile shows.
+      # The avatar is the entry point: it links back here, and its title
+      # pairs the name followers see with the local label in parentheses
+      # after it. Nothing has resolved for this key yet, so the name is
+      # the short id — what a feed with no profile shows.
       assert html =~ ~s(aria-label="Identity")
       assert html =~ ~s(href="/identity")
       assert html =~ "You are #{Ident.short_id(main)} (Main). Click to manage identities."
@@ -52,12 +52,15 @@ defmodule HighWireWeb.IdentityLiveTest do
       # first, the local label in parens after it.
       assert html =~ ~r/#{Regex.escape(Ident.short_id(bot))}\s*<span[^>]*>\(Bot\)/
 
-      # The avatar sits beside the gear at the top right, not beside
-      # the crab mark at the left.
+      # The avatar is window chrome, pinned to the far right of the top
+      # edge rather than carried inside the rail: it comes after the
+      # rail's own header in the markup and leaves the crab and the
+      # gear behind in the left column.
       {crab, _} = :binary.match(html, ~s(aria-label="Timeline"))
-      {avatar, _} = :binary.match(html, ~s(aria-label="Identity"))
       {gear, _} = :binary.match(html, ~s(aria-label="Settings"))
-      assert crab < avatar and avatar < gear
+      {avatar, _} = :binary.match(html, ~s(aria-label="Identity"))
+      assert crab < gear and gear < avatar
+      assert html =~ "fixed right-3 top-2.5"
     end
 
     test "with no identity at all, the page offers to make one", %{conn: conn} do
@@ -113,6 +116,17 @@ defmodule HighWireWeb.IdentityLiveTest do
       assert html =~ "Now posting as Bot"
       assert html =~ "You are #{Ident.short_id(bot)} (Bot). Click to manage identities."
       assert Keys.load!(secret_path(home)).id == bot
+      assert Identities.active_id() == bot
+    end
+
+    test "?use= switches on arrival, which is how the desktop menu asks", %{conn: conn} do
+      {:ok, _} = Identities.create("Main")
+      {:ok, bot} = Identities.create("Bot")
+
+      {:ok, view, _html} = live(conn, "/identity?use=" <> URI.encode_www_form(bot))
+      html = render(view)
+
+      assert html =~ "Now posting as Bot"
       assert Identities.active_id() == bot
     end
 

@@ -1236,7 +1236,9 @@ defmodule HighWireWeb.TimelineLive do
       </Nav.rail>
 
       <div class="flex min-w-0 flex-1 flex-col">
-        <header class="flex h-11 shrink-0 items-center gap-2 border-b border-edge bg-panel px-4">
+        <%!-- The right padding keeps the peer chip clear of the identity
+        avatar, which is pinned to the window's top-right corner. --%>
+        <header class="flex h-11 shrink-0 items-center gap-2 border-b border-edge bg-panel pl-4 pr-12">
           <nav class="flex shrink-0 items-center gap-1" aria-label="Feeds">
             <.feed_tab :for={{v, label} <- @left_views} v={v} label={label} current={@view} />
           </nav>

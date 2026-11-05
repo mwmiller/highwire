@@ -49,6 +49,12 @@ defmodule HighWireWeb.Router do
     get "/identicon/:key", BlobController, :ident
   end
 
+  # The identity list as data, for the desktop shell's menu: a native
+  # menu cannot read a page, so it reads this instead.
+  scope "/", HighWireWeb do
+    get "/identities.json", IdentitiesController, :index
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", HighWireWeb do
   #   pipe_through :api
