@@ -98,9 +98,15 @@ defmodule HighWireWeb.PostLive do
     # answer never leaves the box the thread arrived in.
     result =
       if private_thread?(root) do
-        Timeline.reply_private(root["key"], root["key"], body, private_recipients(socket))
+        Timeline.reply_private(
+          root["key"],
+          root["key"],
+          body,
+          private_recipients(socket),
+          root["key"]
+        )
       else
-        Timeline.reply(root["key"], root["key"], body)
+        Timeline.reply(root["key"], root["key"], body, root["key"])
       end
 
     socket =

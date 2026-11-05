@@ -566,6 +566,18 @@ defmodule HighWire.Timeline do
   end
 
   @doc """
+  Publishes a reply. `root` is the thread's root message key; `branch`
+  is the parent message key (a root reply branches from the root
+  itself). Optional `fork` names the thread the reply belongs to.
+  """
+  @spec reply(binary(), binary(), binary(), binary() | nil) ::
+          {:ok, binary() | nil} | {:error, term()}
+  def reply(root, branch, text, fork \\ nil)
+      when is_binary(root) and is_binary(branch) and is_binary(text) do
+    publish_content(reply_content(root, branch, text, fork))
+  end
+
+  @doc """
   Publishes a reply inside a private thread.
 
   The body is boxed for `recipients` and published like any other
@@ -573,11 +585,11 @@ defmodule HighWire.Timeline do
   in. `recipients` are feed ids — the thread's participants plus self —
   and the box format caps them at seven.
   """
-  @spec reply_private(binary(), binary(), binary(), [binary()]) ::
+  @spec reply_private(binary(), binary(), binary(), [binary()], binary() | nil) ::
           {:ok, binary() | nil} | {:error, term()}
-  def reply_private(root, branch, text, recipients)
+  def reply_private(root, branch, text, recipients, fork \\ nil)
       when is_binary(root) and is_binary(branch) and is_binary(text) do
-    boxed_publish(reply_content(root, branch, text), recipients)
+    boxed_publish(reply_content(root, branch, text, fork), recipients)
   end
 
   @doc """
@@ -660,8 +672,14 @@ defmodule HighWire.Timeline do
   @doc false
   def post_content(text), do: %{"type" => "post", "text" => text}
   @doc false
-  def reply_content(root, branch, text) do
-    %{"type" => "post", "text" => text, "root" => root, "branch" => branch}
+  def reply_content(root, branch, text, fork \\ nil) do
+    content = %{"type" => "post", "text" => text, "root" => root, "branch" => branch}
+
+    if fork do
+      Map.put(content, "fork", fork)
+    else
+      content
+    end
   end
 
   @doc false
