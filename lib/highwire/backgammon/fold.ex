@@ -119,6 +119,41 @@ defmodule HighWire.Backgammon.Fold do
     end
   end
 
+  @doc false
+  def resign(%{type: "resign"} = msg) do
+    %{
+      status: :finished,
+      winner: %{player: msg["player"], reason: :resign},
+      phase: :finished
+    }
+  end
+
+  def resign(_msg), do: nil
+
+  @doc false
+  def fold(game, store) do
+    if Map.has_key?(game, :status) do
+      game
+    else
+      %{
+        game
+        | status: store.status,
+          error: store.error,
+          phase: store.phase,
+          turn_count: store.turn_count,
+          mover: store.mover,
+          accepter: store.accepter,
+          challenger: store.challenger,
+          position: store.position,
+          remaining: store.remaining,
+          halves: store.halves,
+          opening_rolls: store.opening_rolls,
+          challenge_key: store.challenge_key,
+          opener: store.opener
+      }
+    end
+  end
+
   defp do_fold(game, spec, accept_reveal, entries) do
     len = spec["length"]
     %{rolls: rolls, turns: turns, resigns: resigns} = decode_entries(entries, game)

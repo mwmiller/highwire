@@ -70,6 +70,7 @@ defmodule HighWireWeb.GamesLive do
      |> assign(:total, Catalog.count())
      |> assign(:filters, %{})
      |> assign(:group, :room)
+     |> assign(:confirming_new?, false)
      |> assign_games(page(self_id, 0))}
   end
 
@@ -125,35 +126,40 @@ defmodule HighWireWeb.GamesLive do
     {:noreply, push_navigate(socket, to: ~p"/games/#{id}")}
   end
 
-  # Opening a game publishes the challenge from this identity, so the key
-  # that comes back is the thread root every later move answers to.
-  def handle_event("new", %{"color" => color}, socket) do
-    case HighWire.Chess.Log.open(color) do
-      {:ok, game_id, _key} ->
-        {:noreply, push_navigate(socket, to: ~p"/games/#{game_id}")}
-
-      {:error, reason} ->
-        {:noreply, assign(socket, :error, "Could not open a game: #{inspect(reason)}")}
-    end
-  end
-
-  # Backgammon has no side to choose: the opening roll decides who starts.
-  def handle_event("new", %{"kind" => "backgammon"}, socket) do
-    case HighWire.Backgammon.Log.open() do
-      {:ok, game_id, _key} ->
-        {:noreply, push_navigate(socket, to: ~p"/games/#{game_id}")}
-
-      {:error, reason} ->
-        {:noreply, assign(socket, :error, "Could not open a backgammon game: #{inspect(reason)}")}
-    end
-  end
-
   def handle_event("accept", %{"id" => id} = params, socket) do
     with {:ok, game} <- find(params, id),
          {:ok, _key} <- accept(game) do
       {:noreply, assign_games(socket, page(socket.assigns.self_id, socket.assigns.page))}
     else
       _ -> {:noreply, assign(socket, :error, "Could not accept that game.")}
+    end
+  end
+
+  def handle_event("new", %{"color" => color}, socket) do
+    if socket.assigns[:confirming_new?] && socket.assigns[:new_target] == color do
+      # Second tap: commit the new game.
+      {:noreply, start_new_game(socket, color)}
+    else
+      # First tap: stage the action.
+      {:noreply,
+       socket
+       |> assign(:confirming_new?, true)
+       |> assign(:new_target, color)
+       |> start_new_confirm_timeout()}
+    end
+  end
+
+  def handle_event("new", %{"kind" => "backgammon"}, socket) do
+    if socket.assigns[:confirming_new?] && socket.assigns[:new_target] == :backgammon do
+      # Second tap: commit the new game.
+      {:noreply, start_new_game(socket, :backgammon)}
+    else
+      # First tap: stage the action.
+      {:noreply,
+       socket
+       |> assign(:confirming_new?, true)
+       |> assign(:new_target, :backgammon)
+       |> start_new_confirm_timeout()}
     end
   end
 
@@ -195,8 +201,28 @@ defmodule HighWireWeb.GamesLive do
     end
   end
 
-  # The card says which store its game came from, so a game this node can
-  # write is written through the writer that owns its namespace.
+  # A message names one game, so one game is re-read: the room keeps the
+  # rest of its rows rather than folding every board in the store again on
+  # each event, which is what a busy tail would ask it to do.
+  # A half-pressed "new game" times out after 3 s so a miss on the second
+  # tap never leaves the room stuck in a staged state.
+  def handle_info({:confirm_timeout, _}, socket) do
+    {:noreply, assign(socket, :confirming_new?, false)}
+  end
+
+  @impl true
+  def handle_info({_kind, game_id}, socket) do
+    games = refresh(socket.assigns.games, game_id, socket.assigns.self_id)
+    {:noreply, assign_games(socket, games)}
+  end
+
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
+  end
+
+  # A helper that resolves a game row from either store: the gameroom serves
+  # both live chess games and the legacy rows that predate this node's move
+  # to a fresh store.
   defp find(params, id) do
     case Map.get(params, "kind") do
       "backgammon" -> wrap(Store.get(id))
@@ -207,24 +233,51 @@ defmodule HighWireWeb.GamesLive do
   defp wrap(nil), do: :error
   defp wrap(game), do: {:ok, game}
 
-  defp accept(%{kind: :backgammon} = game), do: HighWire.Backgammon.Log.accept(game)
-  defp accept(game), do: HighWire.Chess.Log.accept(game)
-
   defp withdraw(%{kind: :backgammon} = game), do: HighWire.Backgammon.Log.withdraw(game)
   defp withdraw(game), do: HighWire.Chess.Log.withdraw(game)
 
-  # A message names one game, so one game is re-read: the room keeps the
-  # rest of its rows rather than folding every board in the store again on
-  # each event, which is what a busy tail would ask it to do.
-  @impl true
-  def handle_info({_kind, game_id}, socket) do
-    games = refresh(socket.assigns.games, game_id, socket.assigns.self_id)
-    {:noreply, assign_games(socket, games)}
+  defp accept(%{kind: :backgammon} = game), do: HighWire.Backgammon.Log.accept(game)
+  defp accept(game), do: HighWire.Chess.Log.accept(game)
+
+  # A half-pressed "new game" times out after 3 s so a miss on the second
+  # tap never leaves the room stuck in a staged state.
+  defp start_new_confirm_timeout(_socket) do
+    Task.start(__MODULE__, :confirm_timeout, [[]])
   end
 
-  def handle_info(_other, socket), do: {:noreply, socket}
+  defp stop_new_confirm_timeout do
+    send(self(), {:confirm_timeout, nil})
+  end
 
-  # A message names a game, not a store row, and the two do not have to arrive
+  # Commit a staged new game: clear the confirmation timeout, open the store
+  # row, then navigate at once. The side is chosen by the caller's store of
+  # record rather than by any rule about which side plays first.
+  defp start_new_game(socket, :backgammon) do
+    stop_new_confirm_timeout()
+
+    case HighWire.Backgammon.Log.open() do
+      {:ok, game_id, _key} ->
+        push_navigate(socket, to: ~p"/games/#{game_id}")
+
+      {:error, reason} ->
+        assign(socket, :error, "Could not open a backgammon game: #{inspect(reason)}")
+    end
+  end
+
+  defp start_new_game(socket, color) do
+    stop_new_confirm_timeout()
+
+    case HighWire.Chess.Log.open(color) do
+      {:ok, game_id, _key} ->
+        push_navigate(socket, to: ~p"/games/#{game_id}")
+    end
+  end
+
+  def confirm_timeout(_args) do
+    send(self(), {:confirm_timeout, nil})
+  end
+
+  # A message names a game, not a store row, and the two do not have to arrive, and the two do not have to arrive
   # in step: a touch can be heard before the store it names can answer for the
   # game. The card the room already has stays where it is in that case — a
   # room whose rows blink out and back is a room that looks like it forgot.
@@ -569,28 +622,63 @@ defmodule HighWireWeb.GamesLive do
               <span class="text-[10px] uppercase tracking-wide text-faint">new game</span>
 
               <button
+                :if={!@confirming_new?}
                 phx-click="new"
                 phx-value-color="white"
-                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper"
+                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper aspect-square w-10"
               >
                 chess as white
               </button>
               <button
+                :if={!@confirming_new?}
                 phx-click="new"
                 phx-value-color="black"
-                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper"
+                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper aspect-square w-10"
               >
                 chess as black
               </button>
               <button
+                :if={!@confirming_new?}
                 phx-click="new"
                 phx-value-kind="backgammon"
-                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper"
+                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper aspect-square w-10"
               >
                 backgammon
               </button>
+
+              <button
+                :if={@confirming_new?}
+                phx-click="new"
+                phx-value-color="white"
+                class="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent transition hover:border-focus hover:bg-accent/20 aspect-square w-10"
+              >
+                chess as white — tap again
+              </button>
+              <button
+                :if={@confirming_new?}
+                phx-click="new"
+                phx-value-color="black"
+                class="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent transition hover:border-focus hover:bg-accent/20 aspect-square w-10"
+              >
+                chess as black — tap again
+              </button>
+              <button
+                :if={@confirming_new?}
+                phx-click="new"
+                phx-value-kind="backgammon"
+                class="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent transition hover:border-focus hover:bg-accent/20 aspect-square w-10"
+              >
+                backgammon — tap again
+              </button>
             </div>
           </header>
+
+          <p
+            :if={@confirming_new?}
+            class="mt-2 text-[10px] uppercase tracking-wide text-accent"
+          >
+            Tap the button again to open the game.
+          </p>
 
           <p
             :if={@error}

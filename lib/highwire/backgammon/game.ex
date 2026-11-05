@@ -121,13 +121,20 @@ defmodule HighWire.Backgammon.Game do
     })
   end
 
-  @doc "A resignation by the player whose move it is."
-  def resign(game_id, root, turn, opts \\ []) do
+  @doc """
+  A resignation by the player whose move it is.
+
+  `player` is the resigning side. `turn` is carried as an option because the
+  wire format decides it from the game's turn count, not from a separate
+  argument.
+  """
+  def resign(game_id, root, player, opts \\ []) do
     base(%{
       "type" => type("resign"),
       "game_id" => game_id,
       "root" => root,
-      "turn" => turn,
+      "player" => player,
+      "turn" => opts[:turn],
       "note" => opts[:note]
     })
   end
@@ -136,6 +143,29 @@ defmodule HighWire.Backgammon.Game do
   def withdraw(game_id, root) do
     base(%{"type" => type("withdraw"), "game_id" => game_id, "root" => root})
   end
+
+  @doc """
+  A stable wire key for a backgammon message, used when a write is filed
+  locally without posting a timeline message. It is deterministic from the
+  message shape, so the same logical write always lands on the same store
+  row.
+  """
+  def key_for(%{"type" => type, "game_id" => game_id, "root" => root})
+      when is_binary(type) and is_binary(game_id) and is_binary(root) do
+    "backgammon:" <> type <> ":" <> game_id <> ":" <> root
+  end
+
+  def key_for(%{"type" => type, "game_id" => game_id, "round" => round})
+      when is_binary(type) and is_binary(game_id) do
+    "backgammon:" <> type <> ":" <> game_id <> ":" <> to_string(round)
+  end
+
+  def key_for(%{"type" => type, "game_id" => game_id})
+      when is_binary(type) and is_binary(game_id) do
+    "backgammon:" <> type <> ":" <> game_id
+  end
+
+  def key_for(_content), do: "backgammon:unknown"
 
   @doc "The roll as the notation writes it."
   def roll_string(a, b) when a in 1..6 and b in 1..6, do: "#{a}-#{b}"

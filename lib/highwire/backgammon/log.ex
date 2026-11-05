@@ -32,11 +32,15 @@ defmodule HighWire.Backgammon.Log do
   @type move :: {term(), term()}
 
   @doc """
-  Open a game: publish a challenge and return its id and the key that later
+  Open a game: write a challenge and return its id and the key that later
   moves answer to.
 
   Options: `:to` (a feed to challenge directly), `:note`, `:game_id` (tests),
   and the test seams `:publish`, `:author` and `:secret`.
+
+  This writes the local store copy first. If there is `:commentary` content,
+  it is posted to the timeline as a backgammon chat message, otherwise the
+  game quiet write is silent and the returned key is throwaway.
   """
   @spec open(keyword()) :: {:ok, binary(), binary()} | {:error, term()}
   def open(opts \\ []) do
@@ -51,6 +55,18 @@ defmodule HighWire.Backgammon.Log do
 
       with {:ok, key} <- publish_and_file(content, opts), do: {:ok, game_id, key}
     end
+  end
+
+  defp publish_and_file(content, opts) do
+    with {:ok, key} <- publish(content, opts) do
+      file(key, content, opts)
+      {:ok, key}
+    end
+  end
+
+  defp publish(content, opts) do
+    publisher = Keyword.get(opts, :publish) || default_publisher()
+    publisher.(content)
   end
 
   @doc """
@@ -143,7 +159,10 @@ defmodule HighWire.Backgammon.Log do
     with {:ok, me} <- player(game, me(opts)),
          :ok <- turn_of(game, me, :playing) do
       content =
-        Game.resign(game.game_id, game.challenge_key, game.turn_count + 1, note: opts[:note])
+        Game.resign(game.game_id, game.challenge_key, me,
+          turn: game.turn_count + 1,
+          note: opts[:note]
+        )
 
       publish_and_file(content, opts)
     end
@@ -157,7 +176,9 @@ defmodule HighWire.Backgammon.Log do
     with {:ok, game} <- editable(game),
          {:ok, me} <- player(game, me),
          :ok <- open_challenge(game, me) do
-      publish_and_file(Game.withdraw(game.game_id, game.challenge_key), opts)
+      content = Game.withdraw(game.game_id, game.challenge_key)
+
+      publish_and_file(content, opts)
     end
   end
 
@@ -314,20 +335,6 @@ defmodule HighWire.Backgammon.Log do
   defp legal?(_game, _dice, _moves), do: {:error, :no_position}
 
   # -- publishing --------------------------------------------------------
-
-  defp publish_and_file(content, opts) do
-    with {:ok, key} <- publish(content, opts) do
-      file(key, content, opts)
-      {:ok, key}
-    end
-  end
-
-  # The publisher is swappable so tests can read what would have gone to the
-  # network without an engine behind them.
-  defp publish(content, opts) do
-    publisher = Keyword.get(opts, :publish) || default_publisher()
-    publisher.(content)
-  end
 
   defp default_publisher do
     Application.get_env(:highwire, :game_publisher, &Timeline.publish_content/1)

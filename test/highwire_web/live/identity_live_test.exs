@@ -53,14 +53,17 @@ defmodule HighWireWeb.IdentityLiveTest do
       assert html =~ ~r/#{Regex.escape(Ident.short_id(bot))}\s*<span[^>]*>\(Bot\)/
 
       # The avatar is window chrome, pinned to the far right of the top
-      # edge rather than carried inside the rail: it comes after the
-      # rail's own header in the markup and leaves the crab and the
-      # gear behind in the left column.
+      # edge rather than carried inside the rail; its gear sits in the
+      # bottom-right corner of the tile.
       {crab, _} = :binary.match(html, ~s(aria-label="Timeline"))
       {gear, _} = :binary.match(html, ~s(aria-label="Settings"))
       {avatar, _} = :binary.match(html, ~s(aria-label="Identity"))
-      assert crab < gear and gear < avatar
+      assert crab < gear
+      assert gear < avatar
+      # The gear lives inside the avatar link, so its parent is the
+      # avatar, not the rail.
       assert html =~ "fixed right-3 top-2.5"
+      assert html =~ "relative"
     end
 
     test "with no identity at all, the page offers to make one", %{conn: conn} do

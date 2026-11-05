@@ -50,6 +50,28 @@ defmodule HighWire.Chess.Game do
   def id?(id), do: Id.valid?(id)
 
   @doc """
+  A stable wire key for a chess message, used when a write is filed locally
+  without posting a timeline message. It is deterministic from the message
+  shape, so the same logical write always lands on the same store row.
+  """
+  def key_for(%{"type" => type, "game_id" => game_id, "root" => root, "ply" => ply})
+      when is_binary(type) and is_binary(game_id) and is_binary(root) do
+    "chess:" <> type <> ":" <> game_id <> ":" <> root <> ":" <> to_string(ply)
+  end
+
+  def key_for(%{"type" => type, "game_id" => game_id, "root" => root})
+      when is_binary(type) and is_binary(game_id) and is_binary(root) do
+    "chess:" <> type <> ":" <> game_id <> ":" <> root
+  end
+
+  def key_for(%{"type" => type, "game_id" => game_id})
+      when is_binary(type) and is_binary(game_id) do
+    "chess:" <> type <> ":" <> game_id
+  end
+
+  def key_for(_content), do: "chess:unknown"
+
+  @doc """
   A challenge. `color` is the side the challenger takes — `"white"` or
   `"black"` — so a player can open as either. `:to` names a feed for a
   directed challenge and is omitted for an open one.

@@ -240,6 +240,16 @@ defmodule HighWireWeb.GameLive do
     end
   end
 
+  def handle_event("accept", _params, %{assigns: %{game: game}} = socket) do
+    case accept(game) do
+      {:ok, _key} ->
+        {:noreply, assign_board(socket, load(socket.assigns.game_id))}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :error, "Could not accept: #{inspect(reason)}")}
+    end
+  end
+
   def handle_event("resign", _params, socket) do
     case resign(socket.assigns.game) do
       {:ok, _key} ->
@@ -247,6 +257,16 @@ defmodule HighWireWeb.GameLive do
 
       {:error, reason} ->
         {:noreply, assign(socket, :error, "Could not resign: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("withdraw", _params, %{assigns: %{game: game}} = socket) do
+    case withdraw(game) do
+      {:ok, _key} ->
+        {:noreply, assign_board(socket, load(socket.assigns.game_id))}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :error, "Could not withdraw: #{inspect(reason)}")}
     end
   end
 
@@ -339,8 +359,14 @@ defmodule HighWireWeb.GameLive do
     end
   end
 
+  defp accept(%{kind: :backgammon} = game), do: Backgammon.Log.accept(game)
+  defp accept(game), do: Chess.Log.accept(game)
+
   defp resign(%{kind: :backgammon} = game), do: Backgammon.Log.resign(game)
   defp resign(game), do: Chess.Log.resign(game)
+
+  defp withdraw(%{kind: :backgammon} = game), do: Backgammon.Log.withdraw(game)
+  defp withdraw(game), do: Chess.Log.withdraw(game)
 
   defp seek(socket, to) do
     %{line: line, at: at} = socket.assigns
@@ -1076,6 +1102,34 @@ defmodule HighWireWeb.GameLive do
           </dl>
 
           <h3 class="mt-6 mb-2 text-[11px] uppercase tracking-wider text-faint">History</h3>
+
+          <div
+            :if={@game.status == :opening and @game.accepter == nil}
+            class="mb-3 rounded border border-edge bg-panel px-3 py-2 text-xs"
+          >
+            <button
+              :if={@game.phase == :opening and @game.accepter == nil and @game.challenger != @self_id}
+              phx-click="accept"
+              class="rounded border border-accent/40 px-2 py-1 text-accent transition hover:bg-accent/15"
+            >
+              accept the challenge
+            </button>
+
+            <button
+              :if={@game.phase == :opening and @game.accepter == nil and @game.challenger == @self_id}
+              phx-click="withdraw"
+              class="rounded border border-edge px-2 py-1 text-faint transition hover:border-focus hover:text-paper"
+            >
+              withdraw challenge
+            </button>
+          </div>
+
+          <p
+            :if={@game.status == :opening and @game.accepter == nil}
+            class="text-xs italic text-faint"
+          >
+            Waiting for an opponent to accept.
+          </p>
 
           <p :if={@game.history == []} class="text-xs italic text-faint">
             No turns played yet.

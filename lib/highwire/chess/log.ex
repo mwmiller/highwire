@@ -3,15 +3,15 @@ defmodule HighWire.Chess.Log do
   The writes a chess game makes: open one, accept one, play a move, resign,
   or withdraw an unanswered challenge.
 
-  Everything here is a publish to the player's own feed — an ordinary public
-  message in the `chess/*` namespace — so a game needs no server, no room and
-  no arbiter: the opponent reads it the way they read anything else, and both
-  feeds together are the game.
+  By default a game write persists the local copy and does not post to the
+  player's timeline. The feed is only used when there is commentary to go with
+  the move — otherwise the game is carried by the store and the fold, and the
+  timeline stays quiet during live play.
 
-  The message is filed into the local store as soon as the engine hands back
-  its key — through the call, not the cast, because the player's next page
-  reads the game straight away. The tail's later delivery of the same
-  message is a no-op: the store keys on the message, so the second copy is
+  The local copy is filed into the store as soon as the engine hands back its
+  key — through the call, not the cast, because the player's next page reads
+  the game straight away. The tail's later delivery of the same message is
+  still a no-op: the store keys on the message, so the second copy is
   recognised and folds nothing twice.
 
   A move is checked against the folded position before it goes out. The wire
@@ -28,6 +28,10 @@ defmodule HighWire.Chess.Log do
   Open a game as `color`. Options: `:to` (a feed to challenge directly),
   `:note`, `:game_id` (tests), and `:publish` (a `content -> {:ok, key}`
   function; tests swap it for a stub).
+
+  This writes the local store copy first. If there is `:commentary` content,
+  it is posted to the timeline as a chess chat message, otherwise the game
+  quiet write is silent and the returned key is throwaway.
   """
   @spec open(String.t(), keyword()) :: {:ok, binary(), binary()} | {:error, term()}
   def open(color, opts \\ []) when color in ["white", "black"] do
@@ -84,20 +88,6 @@ defmodule HighWire.Chess.Log do
 
   defp legal?(_game, _uci), do: {:error, :no_position}
 
-  defp publish_and_file(content, opts) do
-    with {:ok, key} <- publish(content, opts) do
-      file(key, content, opts)
-      {:ok, key}
-    end
-  end
-
-  # The publisher is swappable so the tests can read what would have gone to
-  # the network without an engine behind them.
-  defp publish(content, opts) do
-    publisher = Keyword.get(opts, :publish) || default_publisher()
-    publisher.(content)
-  end
-
   defp default_publisher do
     Application.get_env(:highwire, :game_publisher, &Timeline.publish_content/1)
   end
@@ -124,5 +114,17 @@ defmodule HighWire.Chess.Log do
       %{"id" => id} when is_binary(id) -> id
       _ -> nil
     end
+  end
+
+  defp publish_and_file(content, opts) do
+    with {:ok, key} <- publish(content, opts) do
+      file(key, content, opts)
+      {:ok, key}
+    end
+  end
+
+  defp publish(content, opts) do
+    publisher = Keyword.get(opts, :publish) || default_publisher()
+    publisher.(content)
   end
 end
