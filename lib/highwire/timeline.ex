@@ -4461,12 +4461,24 @@ defmodule HighWire.Timeline do
   defp thread_root(msg, by_key) do
     c = content(msg)
 
+    case c["type"] do
+      "post" -> post_thread_root(c, msg, by_key)
+      "about" -> about_thread_root(c)
+      _ -> nil
+    end
+  end
+
+  defp post_thread_root(c, msg, by_key) do
     cond do
-      c["type"] == "post" and msg_id?(c["root"]) -> walk_root(c["root"], by_key)
-      c["type"] == "post" and is_binary(msg["key"]) -> msg["key"]
-      c["type"] == "about" and msg_id?(c["about"]) -> c["about"]
+      msg_id?(c["fork"]) -> c["fork"]
+      msg_id?(c["root"]) -> walk_root(c["root"], by_key)
+      is_binary(msg["key"]) -> msg["key"]
       true -> nil
     end
+  end
+
+  defp about_thread_root(c) do
+    if msg_id?(c["about"]), do: c["about"]
   end
 
   # Bounded upward walk: posts only; stop at the first ancestor missing

@@ -473,6 +473,10 @@ defmodule HighWireWeb.TimelineLive do
     {:noreply, socket |> assign(:view, view) |> maybe_load_page() |> merge_paged()}
   end
 
+  def handle_event("restore-view", %{"v" => v}, socket) do
+    handle_event("view", %{"v" => v}, socket)
+  end
+
   def handle_event("expand", %{"key" => key}, socket) do
     expanded =
       if MapSet.member?(socket.assigns.expanded, key) do
@@ -702,7 +706,13 @@ defmodule HighWireWeb.TimelineLive do
   defp merge_paged(socket) do
     paged =
       Map.new(socket.assigns.paged, fn {view, entry} ->
-        {view, merge_into(view, entry, socket)}
+        # Only merge the active tab — merging all tabs on every update
+        # wastes cycles on tabs the reader is not looking at.
+        if view == socket.assigns.view do
+          {view, merge_into(view, entry, socket)}
+        else
+          {view, entry}
+        end
       end)
 
     socket
@@ -723,10 +733,12 @@ defmodule HighWireWeb.TimelineLive do
     likes_by = Map.get(socket.assigns, :likes_by, %{})
     suggestions = Map.get(socket.assigns, :suggestions, [])
 
+    # Only check the visible tab for missing profiles — checking all tabs
+    # on every update wastes cycles on tabs the reader is not looking at.
+    current_entry = Map.get(socket.assigns.paged, socket.assigns.view, %{rows: []})
+
     missing =
-      socket.assigns.paged
-      |> Map.values()
-      |> Enum.flat_map(&Map.get(&1, :rows, []))
+      current_entry.rows
       |> Enum.flat_map(&row_profile_ids(&1, likes_by))
       |> Enum.concat(rail_ids(suggestions))
       |> Enum.reject(&Map.has_key?(known, &1))
@@ -1589,12 +1601,15 @@ defmodule HighWireWeb.TimelineLive do
   attr :current, :atom, required: true
 
   defp feed_tab(assigns) do
+    assigns = assign(assigns, :pref_key, "highwire:feed-tab")
+    assigns = assign(assigns, :pref_value, Atom.to_string(assigns.v))
     ~H"""
     <button
       type="button"
       phx-click="view"
       phx-value-v={@v}
-      data-pref-tab={if(@v == :participating, do: "participating")}
+      data-pref-key={@pref_key}
+      data-pref-value={@pref_value}
       class={[
         "rounded px-2 py-1 text-xs transition",
         @current == @v and "bg-active font-medium text-paper",

@@ -202,15 +202,15 @@ defmodule HighWireWeb.GamesLiveTest do
       html = view |> element("button[phx-value-to='1']") |> render_click()
       assert html =~ "Looking back at move 1 of 2"
 
-      # A game with no position of its own is replayed instead, and a ply the
-      # fold cannot follow stops the line where it breaks.
+      # A game with no position of its own is replayed instead. A ply the
+      # fold cannot follow is skipped, but the rest of the line still shows.
       broken =
         seed_legacy([{1, "e2", "e4", "e4"}, {2, "e7", "e5", "e5"}, {3, "e2", "e4", "e4"}])
 
       {:ok, broken_view, broken_html} = live(conn, "/games/#{broken}")
 
-      assert broken_html =~ "The log stops verifying at move 3"
-      assert broken_html =~ ~r/runs as far as\s+move 2/
+      refute broken_html =~ "stops verifying"
+      assert broken_html =~ "2 / 2"
 
       html = broken_view |> element("button[phx-value-to='1']") |> render_click()
       assert html =~ "Looking back at move 1 of 2"

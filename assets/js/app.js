@@ -160,7 +160,7 @@ let ReplayKeys = {
 // data-pref-key + data-pref-value; checkboxes carry data-pref-key +
 // data-pref-on/off. aria-pressed / checked are the source of truth for
 // the active choice, so state survives LiveView patches.
-const PREF_DEFAULTS = {theme: "dark", participating: "off", spellcheck: "on"}
+const PREF_DEFAULTS = {theme: "dark", participating: "off", spellcheck: "on", "highwire:feed-tab": "public"}
 
 function storedPref(key) {
   try {
@@ -216,6 +216,18 @@ function syncPrefButtons() {
     const stored = storedPref(el.dataset.prefKey)
     if (el.type === "checkbox") {
       el.checked = stored === (el.dataset.prefOn || "on")
+    } else if (el.dataset.prefKey === "highwire:feed-tab") {
+      // Feed tab: update aria-pressed, and if this is the stored active tab,
+      // trigger a view change on the timeline (the server defaults to :public
+      // on mount, so we only need to switch if the stored view is different).
+      el.setAttribute("aria-pressed", String(stored === (el.dataset.prefValue || "")))
+      if (stored === el.dataset.prefValue) {
+        // Defer to let LiveView finish mounting, then trigger the view change
+        setTimeout(() => {
+          const evt = new CustomEvent("sync-feed-tab", {detail: {view: stored}})
+          document.dispatchEvent(evt)
+        }, 0)
+      }
     } else {
       el.setAttribute("aria-pressed", String(stored === (el.dataset.prefValue || "")))
     }
@@ -1196,7 +1208,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
     LandOn,
     FollowMoves,
     ReplayKeys,
-    PieceInk
+    PieceInk,
+    FeedTabRestore
   }
 })
 
@@ -1207,6 +1220,21 @@ window.addEventListener("phx:page-loading-stop", info => topbar.hide())
 
 // connect if there are any LiveViews on the page
 liveSocket.connect()
+
+// Feed tab restoration: after LiveView mounts, check if there's a stored
+// feed tab preference and restore it. The server defaults to :public on
+// mount; this restores the user's last selected view.
+let FeedTabRestore = {
+  mounted() {
+    const stored = localStorage.getItem("highwire:feed-tab")
+    if (stored && stored !== "public") {
+      // Defer to let LiveView finish mounting
+      setTimeout(() => {
+        this.pushEvent("restore-view", {v: stored})
+      }, 0)
+    }
+  }
+}
 
 // expose liveSocket on window for web console debug logs and latency simulation:
 // >> liveSocket.enableDebug()

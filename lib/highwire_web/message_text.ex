@@ -194,9 +194,12 @@ defmodule HighWireWeb.MessageText do
     target = Map.get(index(ctx), about) || about
 
     cond do
-      is_binary(c["name"]) -> "set #{Ident.display_name(target, ctx)}'s display name"
-      is_binary(c["description"]) -> "wrote #{Ident.display_name(target, ctx)}'s bio"
-      true -> "updated #{Ident.display_name(target, ctx)}'s profile"
+      is_binary(c["name"]) ->
+        "set #{Ident.display_name(target, ctx)}'s display name to #{c["name"]}"
+      is_binary(c["description"]) ->
+        "wrote #{Ident.display_name(target, ctx)}'s bio"
+      true ->
+        "updated #{Ident.display_name(target, ctx)}'s profile"
     end
   end
 

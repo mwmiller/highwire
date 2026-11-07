@@ -96,17 +96,20 @@ defmodule HighWireWeb.PostLive do
     # at the same root (there is no per-reply addressing here).
     # A private thread's reply is boxed for its participants so the
     # answer never leaves the box the thread arrived in.
+    #
+    # The fork field is only set when replying to a mid-thread message
+    # (a fork). Thread-level replies have root == fork, so the fork
+    # field is omitted — it would be redundant and non-standard.
     result =
       if private_thread?(root) do
         Timeline.reply_private(
           root["key"],
           root["key"],
           body,
-          private_recipients(socket),
-          root["key"]
+          private_recipients(socket)
         )
       else
-        Timeline.reply(root["key"], root["key"], body, root["key"])
+        Timeline.reply(root["key"], root["key"], body)
       end
 
     socket =

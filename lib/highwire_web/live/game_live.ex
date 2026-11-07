@@ -263,7 +263,10 @@ defmodule HighWireWeb.GameLive do
   def handle_event("withdraw", _params, %{assigns: %{game: game}} = socket) do
     case withdraw(game) do
       {:ok, _key} ->
-        {:noreply, assign_board(socket, load(socket.assigns.game_id))}
+        {:noreply,
+         socket
+         |> put_flash(:info, "Game withdrawn")
+         |> push_navigate(to: ~p"/games")}
 
       {:error, reason} ->
         {:noreply, assign(socket, :error, "Could not withdraw: #{inspect(reason)}")}
@@ -491,6 +494,19 @@ defmodule HighWireWeb.GameLive do
     {[step(0, start, nil) | steps], stop}
   end
 
+  # A legacy game this node only holds part of starts at a later ply. Start
+  # from the position the log last recorded and walk backwards through the
+  # history in reverse so the line still lists every move this node holds.
+  defp line(%{kind: :chess, format: :legacy, history: history} = game) when history != [] do
+    start = Legacy.position(game.position)
+    # Walk the history in reverse (newest first) so each FEN takes us back
+    # one move. walk_fens prepends to its accumulator, so reversing the
+    # input and then reversing the output gives us oldest-first order.
+    reversed = Enum.reverse(history)
+    {steps, stop} = walk_fens(reversed, start, [])
+    {steps, stop}
+  end
+
   defp line(%{kind: :chess, history: [%{ply: 1} | _]} = game) do
     start = Engine.initial()
     {steps, stop} = walk(game.history, start, [])
@@ -513,11 +529,17 @@ defmodule HighWireWeb.GameLive do
       is_binary(item[:uci]) ->
         case Engine.play(pos, item[:uci]) do
           {:ok, next, _san} -> walk_fens(rest, next, [step(ply, next, item) | acc])
-          {:error, reason} -> {Enum.reverse(acc), %{ply: ply, reason: reason}}
+          {:error, _reason} ->
+            # The move does not verify against our engine, but it is still
+            # part of the game's history. Skip it and carry on from the
+            # current position so the rest of the game is still shown.
+            walk_fens(rest, pos, acc)
         end
 
       true ->
-        {Enum.reverse(acc), %{ply: ply, reason: :unknown}}
+        # A move with neither FEN nor UCI is useless for building positions.
+        # Skip it and carry on from the current position.
+        walk_fens(rest, pos, acc)
     end
   end
 

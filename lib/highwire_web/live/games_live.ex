@@ -296,6 +296,7 @@ defmodule HighWireWeb.GamesLive do
     Catalog.recent(@page_size, page * @page_size)
     |> Enum.map(fn {kind, game_id} -> snapshot(kind, game_id) end)
     |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(& &1.game_id)
     |> Enum.map(&put_live_status(&1, self_id))
   end
 
