@@ -27,7 +27,6 @@ defmodule HighWire.Application do
           HighWire.Games.Catalog,
           HighWire.Backgammon.Store,
           HighWire.Chess.Store,
-          HighWire.Chess.Legacy.Store,
           HighWire.Contacts,
           HighWire.Timeline,
           HighWireWeb.Endpoint

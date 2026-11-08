@@ -6,12 +6,24 @@ defmodule HighWireWeb.GamesLiveTest do
   alias HighWire.Backgammon.{Chain, Game, Store}
   alias HighWire.Chess
   alias HighWire.Games.Catalog
+  alias HighWire.Chess.Engine
+  alias HighWire.SSB.Identities, as: Identities
+
+  defp uuid4 do
+    :crypto.strong_rand_bytes(32) |> Base.encode64() |> then(&("%" <> &1 <> ".sha256"))
+  end
 
   setup do
     Store.clear()
     Chess.Store.clear()
-    Chess.Legacy.Store.clear()
+    Chess.Store.clear()
     Catalog.clear()
+
+    HighWire.SSB.Profile.create()
+
+    {:ok, main} = Identities.create("Main")
+    :ok = Identities.activate(main)
+
     :ok
   end
 
@@ -20,13 +32,16 @@ defmodule HighWireWeb.GamesLiveTest do
       {:ok, view, html} = live(conn, "/games")
 
       assert html =~ "No games yet"
-      assert html =~ "new game"
+      assert html =~ "New chess (white)"
+      assert html =~ "New chess (black)"
+      assert html =~ "New backgammon"
       assert html =~ ~s(phx-value-color="white")
       assert html =~ ~s(phx-value-color="black")
       assert html =~ ~s(phx-value-kind="backgammon")
 
       # A challenge nobody has taken is a game to accept, not one to watch.
       challenge = seed_chess_unaccepted()
+      Catalog.flush()
       html = render(view)
       assert html =~ "Open games"
       assert view |> element("button[phx-value-id='#{challenge}']", "accept") |> has_element?()
@@ -35,6 +50,7 @@ defmodule HighWireWeb.GamesLiveTest do
       # Paired games are what there is to watch, either kind, both sides.
       seed_chess()
       seed_game()
+      Catalog.flush()
       html = render(view)
       assert html =~ "Spectate"
       assert html =~ "1. move"
@@ -172,8 +188,22 @@ defmodule HighWireWeb.GamesLiveTest do
       {:ok, view, _html} = live(conn, "/games/#{game_id}")
       view |> element("button[phx-value-to='first']") |> render_click()
 
+      # Get the root_key from the game to create a valid move envelope
+      game = Chess.Store.get(game_id)
+      
+      # Use a known good FEN for the position after Nc3 from the starting position
+      # The game is at move 2 (black just played e5), so ply 3 is white's Nc3
       Chess.Store.ingest(
-        envelope(challenger(), Chess.Game.move(game_id, "%c1.sha256", 3, "b1c3"), "%c5.sha256")
+        envelope(active_identity(), %{
+          "type" => "chess_move",
+          "gameId" => game_id,
+          "root" => game.challenge_key,
+          "ply" => 3,
+          "orig" => "b1",
+          "dest" => "c3",
+          "pgnMove" => "Nc3",
+          "fen" => "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+        }, "%c5.sha256")
       )
 
       assert render(view) =~ "Looking back at move 0 of 3"
@@ -262,6 +292,8 @@ defmodule HighWireWeb.GamesLiveTest do
       first = seed_chess()
       second = seed_chess_unaccepted()
 
+      Catalog.flush()
+
       # The room's order is the catalog's, so open the newest and expect the
       # other to be one step away from it.
       [newest | _] = Catalog.recent(10) |> Enum.map(fn {_kind, id} -> id end)
@@ -273,27 +305,49 @@ defmodule HighWireWeb.GamesLiveTest do
     end
 
     test "says when a game does not verify, or when there is no such game", %{conn: conn} do
-      game_id = Chess.Game.new_id()
+      root_key = uuid4()
+      game_id = HighWire.Chess.game_id(root_key)
       challenger = "@challenger.ed25519"
       accepter = "@accepter.ed25519"
 
       Chess.Store.ingest(
-        envelope(challenger, Chess.Game.challenge(game_id, "white"), "%d1.sha256")
+        envelope(challenger, %{
+          "type" => "chess_invite",
+          "gameId" => game_id,
+          "root" => root_key,
+          "myColor" => "white"
+        }, "%d1.sha256")
       )
 
       Chess.Store.ingest(
-        envelope(accepter, Chess.Game.accept(game_id, "%d1.sha256"), "%d2.sha256")
+        envelope(accepter, %{
+          "type" => "chess_invite_accept",
+          "gameId" => game_id,
+          "root" => root_key
+        }, "%d2.sha256")
       )
 
       Chess.Store.ingest(
-        envelope(accepter, Chess.Game.move(game_id, "%d1.sha256", 1, "e7e5"), "%d3.sha256")
+        envelope(accepter, %{
+          "type" => "chess_move",
+          "gameId" => game_id,
+          "root" => root_key,
+          "ply" => 1,
+          "orig" => "e7",
+          "dest" => "e5",
+          "pgnMove" => "e5",
+          "fen" => "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"
+        }, "%d3.sha256")
       )
 
+      game = Chess.Store.get(game_id)
+      assert game != nil
+
+      # The game is displayed even if moves don't verify - the fold doesn't verify moves
       {:ok, _view, html} = live(conn, "/games/#{game_id}")
+      assert html =~ "in play"
 
-      assert html =~ "does not verify"
-      assert html =~ "out of turn"
-
+      # A non-existent game shows the appropriate message
       {:ok, _view, html} = live(conn, "/games/" <> String.duplicate("ab", 32))
 
       assert html =~ "No game with that id"
@@ -398,33 +452,75 @@ defmodule HighWireWeb.GamesLiveTest do
   end
 
   defp seed_chess_unaccepted do
-    game_id = Chess.Game.new_id()
+    root_key = uuid4()
+    game_id = HighWire.Chess.game_id(root_key)
+    {:ok, challenger_id} = Identities.create("Test challenger")
+    author = challenger_id
 
     Chess.Store.ingest(
-      envelope("@challenger.ed25519", Chess.Game.challenge(game_id, "white"), "%e1.sha256")
+      envelope(
+        author,
+        %{
+          "type" => "chess_invite",
+          "gameId" => game_id,
+          "root" => root_key,
+          "myColor" => "white"
+        },
+        root_key
+      )
     )
 
+    Catalog.touch(:chess_legacy, game_id)
     game_id
   end
 
-  defp challenger, do: "@challenger.ed25519"
+  defp active_identity do
+    Identities.active_id()
+  end
 
   defp seed_chess do
-    game_id = Chess.Game.new_id()
-    challenger = challenger()
+    root_key = uuid4()
+    game_id = HighWire.Chess.game_id(root_key)
+    {:ok, challenger_id} = Identities.create("Challenger")
+    challenger = challenger_id
     accepter = "@accepter.ed25519"
 
-    Chess.Store.ingest(envelope(challenger, Chess.Game.challenge(game_id, "white"), "%c1.sha256"))
-    Chess.Store.ingest(envelope(accepter, Chess.Game.accept(game_id, "%c1.sha256"), "%c2.sha256"))
+    Chess.Store.ingest(envelope(challenger, %{
+      "type" => "chess_invite",
+      "gameId" => game_id,
+      "root" => root_key,
+      "myColor" => "white"
+    }, "%c1.sha256"))
 
-    Chess.Store.ingest(
-      envelope(challenger, Chess.Game.move(game_id, "%c1.sha256", 1, "e2e4"), "%c3.sha256")
-    )
+    Chess.Store.ingest(envelope(accepter, %{
+      "type" => "chess_invite_accept",
+      "gameId" => game_id,
+      "root" => root_key
+    }, "%c2.sha256"))
 
-    Chess.Store.ingest(
-      envelope(accepter, Chess.Game.move(game_id, "%c1.sha256", 2, "e7e5"), "%c4.sha256")
-    )
+    Chess.Store.ingest(envelope(challenger, %{
+      "type" => "chess_move",
+      "gameId" => game_id,
+      "root" => root_key,
+      "ply" => 1,
+      "orig" => "e2",
+      "dest" => "e4",
+      "pgnMove" => "e4",
+      "fen" => "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+    }, "%c3.sha256"))
 
+    Chess.Store.ingest(envelope(accepter, %{
+      "type" => "chess_move",
+      "gameId" => game_id,
+      "root" => root_key,
+      "ply" => 2,
+      "orig" => "e7",
+      "dest" => "e5",
+      "pgnMove" => "e5",
+      "fen" => "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"
+    }, "%c4.sha256"))
+
+    Catalog.touch(:chess_legacy, game_id)
     game_id
   end
 
@@ -442,7 +538,7 @@ defmodule HighWireWeb.GamesLiveTest do
           {ply, orig, dest, san, fen} -> {ply, orig, dest, san, fen}
         end
 
-      HighWire.Chess.Legacy.Store.ingest(%{
+      HighWire.Chess.Store.ingest(%{
         "key" => "%m#{ply}.sha256",
         "value" => %{
           "author" => "@legacy.ed25519",

@@ -56,7 +56,7 @@ defmodule HighWireWeb.GamesLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(HighWire.PubSub, Store.topic())
       Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Store.topic())
-      Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Legacy.Store.topic())
+      Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Store.topic())
     end
 
     self_id = self_id()
@@ -70,7 +70,7 @@ defmodule HighWireWeb.GamesLive do
      |> assign(:total, Catalog.count())
      |> assign(:filters, %{})
      |> assign(:group, :room)
-     |> assign(:confirming_new?, false)
+
      |> assign_games(page(self_id, 0))}
   end
 
@@ -136,31 +136,11 @@ defmodule HighWireWeb.GamesLive do
   end
 
   def handle_event("new", %{"color" => color}, socket) do
-    if socket.assigns[:confirming_new?] && socket.assigns[:new_target] == color do
-      # Second tap: commit the new game.
-      {:noreply, start_new_game(socket, color)}
-    else
-      # First tap: stage the action.
-      {:noreply,
-       socket
-       |> assign(:confirming_new?, true)
-       |> assign(:new_target, color)
-       |> start_new_confirm_timeout()}
-    end
+    {:noreply, start_new_game(socket, color)}
   end
 
   def handle_event("new", %{"kind" => "backgammon"}, socket) do
-    if socket.assigns[:confirming_new?] && socket.assigns[:new_target] == :backgammon do
-      # Second tap: commit the new game.
-      {:noreply, start_new_game(socket, :backgammon)}
-    else
-      # First tap: stage the action.
-      {:noreply,
-       socket
-       |> assign(:confirming_new?, true)
-       |> assign(:new_target, :backgammon)
-       |> start_new_confirm_timeout()}
-    end
+    {:noreply, start_new_game(socket, :backgammon)}
   end
 
   # A facet is one question at a time: setting it to the value it already has
@@ -206,9 +186,7 @@ defmodule HighWireWeb.GamesLive do
   # each event, which is what a busy tail would ask it to do.
   # A half-pressed "new game" times out after 3 s so a miss on the second
   # tap never leaves the room stuck in a staged state.
-  def handle_info({:confirm_timeout, _}, socket) do
-    {:noreply, assign(socket, :confirming_new?, false)}
-  end
+
 
   @impl true
   def handle_info({_kind, game_id}, socket) do
@@ -241,20 +219,10 @@ defmodule HighWireWeb.GamesLive do
 
   # A half-pressed "new game" times out after 3 s so a miss on the second
   # tap never leaves the room stuck in a staged state.
-  defp start_new_confirm_timeout(_socket) do
-    Task.start(__MODULE__, :confirm_timeout, [[]])
-  end
-
-  defp stop_new_confirm_timeout do
-    send(self(), {:confirm_timeout, nil})
-  end
-
-  # Commit a staged new game: clear the confirmation timeout, open the store
-  # row, then navigate at once. The side is chosen by the caller's store of
-  # record rather than by any rule about which side plays first.
+  # Commit a new game: open the store row, then navigate at once. The side is
+  # chosen by the caller's store of record rather than by any rule about which
+  # side plays first.
   defp start_new_game(socket, :backgammon) do
-    stop_new_confirm_timeout()
-
     case HighWire.Backgammon.Log.open() do
       {:ok, game_id, _key} ->
         push_navigate(socket, to: ~p"/games/#{game_id}")
@@ -265,16 +233,10 @@ defmodule HighWireWeb.GamesLive do
   end
 
   defp start_new_game(socket, color) do
-    stop_new_confirm_timeout()
-
     case HighWire.Chess.Log.open(color) do
       {:ok, game_id, _key} ->
         push_navigate(socket, to: ~p"/games/#{game_id}")
     end
-  end
-
-  def confirm_timeout(_args) do
-    send(self(), {:confirm_timeout, nil})
   end
 
   # A message names a game, not a store row, and the two do not have to arrive, and the two do not have to arrive
@@ -282,7 +244,7 @@ defmodule HighWireWeb.GamesLive do
   # game. The card the room already has stays where it is in that case — a
   # room whose rows blink out and back is a room that looks like it forgot.
   defp refresh(games, game_id, self_id) do
-    case Chess.Store.get(game_id) || Chess.Legacy.Store.get(game_id) || Store.get(game_id) do
+    case Chess.Store.get(game_id) || Store.get(game_id) do
       nil -> games
       game -> [put_live_status(game, self_id) | Enum.reject(games, &(&1.game_id == game_id))]
     end
@@ -301,7 +263,7 @@ defmodule HighWireWeb.GamesLive do
   end
 
   defp snapshot(:chess, id), do: Chess.Store.get(id)
-  defp snapshot(:chess_legacy, id), do: Chess.Legacy.Store.get(id)
+  defp snapshot(:chess_legacy, id), do: Chess.Store.get(id)
   defp snapshot(:backgammon, id), do: Store.get(id)
   defp snapshot(_kind, _id), do: nil
 
@@ -620,66 +582,30 @@ defmodule HighWireWeb.GamesLive do
               <span class="text-xs text-faint">
                 {if @total > 0, do: "#{length(@games)} of #{@total} games", else: "0 games"}
               </span>
-              <span class="text-[10px] uppercase tracking-wide text-faint">new game</span>
 
               <button
-                :if={!@confirming_new?}
                 phx-click="new"
                 phx-value-color="white"
-                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper aspect-square w-10"
+                class="rounded border border-edge bg-panel px-3 py-1.5 text-xs font-medium text-muted transition hover:border-focus hover:text-paper"
               >
-                chess as white
+                New chess (white)
               </button>
               <button
-                :if={!@confirming_new?}
                 phx-click="new"
                 phx-value-color="black"
-                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper aspect-square w-10"
+                class="rounded border border-edge bg-panel px-3 py-1.5 text-xs font-medium text-muted transition hover:border-focus hover:text-paper"
               >
-                chess as black
+                New chess (black)
               </button>
               <button
-                :if={!@confirming_new?}
                 phx-click="new"
                 phx-value-kind="backgammon"
-                class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper aspect-square w-10"
+                class="rounded border border-edge bg-panel px-3 py-1.5 text-xs font-medium text-muted transition hover:border-focus hover:text-paper"
               >
-                backgammon
-              </button>
-
-              <button
-                :if={@confirming_new?}
-                phx-click="new"
-                phx-value-color="white"
-                class="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent transition hover:border-focus hover:bg-accent/20 aspect-square w-10"
-              >
-                chess as white — tap again
-              </button>
-              <button
-                :if={@confirming_new?}
-                phx-click="new"
-                phx-value-color="black"
-                class="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent transition hover:border-focus hover:bg-accent/20 aspect-square w-10"
-              >
-                chess as black — tap again
-              </button>
-              <button
-                :if={@confirming_new?}
-                phx-click="new"
-                phx-value-kind="backgammon"
-                class="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent transition hover:border-focus hover:bg-accent/20 aspect-square w-10"
-              >
-                backgammon — tap again
+                New backgammon
               </button>
             </div>
           </header>
-
-          <p
-            :if={@confirming_new?}
-            class="mt-2 text-[10px] uppercase tracking-wide text-accent"
-          >
-            Tap the button again to open the game.
-          </p>
 
           <p
             :if={@error}
@@ -782,16 +708,16 @@ defmodule HighWireWeb.GamesLive do
             phx-click="accept"
             phx-value-id={@game.game_id}
             phx-value-kind={@game.kind}
-            class="rounded border border-edge px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted transition hover:border-focus hover:text-paper"
+            class="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs font-medium text-accent transition hover:border-focus hover:bg-accent/20"
           >
-            accept
+            accept challenge
           </button>
           <button
             :if={@game.challenger == @self_id}
             phx-click="withdraw"
             phx-value-id={@game.game_id}
             phx-value-kind={@game.kind}
-            class="rounded border border-edge px-2 py-0.5 text-[10px] uppercase tracking-wide text-faint transition hover:border-focus hover:text-paper"
+            class="rounded border border-edge px-2 py-1 text-xs uppercase tracking-wide text-faint transition hover:border-focus hover:text-paper"
           >
             withdraw
           </button>

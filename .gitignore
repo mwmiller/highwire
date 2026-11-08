@@ -54,3 +54,10 @@ npm-debug.log
 
 # Tidewave recordings
 tmp/
+
+# New chess module and tests
+lib/highwire/chess.ex
+test/highwire/chess_test.exs
+
+# Backend binary
+binaries/

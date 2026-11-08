@@ -90,6 +90,7 @@ defmodule HighWire.Chess.Engine do
     }
 
     Map.put(pos, :seen, %{key(pos) => 1})
+    |> Map.put(:fen, fen(pos))
   end
 
   @doc "Whether a square name is on the board."
@@ -114,6 +115,67 @@ defmodule HighWire.Chess.Engine do
     Enum.find_value(pos.board, fn {square, piece} ->
       if piece == {:king, color}, do: square
     end)
+  end
+
+  @doc "The FEN representation of a position."
+  @spec fen(t()) :: binary()
+  def fen(pos) do
+    # Generate FEN placement field (ranks 8 to 1)
+    placement = for rank <- 8..1//-1 do
+      rank_fen(pos, rank)
+    end |> Enum.join("/")
+
+    turn = if pos.turn == :white, do: "w", else: "b"
+    castling = castling_to_fen(pos.castling)
+    ep = if pos.ep, do: pos.ep, else: "-"
+    halfmove = pos.halfmove
+    fullmove = pos.fullmove
+
+    "#{placement} #{turn} #{castling} #{ep} #{halfmove} #{fullmove}"
+  end
+
+  defp rank_fen(pos, rank) do
+    # Build FEN for a single rank
+    {acc, empty} = Enum.reduce(~w(a b c d e f g h), {"", 0}, fn file, {acc, empty} ->
+      case pos.board["#{file}#{rank}"] do
+        nil ->
+          {acc, empty + 1}
+        piece ->
+          acc = if empty > 0, do: "#{acc}#{empty}", else: acc
+          acc = "#{acc}#{piece_to_fen(piece)}"
+          {acc, 0}
+      end
+    end)
+    
+    if empty > 0, do: "#{acc}#{empty}", else: acc
+  end
+
+  defp piece_to_fen({:pawn, :white}), do: "P"
+  defp piece_to_fen({:knight, :white}), do: "N"
+  defp piece_to_fen({:bishop, :white}), do: "B"
+  defp piece_to_fen({:rook, :white}), do: "R"
+  defp piece_to_fen({:queen, :white}), do: "Q"
+  defp piece_to_fen({:king, :white}), do: "K"
+  defp piece_to_fen({:pawn, :black}), do: "p"
+  defp piece_to_fen({:knight, :black}), do: "n"
+  defp piece_to_fen({:bishop, :black}), do: "b"
+  defp piece_to_fen({:rook, :black}), do: "r"
+  defp piece_to_fen({:queen, :black}), do: "q"
+  defp piece_to_fen({:king, :black}), do: "k"
+
+  defp castling_to_fen(castling) do
+    castling
+    |> Enum.map(fn
+      :wk -> "K"
+      :wq -> "Q"
+      :bk -> "k"
+      :bq -> "q"
+    end)
+    |> Enum.join("")
+    |> case do
+      "" -> "-"
+      s -> s
+    end
   end
 
   @doc """
@@ -472,14 +534,13 @@ defmodule HighWire.Chess.Engine do
     color = pos.turn
     piece = Map.fetch!(pos.board, mv.from)
 
-    captured_square = if en_passant_capture?(pos, mv), do: ep_victim(mv, piece), else: mv.to
-    captured = Map.get(pos.board, captured_square)
+    captured_square = if en_passant_capture?(pos, mv), do: ep_victim(mv, piece), else: nil
+    captured = if captured_square, do: Map.get(pos.board, captured_square), else: nil
 
-    board =
-      pos.board
-      |> Map.delete(mv.from)
-      |> Map.delete(captured_square)
-      |> Map.put(mv.to, promoted(piece, mv))
+    board = pos.board
+    board = Map.delete(board, mv.from)
+    board = if captured_square, do: Map.delete(board, captured_square), else: board
+    board = Map.put(board, mv.to, promoted(piece, mv))
 
     pos
     |> Map.put(:board, board)
@@ -488,6 +549,7 @@ defmodule HighWire.Chess.Engine do
     |> Map.put(:halfmove, halfmove(pos.halfmove, piece, captured))
     |> Map.put(:turn, other(color))
     |> Map.update!(:fullmove, fn n -> if color == :black, do: n + 1, else: n end)
+    |> then(fn new_pos -> Map.put(new_pos, :fen, fen(new_pos)) end)
   end
 
   defp castle(pos, mv, {rook_from, rook_to}) do

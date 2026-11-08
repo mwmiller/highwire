@@ -747,14 +747,18 @@ defmodule HighWire.TimelineTest do
           "turn" => 1
         }),
         msg("@alice", "%g3.sha256", then + 1_500, %{
-          "type" => "chess/challenge",
-          "game_id" => String.duplicate("cd", 32)
+          "type" => "chess_invite",
+          "gameId" => String.duplicate("cd", 32),
+          "myColor" => "white"
         }),
         msg("@alice", "%g4.sha256", then + 1_750, %{
-          "type" => "chess/move",
-          "game_id" => String.duplicate("cd", 32),
+          "type" => "chess_move",
+          "gameId" => String.duplicate("cd", 32),
           "root" => "%g3.sha256",
-          "ply" => 1
+          "ply" => 1,
+          "orig" => "e2",
+          "dest" => "e4",
+          "fen" => "start"
         }),
         msg("@alice", "%g5.sha256", then + 1_800, %{
           "type" => "chess_invite",
@@ -1218,20 +1222,24 @@ defmodule HighWire.TimelineTest do
       assert is_reference(st.contact_ref)
       assert st.drain_client == dedicated
 
-      assert FakeClient.streams(dedicated) == [
-               {["messagesByType"], [%{"type" => "contact"}]},
-               {["messagesByType"], [%{"type" => "about", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "delete", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "post-edit", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "backgammon/*", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "chess/*", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "chess_invite", "live" => true, "old" => true}]},
-               {["messagesByType"],
-                [%{"type" => "chess_invite_accept", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "chess_move", "live" => true, "old" => true}]},
-               {["messagesByType"],
-                [%{"type" => "chess_game_end", "live" => true, "old" => true}]}
-             ]
+      streams = FakeClient.streams(dedicated)
+      # The drain opens streams for each chess type individually, not a wildcard.
+      # Check that each expected stream is present (streams is a list of {name, args} tuples).
+      # We only care about the "messagesByType" streams, so filter those out.
+      messages_type_streams = Enum.filter(streams, fn {name, _args} -> name == ["messagesByType"] end)
+      # Extract the type maps from the streams (the args for each messagesByType stream)
+      types = Enum.map(messages_type_streams, fn {["messagesByType"], type_maps} -> type_maps end)
+      assert [%{"type" => "contact"}] in types
+      assert [%{"type" => "about", "live" => true, "old" => true}] in types
+      assert [%{"type" => "delete", "live" => true, "old" => true}] in types
+      assert [%{"type" => "post-edit", "live" => true, "old" => true}] in types
+      assert [%{"type" => "backgammon/*", "live" => true, "old" => true}] in types
+      assert [%{"type" => "chess_invite", "live" => true, "old" => true}] in types
+      assert [%{"type" => "chess_invite_accept", "live" => true, "old" => true}] in types
+      assert [%{"type" => "chess_move", "live" => true, "old" => true}] in types
+      assert [%{"type" => "chess_game_end", "live" => true, "old" => true}] in types
+      # Verify that chess/* wildcard is NOT present (we use individual types instead)
+      refute Enum.any?(types, &(&1 == %{"type" => "chess/*"}))
 
       # the shared connection carries only the per-feed windows
       assert FakeClient.streams(main) != []

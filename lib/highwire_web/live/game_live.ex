@@ -14,7 +14,7 @@ defmodule HighWireWeb.GameLive do
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
   alias HighWire.Chess.Engine
-  alias HighWire.Chess.Legacy
+  alias HighWire.Chess
   alias HighWire.Games.Catalog
   alias HighWire.SSB.{Identities, Profile}
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav}
@@ -28,7 +28,7 @@ defmodule HighWireWeb.GameLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(HighWire.PubSub, Store.topic())
       Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Store.topic())
-      Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Legacy.Store.topic())
+      Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Store.topic())
     end
 
     {:ok,
@@ -498,7 +498,7 @@ defmodule HighWireWeb.GameLive do
   # from the position the log last recorded and walk backwards through the
   # history in reverse so the line still lists every move this node holds.
   defp line(%{kind: :chess, format: :legacy, history: history} = game) when history != [] do
-    start = Legacy.position(game.position)
+    start = HighWire.Chess.position(game.position)
     # Walk the history in reverse (newest first) so each FEN takes us back
     # one move. walk_fens prepends to its accumulator, so reversing the
     # input and then reversing the output gives us oldest-first order.
@@ -521,7 +521,7 @@ defmodule HighWireWeb.GameLive do
   defp walk_fens([%{ply: ply} = item | rest], pos, acc) do
     cond do
       is_binary(item[:fen]) ->
-        walked = Legacy.position(item[:fen])
+        walked = HighWire.Chess.position(item[:fen])
         walk_fens(rest, walked, [step(ply, walked, item) | acc])
 
       # A row with no position of its own can only be followed by playing
@@ -611,7 +611,7 @@ defmodule HighWireWeb.GameLive do
   # The id shape is the same for both games, so the kind is what the store
   # finds rather than what the URL claims.
   defp load(game_id) do
-    Chess.Store.get(game_id) || Chess.Legacy.Store.get(game_id) || Store.get(game_id)
+    Chess.Store.get(game_id) || Store.get(game_id)
   end
 
   # Which side of the glass you are on, whichever way the game names its

@@ -20,7 +20,9 @@ defmodule HighWire.Chess.Log do
   for.
   """
 
-  alias HighWire.Chess.{Engine, Game, Store}
+  alias HighWire.Chess.Engine
+  alias HighWire.Chess.Store
+  alias HighWire.Games.Id
   alias HighWire.SSB.Identities
   alias HighWire.Timeline
 
@@ -35,19 +37,43 @@ defmodule HighWire.Chess.Log do
   """
   @spec open(String.t(), keyword()) :: {:ok, binary(), binary()} | {:error, term()}
   def open(color, opts \\ []) when color in ["white", "black"] do
-    game_id = Keyword.get(opts, :game_id) || Game.new_id()
-    content = Game.challenge(game_id, color, to: opts[:to], note: opts[:note])
+    game_id = Keyword.get(opts, :game_id) || Id.new()
+    opponent = Keyword.get(opts, :to)
+    content = %{
+      "type" => "chess_invite",
+      "gameId" => game_id,
+      "myColor" => color,
+      "root" => game_id
+    }
+    content = if opponent, do: Map.put(content, "inviting", opponent), else: content
+    content = if opts[:note], do: Map.put(content, "note", opts[:note]), else: content
 
     with {:ok, key} <- publish(content, opts) do
-      file(key, content, opts)
-      {:ok, game_id, key}
+      # File the content as published, with the root updated to the
+      # published key so the store derives the game id from it and
+      # subsequent messages can point at this message.
+      content_with_root = Map.put(content, "root", key)
+      file(key, content_with_root, opts)
+
+      # The returned game id is the hex of the published key, which is
+      # what the store files the game under.
+      {:ok, HighWire.Chess.game_id(key), key}
     end
   end
 
   @doc "Accept a challenge: the accepter takes the side the challenger left."
   @spec accept(map(), keyword()) :: {:ok, binary()} | {:error, term()}
   def accept(game, opts \\ []) do
-    publish_and_file(Game.accept(game.game_id, game.challenge_key, note: opts[:note]), opts)
+    root = game.challenge_key || game_id_from_game(game) || game.game_id
+    content = %{
+      "type" => "chess_invite_accept",
+      "gameId" => game.game_id,
+      "root" => root,
+      "myColor" => other_side(game),
+      "note" => opts[:note]
+    }
+    content = content |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
+    publish_and_file(content, opts)
   end
 
   @doc """
@@ -56,10 +82,21 @@ defmodule HighWire.Chess.Log do
   """
   @spec play(map(), binary(), keyword()) :: {:ok, binary()} | {:error, term()}
   def play(game, uci, opts \\ []) do
-    with :ok <- legal?(game, uci) do
-      content =
-        Game.move(game.game_id, game.challenge_key, game.turn_count + 1, uci, note: opts[:note])
-
+    with {:ok, next_pos} <- Engine.move(game.position, uci) do
+      {orig, dest} = parse_ucI(uci)
+      root = game.challenge_key || game_id_from_game(game) || game.game_id
+      content = %{
+        "type" => "chess_move",
+        "gameId" => game.game_id,
+        "root" => root,
+        "ply" => game.turn_count + 1,
+        "orig" => orig,
+        "dest" => dest,
+        "pgnMove" => Engine.san(game.position, uci),
+        "fen" => Engine.fen(next_pos),
+        "note" => opts[:note]
+      }
+      content = content |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
       publish_and_file(content, opts)
     end
   end
@@ -67,26 +104,50 @@ defmodule HighWire.Chess.Log do
   @doc "Resign: the game goes to the other player."
   @spec resign(map(), keyword()) :: {:ok, binary()} | {:error, term()}
   def resign(game, opts \\ []) do
-    content =
-      Game.resign(game.game_id, game.challenge_key, game.turn_count + 1, note: opts[:note])
-
+    root = game.challenge_key || game_id_from_game(game) || game.game_id
+    content = %{
+      "type" => "chess_game_end",
+      "gameId" => game.game_id,
+      "root" => root,
+      "ply" => game.turn_count,
+      "status" => "resign",
+      "fen" => Engine.fen(game.position),
+      "note" => opts[:note]
+    }
+    content = content |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
     publish_and_file(content, opts)
   end
 
   @doc "Withdraw a challenge nobody has accepted yet."
   @spec withdraw(map(), keyword()) :: {:ok, binary()} | {:error, term()}
   def withdraw(game, opts \\ []) do
-    publish_and_file(Game.withdraw(game.game_id, game.challenge_key), opts)
+    root = game.challenge_key || game_id_from_game(game) || game.game_id
+    content = %{
+      "type" => "chess_game_end",
+      "gameId" => game.game_id,
+      "root" => root,
+      "ply" => game.turn_count,
+      "status" => "withdrawn",
+      "note" => opts[:note]
+    }
+    content = content |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
+    publish_and_file(content, opts)
   end
 
-  defp legal?(%{position: position}, uci) when is_map(position) do
-    case Engine.move(position, uci) do
-      {:ok, _next} -> :ok
-      {:error, reason} -> {:error, reason}
+  defp parse_ucI(uci) do
+    case uci do
+      <<orig::binary-size(2), dest::binary-size(2), _promo::binary>> ->
+        {orig, dest}
+      <<orig::binary-size(2), dest::binary-size(2)>> ->
+        {orig, dest}
+      _ ->
+        {:error, :invalid_ucI}
     end
   end
 
-  defp legal?(_game, _uci), do: {:error, :no_position}
+  # NOTE: This function is no longer used. Legal moves are now checked
+  # using Engine.legal_moves/1 in the play/3 function. Kept for potential
+  # future use.
 
   defp default_publisher do
     Application.get_env(:highwire, :game_publisher, &Timeline.publish_content/1)
@@ -100,7 +161,7 @@ defmodule HighWire.Chess.Log do
       id ->
         Store.ingest(%{
           "key" => key,
-          "value" => %{"author" => id, "content" => content}
+          "value" => %{"author" => id, "content" => content, "timestamp" => System.system_time(:millisecond)}
         })
     end
   end
@@ -115,6 +176,20 @@ defmodule HighWire.Chess.Log do
       _ -> nil
     end
   end
+
+  # The color the accepter takes, from the invite the game folded.
+  defp other_side(game) do
+    case game.challenger_color do
+      "white" -> "black"
+      "black" -> "white"
+      _ -> nil
+    end
+  end
+
+  # Fallback game id when the game has no challenge_key (e.g., games folded
+  # from rows that did not carry a root).
+  defp game_id_from_game(%{game_id: game_id}), do: game_id
+  defp game_id_from_game(%{challenge_key: key}), do: HighWire.Chess.game_id(key)
 
   defp publish_and_file(content, opts) do
     with {:ok, key} <- publish(content, opts) do
