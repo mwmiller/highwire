@@ -90,6 +90,7 @@ defmodule HighWire.Timeline do
   # chess_invite_accept, chess_move, chess_game_end), so we open one
   # drain per type to catch them all.
   @chess_types ~w(chess_invite chess_invite_accept chess_move chess_game_end)
+  @chess_wildcard "chess/*"
 
   # First-paint: once this many feed streams have reported, broadcast
   # what has arrived instead of waiting for every stream (up to 400).
@@ -2850,9 +2851,10 @@ defmodule HighWire.Timeline do
 
   # Check if a ref belongs to any of the chess drains (one per type)
   defp chess_kind?(state, ref) do
-    Enum.any?(@chess_types, fn type ->
-      ref == Map.get(state, :"chess_#{type}_ref")
-    end)
+    ref == Map.get(state, :"chess_#{@chess_wildcard}_ref") or
+      Enum.any?(@chess_types, fn type ->
+        ref == Map.get(state, :"chess_#{type}_ref")
+      end)
   end
 
   defp game_store(:backgammon), do: Backgammon.Store
@@ -4882,8 +4884,11 @@ defmodule HighWire.Timeline do
 
   defp open_backgammon(state), do: open_game_drain(state, :backgammon)
   defp open_chess(state) do
-    # Open one drain per chess message type so we catch all canonical
-    # chess messages. Each drain has its own cursor.
+    # `chess/*` is the format current clients publish; the four canonical
+    # names are what older ones published. One drain per source, each with
+    # its own cursor, so neither format is left out.
+    state = open_single_chess_drain(state, @chess_wildcard)
+
     Enum.reduce(@chess_types, state, fn type, state ->
       open_single_chess_drain(state, type)
     end)
