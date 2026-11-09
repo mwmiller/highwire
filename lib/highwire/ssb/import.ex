@@ -131,8 +131,12 @@ defmodule HighWire.SSB.Import do
   @doc "The flume log to convert, or nil for an identity-only import."
   @spec log_path() :: Path.t() | nil
   def log_path do
-    path = Path.join(js_home(), "log.offset")
-    if File.regular?(path), do: path
+    # ssb-server, Patchwork and the other JS clients keep the log under
+    # flume/; only very old layouts put it at the store root. Checking
+    # both is what makes an existing history importable at all — a store
+    # with a real log read as "identity only" and nothing converted.
+    [Path.join([js_home(), "flume", "log.offset"]), Path.join(js_home(), "log.offset")]
+    |> Enum.find(&File.regular?/1)
   end
 
   @doc "The JS blob store to copy referenced blobs from, or nil."
