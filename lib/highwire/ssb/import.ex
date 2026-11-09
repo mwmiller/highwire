@@ -119,6 +119,98 @@ defmodule HighWire.SSB.Import do
   @spec marker?() :: boolean()
   def marker?, do: File.exists?(marker_path())
 
+  # -- staging ------------------------------------------------------------
+
+  @staged_dir "import-log"
+  @chunk 4_194_304
+  @record_start "{\"key\":\"%"
+
+  defp rewrite(src, dest) do
+    with {:ok, input} <- :file.open(String.to_charlist(src), [:read, :binary, :raw, {:read_ahead, @chunk}]),
+         {:ok, output} <- :file.open(String.to_charlist(dest), [:write, :binary, :raw]) do
+      :ok = :file.truncate(output)
+      result = copy_records(input, output, "", 0)
+      :file.close(output)
+      :file.close(input)
+      result
+    end
+  end
+
+  defp copy_records(input, output, buf, count) do
+    case :binary.match(buf, @record_start) do
+      :nomatch ->
+        keep = byte_size(@record_start) - 1
+
+        buf =
+          if byte_size(buf) > keep,
+            do: binary_part(buf, byte_size(buf) - keep, keep),
+            else: buf
+
+        case :file.read(input, @chunk) do
+          {:ok, chunk} -> copy_records(input, output, buf <> chunk, count)
+          _ -> {:ok, count}
+        end
+
+      {pos, _} ->
+        rest = binary_part(buf, pos, byte_size(buf) - pos)
+
+        case record_end(rest, 0, 0, false) do
+          {:ok, len} ->
+            # A frame is length, record, length again (the converter's
+            # integrity check), then four bytes it skips. All three have
+            # to be there: without the spacer every record after the
+            # first starts four bytes too early.
+            bin = binary_part(rest, 0, len)
+            :ok = :file.write(output, <<len::32, bin::binary, len::32, 0::32>>)
+            copy_records(input, output, binary_part(rest, len, byte_size(rest) - len), count + 1)
+
+          :incomplete ->
+            # Either the record runs past this buffer, or the bytes here
+            # are not a record at all; the next chunk (or the next byte)
+            # decides which.
+            case :file.read(input, @chunk) do
+              {:ok, chunk} -> copy_records(input, output, rest <> chunk, count)
+              _ -> {:ok, count}
+            end
+        end
+    end
+  end
+
+  defp record_end(bin, idx, _depth, _in_string) when idx >= byte_size(bin), do: :incomplete
+
+  defp record_end(bin, idx, depth, in_string) do
+    case :binary.match(bin, ["\"", "{", "}"], scope: {idx, byte_size(bin) - idx}) do
+      :nomatch ->
+        :incomplete
+
+      {pos, 1} ->
+        case :binary.at(bin, pos) do
+          ?" ->
+            record_end(bin, pos + 1, depth, if(escaped?(bin, pos), do: in_string, else: not in_string))
+
+          _ when in_string ->
+            record_end(bin, pos + 1, depth, in_string)
+
+          ?{ ->
+            record_end(bin, pos + 1, depth + 1, in_string)
+
+          ?} ->
+            if depth == 1,
+              do: {:ok, pos + 1},
+              else: record_end(bin, pos + 1, depth - 1, in_string)
+        end
+    end
+  end
+
+  defp escaped?(bin, pos), do: escaped?(bin, pos - 1, 0)
+  defp escaped?(_bin, pos, slashes) when pos < 0, do: rem(slashes, 2) == 1
+
+  defp escaped?(bin, pos, slashes) do
+    if :binary.at(bin, pos) == ?\\,
+      do: escaped?(bin, pos - 1, slashes + 1),
+      else: rem(slashes, 2) == 1
+  end
+
   @spec clear_marker() :: :ok | {:error, term()}
   def clear_marker do
     case File.rm(marker_path()) do
@@ -137,6 +229,42 @@ defmodule HighWire.SSB.Import do
     # with a real log read as "identity only" and nothing converted.
     [Path.join([js_home(), "flume", "log.offset"]), Path.join(js_home(), "log.offset")]
     |> Enum.find(&File.regular?/1)
+  end
+
+  @doc """
+  A clean copy of the JS log, ready for the converter.
+
+  The log a long-lived JS client leaves behind is not always a tidy
+  sequence of length-prefixed records: preallocated regions, torn writes
+  and mixed framing leave runs of bytes that are not a record at all.
+  erlbutt's converter stops at the first one, so the history reads as
+  empty. This walks the file, picks out each `{"key":"%…` record by its
+  braces, and rewrites the ones that are whole JSON into the framing the
+  converter expects. Bytes that are not a record are skipped.
+
+  The copy lives under `HIGHWIRE_HOME` and is removed once the import
+  finishes; the JS store is only ever read.
+  """
+  @spec stage_log(Path.t() | nil) :: {:ok, Path.t(), non_neg_integer()} | {:error, term()}
+  def stage_log(nil), do: {:error, :no_log}
+
+  def stage_log(src) do
+    dir = Path.join(HighWire.home_dir(), @staged_dir)
+    out = Path.join(dir, "log.offset")
+    tmp = out <> ".tmp"
+
+    with :ok <- File.mkdir_p(dir),
+         {:ok, records} <- rewrite(src, tmp),
+         :ok <- File.rename(tmp, out) do
+      {:ok, out, records}
+    end
+  end
+
+  @doc "Drop the staged log; the store holds the result now."
+  @spec cleanup_staged() :: :ok
+  def cleanup_staged do
+    _ = File.rm_rf(Path.join(HighWire.home_dir(), @staged_dir))
+    :ok
   end
 
   @doc "The JS blob store to copy referenced blobs from, or nil."

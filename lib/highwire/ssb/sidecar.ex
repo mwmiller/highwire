@@ -465,6 +465,32 @@ defmodule HighWire.SSB.Sidecar do
   def handle_call(:decline_import, _from, state),
     do: {:reply, {:error, state.status}, state}
 
+  # The clean copy of the JS log is ready (or could not be built).
+  def handle_info({:log_staged, {:ok, staged, records}}, state) do
+    Logger.info("sidecar: prepared #{records} records from the JS log")
+    {:reply, _reply, state} = do_import(state, staged)
+    {:noreply, state}
+  end
+
+  def handle_info({:log_staged, {:error, reason}}, state) do
+    Logger.warning(
+      "sidecar: could not prepare the JS log (#{inspect(reason)}); converting it as it is"
+    )
+
+    {:reply, _reply, state} =
+      case Import.log_path() do
+        nil ->
+          _ = Import.clear_marker()
+          send(self(), :spawn_node)
+          {:reply, :ok, %{state | status: :starting, import: nil}}
+
+        log ->
+          do_import(state, log)
+      end
+
+    {:noreply, state}
+  end
+
   @impl true
   def handle_info(:spawn_node, state) do
     parent = self()
@@ -636,6 +662,7 @@ defmodule HighWire.SSB.Sidecar do
     if done? do
       Logger.info("sidecar: import finished; starting the engine")
       _ = Import.clear_marker()
+      _ = Import.cleanup_staged()
       send(self(), :spawn_node)
       {:noreply, %{state | status: :starting, import_pid: nil, import: nil}}
     else
@@ -643,6 +670,7 @@ defmodule HighWire.SSB.Sidecar do
         Map.get(import, :error) || "the importer stopped before it finished (status #{code})"
 
       Logger.error("sidecar: import failed: #{error}")
+      _ = Import.cleanup_staged()
       {:noreply, %{state | status: :import_failed, import_pid: nil, import: fail(state, error)}}
     end
   end
@@ -1100,7 +1128,15 @@ defmodule HighWire.SSB.Sidecar do
         {:reply, :ok, %{state | status: :starting, import: nil}}
 
       log ->
-        do_import(state, log)
+        # Rewriting a long log takes long enough that doing it inline
+        # would stall every page; it runs in its own process and the
+        # conversion starts when the clean copy lands.
+        sidecar = self()
+        _ = Task.start(fn -> send(sidecar, {:log_staged, Import.stage_log(log)}) end)
+        Logger.info("sidecar: preparing the JS log for conversion")
+
+        {:reply, :ok,
+         %{state | status: :importing, import: %{staged: true, dots: 0, tail: "", done?: false, started_at: System.system_time(:second)}}}
     end
   end
 
