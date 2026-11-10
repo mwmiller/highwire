@@ -126,7 +126,8 @@ defmodule HighWire.SSB.Import do
   @record_start "{\"key\":\"%"
 
   defp rewrite(src, dest) do
-    with {:ok, input} <- :file.open(String.to_charlist(src), [:read, :binary, :raw, {:read_ahead, @chunk}]),
+    with {:ok, input} <-
+           :file.open(String.to_charlist(src), [:read, :binary, :raw, {:read_ahead, @chunk}]),
          {:ok, output} <- :file.open(String.to_charlist(dest), [:write, :binary, :raw]) do
       :ok = :file.truncate(output)
       result = copy_records(input, output, "", 0)
@@ -139,40 +140,46 @@ defmodule HighWire.SSB.Import do
   defp copy_records(input, output, buf, count) do
     case :binary.match(buf, @record_start) do
       :nomatch ->
-        keep = byte_size(@record_start) - 1
-
-        buf =
-          if byte_size(buf) > keep,
-            do: binary_part(buf, byte_size(buf) - keep, keep),
-            else: buf
-
-        case :file.read(input, @chunk) do
-          {:ok, chunk} -> copy_records(input, output, buf <> chunk, count)
-          _ -> {:ok, count}
-        end
+        read_more(input, output, keep_tail(buf), count)
 
       {pos, _} ->
-        rest = binary_part(buf, pos, byte_size(buf) - pos)
+        stage_record(input, output, binary_part(buf, pos, byte_size(buf) - pos), count)
+    end
+  end
 
-        case record_end(rest, 0, 0, false) do
-          {:ok, len} ->
-            # A frame is length, record, length again (the converter's
-            # integrity check), then four bytes it skips. All three have
-            # to be there: without the spacer every record after the
-            # first starts four bytes too early.
-            bin = binary_part(rest, 0, len)
-            :ok = :file.write(output, <<len::32, bin::binary, len::32, 0::32>>)
-            copy_records(input, output, binary_part(rest, len, byte_size(rest) - len), count + 1)
+  # The start marker can straddle a chunk boundary, so its length minus
+  # one byte of tail survives into the next read; anything shorter is
+  # kept whole.
+  defp keep_tail(buf) do
+    keep = byte_size(@record_start) - 1
 
-          :incomplete ->
-            # Either the record runs past this buffer, or the bytes here
-            # are not a record at all; the next chunk (or the next byte)
-            # decides which.
-            case :file.read(input, @chunk) do
-              {:ok, chunk} -> copy_records(input, output, rest <> chunk, count)
-              _ -> {:ok, count}
-            end
-        end
+    if byte_size(buf) > keep,
+      do: binary_part(buf, byte_size(buf) - keep, keep),
+      else: buf
+  end
+
+  defp read_more(input, output, buf, count) do
+    case :file.read(input, @chunk) do
+      {:ok, chunk} -> copy_records(input, output, buf <> chunk, count)
+      _ -> {:ok, count}
+    end
+  end
+
+  # A frame is length, record, length again (the converter's integrity
+  # check), then four bytes it skips. All three have to be there: without
+  # the spacer every record after the first starts four bytes too early.
+  defp stage_record(input, output, rest, count) do
+    case record_end(rest, 0, 0, false) do
+      {:ok, len} ->
+        bin = binary_part(rest, 0, len)
+        :ok = :file.write(output, <<len::32, bin::binary, len::32, 0::32>>)
+        copy_records(input, output, binary_part(rest, len, byte_size(rest) - len), count + 1)
+
+      :incomplete ->
+        # Either the record runs past this buffer, or the bytes here are
+        # not a record at all; the next chunk (or the next byte) decides
+        # which.
+        read_more(input, output, rest, count)
     end
   end
 
@@ -180,27 +187,30 @@ defmodule HighWire.SSB.Import do
 
   defp record_end(bin, idx, depth, in_string) do
     case :binary.match(bin, ["\"", "{", "}"], scope: {idx, byte_size(bin) - idx}) do
-      :nomatch ->
-        :incomplete
-
-      {pos, 1} ->
-        case :binary.at(bin, pos) do
-          ?" ->
-            record_end(bin, pos + 1, depth, if(escaped?(bin, pos), do: in_string, else: not in_string))
-
-          _ when in_string ->
-            record_end(bin, pos + 1, depth, in_string)
-
-          ?{ ->
-            record_end(bin, pos + 1, depth + 1, in_string)
-
-          ?} ->
-            if depth == 1,
-              do: {:ok, pos + 1},
-              else: record_end(bin, pos + 1, depth - 1, in_string)
-        end
+      :nomatch -> :incomplete
+      {pos, 1} -> record_step(bin, pos, depth, in_string)
     end
   end
+
+  # One structural byte: a quote toggles the string state (an escaped one
+  # leaves it alone), a brace opens a level, and a closing brace ends the
+  # record at the outer level or steps back in.
+  defp record_step(bin, pos, depth, in_string) do
+    case :binary.at(bin, pos) do
+      ?" -> quote_step(bin, pos, depth, in_string)
+      _ when in_string -> record_end(bin, pos + 1, depth, in_string)
+      ?{ -> record_end(bin, pos + 1, depth + 1, in_string)
+      ?} -> close_step(bin, pos, depth, in_string)
+    end
+  end
+
+  defp quote_step(bin, pos, depth, in_string) do
+    next = if escaped?(bin, pos), do: in_string, else: not in_string
+    record_end(bin, pos + 1, depth, next)
+  end
+
+  defp close_step(_bin, pos, 1, _in_string), do: {:ok, pos + 1}
+  defp close_step(bin, pos, depth, in_string), do: record_end(bin, pos + 1, depth - 1, in_string)
 
   defp escaped?(bin, pos), do: escaped?(bin, pos - 1, 0)
   defp escaped?(_bin, pos, slashes) when pos < 0, do: rem(slashes, 2) == 1

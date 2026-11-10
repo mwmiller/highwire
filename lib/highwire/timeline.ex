@@ -111,6 +111,13 @@ defmodule HighWire.Timeline do
   # network poll or the 7s UI ticks.
   @drain_refresh_ms :timer.minutes(13)
 
+  # Contact drain items folded at a time. The pass reads the whole contact
+  # table — 200k messages on a long-lived store — and holding all of them
+  # until the stream ended cost about a gigabyte of process memory before
+  # anything merged. A batch is folded as it fills, so the buffer never
+  # grows past this and the edges exist as the pass arrives.
+  @contact_batch 500
+
   # The reload heartbeat re-opens the per-feed window (createHistoryStream
   # per followed feed). Each stream makes the engine fold that feed's log,
   # so a short interval is a periodic full scan of every followed feed —
@@ -126,7 +133,6 @@ defmodule HighWire.Timeline do
   @reload_ms :timer.seconds(120)
 
   # How long a legacy tail must be quiet before its pass counts as done.
-
 
   # How long to wait before reopening the append tail after it drops.
   # The heartbeat above is a freshness bound, not a watchdog: waiting for
@@ -830,6 +836,7 @@ defmodule HighWire.Timeline do
       contacts_primed?: false,
       contact_ref: nil,
       contact_buf: [],
+      contact_fresh?: false,
       # What the store-wide contact drain is allowed to keep. A big node
       # holds hundreds of thousands of follow edits, and the first version
       # kept every one of them — here, again inside the collapse, and a
@@ -2262,7 +2269,13 @@ defmodule HighWire.Timeline do
   # paged publicFeed never carries contacts at all, so without this
   # drain follow rows would age out of the timeline and disappear.
   def handle_info({Client, ref, {:item, msg}}, %{contact_ref: ref} = state) do
-    {:noreply, %{state | contact_buf: [msg | state.contact_buf]}}
+    state = %{state | contact_buf: [msg | state.contact_buf]}
+
+    if length(state.contact_buf) >= @contact_batch do
+      {:noreply, fold_contact_batch(state)}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info({Client, ref, :done}, %{contact_ref: ref} = state) do
@@ -2273,7 +2286,11 @@ defmodule HighWire.Timeline do
     Logger.debug("timeline: contact drain failed: #{inspect(reason)}")
     # The connection is torn down with the contact pass — the about
     # pass rode the same one, so its ref dangles too.
-    state = stop_drain_client(%{state | contact_ref: nil, contact_buf: [], about_ref: nil})
+    state =
+      %{state | contact_ref: nil, contact_buf: [], about_ref: nil}
+      |> stop_drain_client()
+      |> clear_contact_pass()
+
     {:noreply, state}
   end
 
@@ -2638,7 +2655,10 @@ defmodule HighWire.Timeline do
   # refs (both passes ride it) so the next reload can re-dial instead
   # of blocking either drain.
   def handle_info({:EXIT, pid, _reason}, %{drain_client: pid} = state) do
-    {:noreply, %{state | drain_client: nil, contact_ref: nil, contact_buf: [], about_ref: nil}}
+    {:noreply,
+     state
+     |> Map.merge(%{drain_client: nil, contact_ref: nil, contact_buf: [], about_ref: nil})
+     |> clear_contact_pass()}
   end
 
   # the dedicated pages connection died under us (sidecar restart,
@@ -2662,10 +2682,7 @@ defmodule HighWire.Timeline do
     # Check if this pid is any of the chess drain clients
     Enum.reduce(@chess_types, state, fn type, state ->
       if Map.get(state, :"chess_#{type}_client") == pid do
-        %{state |
-          "chess_#{type}_client": nil,
-          "chess_#{type}_ref": nil,
-          "chess_#{type}_buf": []}
+        %{state | "chess_#{type}_client": nil, "chess_#{type}_ref": nil, "chess_#{type}_buf": []}
       else
         state
       end
@@ -3101,7 +3118,7 @@ defmodule HighWire.Timeline do
 
     with true <- is_pid(client),
          {:ok, ref} <- Client.stream(client, ["messagesByType"], [%{"type" => "contact"}], self()) do
-      %{state | contact_ref: ref, contact_buf: []}
+      %{state | contact_ref: ref, contact_buf: []} |> clear_contact_pass()
     else
       _ -> state
     end
@@ -3352,7 +3369,7 @@ defmodule HighWire.Timeline do
   # pass must not leak a half-open socket until Timeline restarts.
   defp stop_drain_client(%{drain_client: pid} = state) when is_pid(pid) do
     Client.stop(pid)
-    %{state | drain_client: nil}
+    clear_contact_pass(%{state | drain_client: nil})
   catch
     _, _ -> %{state | drain_client: nil}
   end
@@ -3456,28 +3473,54 @@ defmodule HighWire.Timeline do
   # the rows show now instead of on the next reload; when feeds are
   # still streaming, their own finalize pass picks the messages up.
   defp contact_drained(state) do
-    fresh = Enum.reject(state.contact_buf, &MapSet.member?(state.contact_keys, &1["key"]))
+    state = fold_contact_batch(state)
+    fresh? = Map.get(state, :contact_fresh?, false)
 
-    state = %{
-      state
-      | contact_ref: nil,
-        contact_buf: [],
-        contact_keys: Enum.reduce(fresh, state.contact_keys, &MapSet.put(&2, &1["key"])),
-        contact_edges: fold_edges(state.contact_edges, fresh),
-        collapsed_contacts: fold_contacts(state.collapsed_contacts, fresh),
-        last_drain_at: System.monotonic_time(:millisecond)
-    }
+    state =
+      %{
+        state
+        | contact_ref: nil,
+          contact_buf: [],
+          last_drain_at: System.monotonic_time(:millisecond)
+      }
+      |> clear_contact_pass()
 
     # A refilled store-wide contact graph is a new ranking input. Hand it
     # to the Suggester off-process; Timeline never ranks inline.
     cast_contacts(state)
 
-    if fresh != [] and state.status == :ok and map_size(state.pending) == 0 do
+    if fresh? and state.status == :ok and map_size(state.pending) == 0 do
       {:noreply, finalize(state)}
     else
       {:noreply, state}
     end
   end
+
+  # Merge whatever the pass has buffered. A message already in
+  # `contact_keys` is a repeat — the same edit redelivered, or our own
+  # publish folded at the moment it went out — and contributes nothing.
+  defp fold_contact_batch(%{contact_buf: []} = state), do: state
+
+  defp fold_contact_batch(state) do
+    fresh =
+      state.contact_buf
+      |> Enum.reverse()
+      |> Enum.reject(&MapSet.member?(state.contact_keys, &1["key"]))
+
+    state = %{
+      state
+      | contact_buf: [],
+        contact_keys: Enum.reduce(fresh, state.contact_keys, &MapSet.put(&2, &1["key"])),
+        contact_edges: fold_edges(state.contact_edges, fresh),
+        collapsed_contacts: fold_contacts(state.collapsed_contacts, fresh)
+    }
+
+    Map.put(state, :contact_fresh?, Map.get(state, :contact_fresh?, false) or fresh != [])
+  end
+
+  # A pass's "anything folded" marker, written through Map.put so a
+  # hand-built state (tests, older shapes) without the key still works.
+  defp clear_contact_pass(state), do: Map.put(state, :contact_fresh?, false)
 
   # The about pass completed — a tighter rail filter is a new ranking
   # input. Entries only grow, like Profile's read model and the contact
@@ -3762,7 +3805,7 @@ defmodule HighWire.Timeline do
     end
   end
 
-  defp spawn_profile_worker(state, missing, base, post_refs) do
+  defp spawn_profile_worker(state, missing, _base, post_refs) do
     if is_pid(state.client) and Process.alive?(state.client) do
       client = state.client
       parent = self()
@@ -3771,10 +3814,16 @@ defmodule HighWire.Timeline do
         try do
           t0 = System.monotonic_time(:millisecond)
           fetched = fetch_profiles(client, missing)
-          want_missing_blobs(client, post_refs ++ image_refs(Map.merge(base, fetched)))
           took = System.monotonic_time(:millisecond) - t0
-          Logger.debug("timeline: #{map_size(fetched)} profiles + wants in #{took}ms")
+
+          # Hand the names and avatars over before asking any peer for
+          # bytes. A want waits on the peer, so publishing behind the
+          # want loop kept a whole window reading as short ids and color
+          # tiles long after its profiles had already arrived.
           send(parent, {:profiles_fetched, fetched})
+          Logger.debug("timeline: #{map_size(fetched)} profiles in #{took}ms")
+
+          want_missing_blobs(client, post_refs ++ image_refs(fetched))
         catch
           kind, reason ->
             Logger.debug("timeline: profile worker failed: #{inspect({kind, reason})}")
@@ -3873,14 +3922,20 @@ defmodule HighWire.Timeline do
   # wants so the sidecar pulls them from the gossip graph; /blob/ serves
   # a neutral missing-blob placeholder until the bytes land (the
   # blobs.ls tail then bumps blob_rev and the UI refetches).
+  #
+  # The engine holds a want durably (`blob_want`) and re-advertises it,
+  # so a ref only needs wanting once: this pass asks for the newly
+  # fetched avatars and this window's images, not every known profile's
+  # again. Kept small and quick because a peer that cannot answer costs
+  # the full timeout per ref.
   defp want_missing_blobs(client, refs) do
     refs
     |> Enum.filter(&(is_binary(&1) and not Blob.local?(&1)))
     |> Enum.uniq()
-    |> Enum.take(300)
+    |> Enum.take(40)
     |> Enum.each(fn ref ->
       try do
-        _ = Client.call(client, ["blobs", "want"], [ref], 1_500)
+        _ = Client.call(client, ["blobs", "want"], [ref], 300)
         :ok
       catch
         _, _ -> :ok
@@ -4880,9 +4935,8 @@ defmodule HighWire.Timeline do
   # connection. Each resumes from its own cursor, so only what is new is
   # walked after the first pass.
 
-
-
   defp open_backgammon(state), do: open_game_drain(state, :backgammon)
+
   defp open_chess(state) do
     # `chess/*` is the format current clients publish; the four canonical
     # names are what older ones published. One drain per source, each with

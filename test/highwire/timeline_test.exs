@@ -25,6 +25,23 @@ defmodule HighWire.TimelineTest do
     msg(author, key, timestamp, Map.put(vote_props, "type", "vote"))
   end
 
+  # Polls `fun` until it answers true, or the budget runs out. A worker
+  # spawned by a callback answers on its own schedule, so a case that
+  # proves what it did must not pin the immediate next message.
+  defp eventual(fun, tries \\ 100) do
+    cond do
+      fun.() ->
+        true
+
+      tries == 0 ->
+        false
+
+      true ->
+        Process.sleep(20)
+        eventual(fun, tries - 1)
+    end
+  end
+
   # Answers Client.stream/4-shaped calls without a network and records
   # them, so tests can prove which connection a stream opened on; the
   # first contacts item boots the feed streams through this. Client
@@ -1265,6 +1282,34 @@ defmodule HighWire.TimelineTest do
       assert is_reference(st.contact_ref)
     end
 
+    test "a long pass folds in batches instead of holding every message" do
+      st = drain_state([])
+
+      msgs =
+        for i <- 1..501 do
+          msg("@a.ed25519", "%b#{i}=.sha256", 1_000 + i, %{
+            "type" => "contact",
+            "contact" => "@b#{i}=.ed25519",
+            "following" => true
+          })
+        end
+
+      st =
+        Enum.reduce(msgs, st, fn m, st ->
+          {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:item, m}}, st)
+          st
+        end)
+
+      # A full batch merges as it fills; what is left is only the tail
+      # that has not reached the batch size yet.
+      assert length(st.contact_buf) < 500
+      assert MapSet.size(st.contact_edges) == 500
+
+      {:noreply, st} = Timeline.handle_info({Client, :contact_ref, :done}, st)
+      assert st.contact_buf == []
+      assert MapSet.size(st.contact_edges) == 501
+    end
+
     test "a completed pass stamps the refresh window" do
       st = drain_state(status: :ok, pending: %{})
 
@@ -1686,7 +1731,12 @@ defmodule HighWire.TimelineTest do
 
       assert st.profile_fetching?
       assert_receive {:profiles_fetched, _}, 2_000
-      assert Enum.any?(FakeClient.calls(client), &match?({["blobs", "want"], [^img]}, &1))
+
+      # The wants ride behind the publish, so they land on the worker's
+      # own schedule rather than ahead of the names it just resolved.
+      assert eventual(fn ->
+               Enum.any?(FakeClient.calls(client), &match?({["blobs", "want"], [^img]}, &1))
+             end)
     end
 
     test "no worker when nothing is missing and nothing is unseen" do

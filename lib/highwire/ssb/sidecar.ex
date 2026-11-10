@@ -1136,7 +1136,17 @@ defmodule HighWire.SSB.Sidecar do
         Logger.info("sidecar: preparing the JS log for conversion")
 
         {:reply, :ok,
-         %{state | status: :importing, import: %{staged: true, dots: 0, tail: "", done?: false, started_at: System.system_time(:second)}}}
+         %{
+           state
+           | status: :importing,
+             import: %{
+               staged: true,
+               dots: 0,
+               tail: "",
+               done?: false,
+               started_at: System.system_time(:second)
+             }
+         }}
     end
   end
 
