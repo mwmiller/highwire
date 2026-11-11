@@ -67,7 +67,7 @@ defmodule HighWireWeb.GamesLive do
      |> assign(:self_id, self_id)
      |> assign(:error, nil)
      |> assign(:page, 0)
-     |> assign(:total, Catalog.count())
+     |> assign(:total, total_games())
      |> assign(:filters, %{})
      |> assign(:group, :room)
      |> assign(:invitee, nil)
@@ -76,8 +76,11 @@ defmodule HighWireWeb.GamesLive do
   end
 
   # The room's sections are what this reader should see, in that order, so
-  # they are worked out once per change of games rather than per render.
+  # they are worked out once per change of games rather than per render. A
+  # game is read once however many pages it turned up on: the catalog can
+  # name one game under two kinds, and those two names can be pages apart.
   defp assign_games(socket, games) do
+    games = Enum.uniq_by(games, & &1.game_id)
     viewer = viewer(socket.assigns.self_id, games)
 
     socket
@@ -134,7 +137,7 @@ defmodule HighWireWeb.GamesLive do
     {:noreply,
      socket
      |> assign(:page, page)
-     |> assign(:total, Catalog.count())
+     |> assign(:total, total_games())
      |> assign_games(socket.assigns.games ++ more)}
   end
 
@@ -264,16 +267,22 @@ defmodule HighWireWeb.GamesLive do
   defp page(self_id, page), do: page_games(self_id, page)
 
   # A page is a window's worth of ids, and each one is read from the store
-  # that holds it — the cost is the page, not the number of games. The catalog
-  # can name one game twice, under the legacy index and the live store, and
-  # the room reads it once: two cards of the same game would draw the same
-  # board, with the same id, twice.
+  # that holds it — the cost is the page, not the number of games.
   defp page_games(self_id, page) do
     Catalog.recent(@page_size, page * @page_size)
     |> Enum.map(fn {kind, game_id} -> snapshot(kind, game_id) end)
     |> Enum.reject(&is_nil/1)
-    |> Enum.uniq_by(& &1.game_id)
     |> Enum.map(&put_live_status(&1, self_id))
+  end
+
+  # What the room is paging through is the number of games the catalog names,
+  # not the number of names it holds: one game can be indexed under the legacy
+  # kind and the live one at once, and the room counts it once.
+  defp total_games do
+    case Catalog.count() do
+      0 -> 0
+      count -> count |> Catalog.recent() |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> length()
+    end
   end
 
   defp snapshot(:chess, id), do: Chess.Store.get(id)

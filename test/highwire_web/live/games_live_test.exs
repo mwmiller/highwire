@@ -119,6 +119,7 @@ defmodule HighWireWeb.GamesLiveTest do
       {:ok, _view, html} = live(conn, "/games")
 
       assert html |> String.split("board-" <> game_id) |> length() == 2
+      assert html =~ "1 of 1 games"
     end
 
     # A backgammon challenge is a game to take, exactly as a chess one is:
