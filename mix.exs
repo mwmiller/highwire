@@ -95,11 +95,15 @@ defmodule HighWire.MixProject do
       # `mix deps.update enacl`. enacl's origin/main is a different
       # lineage (the upstream 1.2.x line), not a fast-forward from here.
       {:enacl, git: "https://github.com/cmoid/enacl", branch: "moid-v1.1.1"},
-      # The SSB engine the sidecar spawns. Pinned to a release tag, not a
-      # branch: branch heads get rewritten, and a locked commit that no
-      # longer sits under a ref is not fetchable at all ("not our ref"),
-      # which strands every clean checkout — CI and release legs included.
-      # Updates arrive by bumping the tag in a commit. compile: false,
+      # The SSB engine the sidecar spawns. This GitHub repository is a
+      # mirror of erlbutt on SSB
+      # (ssb://%TvkoTlcpiyV8DGLLAo5XzB8K+u1qnk56mxMwWmCst0g=.sha256); the
+      # earlier git history lives in cmoid/erlbutt-prototype, archived and
+      # read-only. The v0.3.0 tag is the seam between them: its tree is the code the old history ended with.
+      # Pinned to a tag, not a branch: branch heads get rewritten, and a
+      # locked commit that no longer sits under a ref is not fetchable
+      # ("not our ref"), which strands clean checkouts and every release
+      # leg. Updates arrive by bumping the tag in a commit. compile: false,
       # app: false — it's a rebar3/OTP tree consumed as a built release
       # (mix engine.build), not a library mix should compile or start.
       {:erlbutt,
