@@ -294,26 +294,11 @@ defmodule HighWireWeb.GamesLive do
     end
   end
 
-  # The room is three places and a past: games it is your turn in, games
-  # you are waiting on, everything else in flight — which is what there is
-  # to watch — and what is over. The grouping is the same for either game.
-  defp your_move(games, _self_id), do: Enum.filter(games, &(&1.yours? and in_flight?(&1)))
-
-  defp waiting(games, self_id),
-    do: Enum.filter(games, &(not &1.yours? and mine?(&1, self_id) and in_flight?(&1)))
-
-  defp spectate(games, self_id),
-    do: Enum.filter(games, &(not mine?(&1, self_id) and in_flight?(&1) and not open?(&1)))
-
   # Somebody else's challenge with no opponent yet is not a game to watch; it
   # is one you can take. Only the games this node can write are offered, so a
   # challenge read off the network stays an artifact rather than an invitation.
-  defp open_games(games, self_id), do: Enum.filter(games, &(open?(&1) and not mine?(&1, self_id)))
-
   defp open?(game),
     do: Map.get(game, :writable?, true) and in_flight?(game) and game.accepter == nil
-
-  defp finished(games, _self_id), do: Enum.filter(games, &(not in_flight?(&1)))
 
   defp facet_atom(facet), do: facet_key(facet)
 
@@ -356,13 +341,22 @@ defmodule HighWireWeb.GamesLive do
   # there is to watch. The last two are ordered by what this reader is most
   # likely to want — a stranger's abandoned opening does not belong above a
   # game between two people they follow.
+  #
+  # The shelves are cut from one set in one pass, so every game is on one of
+  # them and no game is on two: a game drawn twice would carry the same board
+  # id twice, and the room reads as shelves, not as overlapping lists.
   defp room(games, self_id, viewer) do
+    {finished, in_flight} = Enum.split_with(games, &(not in_flight?(&1)))
+    {mine, rest} = Enum.split_with(in_flight, &mine?(&1, self_id))
+    {yours, waiting} = Enum.split_with(mine, & &1.yours?)
+    {open, to_watch} = Enum.split_with(rest, &open?(&1))
+
     [
-      {"Your move", your_move(games, self_id)},
-      {"Waiting on them", waiting(games, self_id)},
-      {"Open games", open_games(games, self_id)},
-      {"Spectate", Interest.rank(spectate(games, self_id), viewer)},
-      {"Finished", Interest.rank(finished(games, self_id), viewer)}
+      {"Your move", yours},
+      {"Waiting on them", waiting},
+      {"Open games", open},
+      {"Spectate", Interest.rank(to_watch, viewer)},
+      {"Finished", Interest.rank(finished, viewer)}
     ]
     |> Enum.reject(fn {_title, list} -> list == [] end)
   end
