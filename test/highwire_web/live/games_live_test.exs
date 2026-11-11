@@ -73,6 +73,54 @@ defmodule HighWireWeb.GamesLiveTest do
       refute html =~ "No games yet"
     end
 
+    # A challenge nobody has taken has no opponent yet. The card and the
+    # game page read as an open seat, never as an unknown person.
+    test "an open challenge is an empty seat, not an unknown player", %{conn: conn} do
+      challenge = seed_chess_unaccepted()
+
+      {:ok, _view, html} = live(conn, "/games")
+      refute html =~ "unknown"
+
+      {:ok, _view, page} = live(conn, "/games/#{challenge}")
+      refute page =~ "unknown"
+    end
+
+    # A challenge addressed to a feed names that feed even before it is
+    # accepted: the key is on the invitation.
+    test "a challenge addressed to a feed names it", %{conn: conn} do
+      game_id = Chess.Game.new_id()
+      invitee = "@invitee.ed25519"
+
+      Chess.Store.ingest(
+        envelope(
+          "@challenger.ed25519",
+          Chess.Game.challenge(game_id, "white", to: invitee),
+          "%i1.sha256"
+        )
+      )
+
+      {:ok, _view, html} = live(conn, "/games")
+      refute html =~ "unknown"
+      assert html =~ "waiting for invitee"
+
+      {:ok, _view, page} = live(conn, "/games/#{game_id}")
+      assert page =~ "Waiting for invitee"
+    end
+
+    # A game can be in the catalog under two kinds — the legacy index and the
+    # live store both name it — and the room still draws it once.
+    test "draws a game once when the catalog names it twice", %{conn: conn} do
+      game_id = seed_legacy([{1, "e2", "e4", "e4"}])
+
+      Chess.Store.ingest(
+        envelope("@challenger.ed25519", Chess.Game.challenge(game_id, "white"), "%d1.sha256")
+      )
+
+      {:ok, _view, html} = live(conn, "/games")
+
+      assert html |> String.split("board-" <> game_id) |> length() == 2
+    end
+
     # A backgammon challenge is a game to take, exactly as a chess one is:
     # the card offers the answer whichever namespace the challenge is in.
     test "offers to accept an open backgammon challenge", %{conn: conn} do

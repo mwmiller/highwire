@@ -264,11 +264,15 @@ defmodule HighWireWeb.GamesLive do
   defp page(self_id, page), do: page_games(self_id, page)
 
   # A page is a window's worth of ids, and each one is read from the store
-  # that holds it — the cost is the page, not the number of games.
+  # that holds it — the cost is the page, not the number of games. The catalog
+  # can name one game twice, under the legacy index and the live store, and
+  # the room reads it once: two cards of the same game would draw the same
+  # board, with the same id, twice.
   defp page_games(self_id, page) do
     Catalog.recent(@page_size, page * @page_size)
     |> Enum.map(fn {kind, game_id} -> snapshot(kind, game_id) end)
     |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(& &1.game_id)
     |> Enum.map(&put_live_status(&1, self_id))
   end
 
