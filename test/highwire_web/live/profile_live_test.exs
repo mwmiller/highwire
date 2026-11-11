@@ -246,7 +246,12 @@ defmodule HighWireWeb.ProfileLiveTest do
     html = render(view)
 
     assert html =~ "Unblock"
+    # The state is named, not left to be inferred from which control is
+    # on screen, and a blocked feed's posts are hidden rather than
+    # offered as an empty feed.
     assert html =~ "Blocked"
+    assert html =~ "You block this feed, so its posts are hidden."
+    refute html =~ "No posts yet."
     # a blocked feed is not offered the follow control at all
     refute html =~ "toggle-follow"
   end
@@ -458,6 +463,35 @@ defmodule HighWireWeb.ProfileLiveTest do
     # match on the text around it rather than the raw string.
     assert html =~ "didn&#39;t upload. Try again."
     refute html =~ "Uploading…"
+  end
+
+  test "the profile shows whom its feed follows and blocks", %{conn: conn} do
+    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+    followed = "@followed=.ed25519"
+    blocked = "@blocked=.ed25519"
+
+    # The pill resolves through the same read model the timeline and the
+    # rail use, so a feed the store can name shows that name by its face.
+    HighWire.SSB.Profile.create()
+    HighWire.SSB.Profile.put_about(followed, %{"name" => "Followed Feed"}, :own)
+
+    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+
+    html =
+      view
+      |> seed(relations: %{follows: [followed], blocked: [blocked]})
+      |> render()
+
+    # The counts are the identity's own graph, and each name opens the
+    # feed it names — the list is how a reader gets from "this feed
+    # follows someone" to that someone.
+    assert html =~ "Relationships"
+    assert html =~ "Following (1)"
+    assert html =~ "Blocking (1)"
+    assert html =~ "/profile?id=" <> URI.encode_www_form(followed)
+    assert html =~ "/profile?id=" <> URI.encode_www_form(blocked)
+    assert html =~ "Followed Feed"
+    assert html =~ "/identicon/" <> Base.encode16(followed, case: :lower)
   end
 
   # Engine off under test, so relationship state is seeded straight into

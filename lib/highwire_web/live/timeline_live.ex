@@ -779,16 +779,22 @@ defmodule HighWireWeb.TimelineLive do
 
   defp merge_into(view, entry, socket) do
     self_id = socket.assigns.self_id
+    blocked = MapSet.new(Map.get(socket.assigns, :blocked, []))
 
     {fresh_contacts, fresh_rows} =
       socket.assigns.feed
       |> Enum.filter(&in_scope?(view, &1, self_id))
+      |> Enum.reject(&blocked_author?(&1, blocked))
       |> Enum.split_with(&(&1.kind == :contact))
 
     # A follow row's message key changes with every new follow, so its
     # identity is the author: the fresh row replaces the loaded one.
     contact_authors = MapSet.new(fresh_contacts, &author_of(&1.msg))
-    {entry_contacts, entry_rest} = Enum.split_with(entry.rows, &(&1.kind == :contact))
+
+    {entry_contacts, entry_rest} =
+      entry.rows
+      |> Enum.reject(&blocked_author?(&1, blocked))
+      |> Enum.split_with(&(&1.kind == :contact))
 
     kept_contacts =
       Enum.reject(entry_contacts, &MapSet.member?(contact_authors, author_of(&1.msg)))
@@ -1974,6 +1980,7 @@ defmodule HighWireWeb.TimelineLive do
     |> assign(:my_likes, Map.get(payload, :my_likes, []))
     |> assign(:index, payload.index)
     |> assign(:self_id, payload.self_id)
+    |> assign(:blocked, Map.get(payload, :blocked, []))
     |> assign(:profiles, profiles)
     |> assign(:blob_rev, Map.get(payload, :blob_rev, 0))
     |> assign(:sidebar_contacts, sidebar_contacts)
@@ -1994,6 +2001,7 @@ defmodule HighWireWeb.TimelineLive do
     |> assign(:my_likes, @empty_payload.my_likes)
     |> assign(:index, @empty_payload.index)
     |> assign(:self_id, nil)
+    |> assign(:blocked, [])
     |> assign(:profiles, Map.get(socket.assigns, :profiles, %{}))
     |> assign(:blob_rev, 0)
     |> assign(:sidebar_contacts, Map.get(socket.assigns, :sidebar_contacts, []))
@@ -2199,6 +2207,11 @@ defmodule HighWireWeb.TimelineLive do
       _ -> %{}
     end
   end
+
+  # A blocked feed's activity is not the reader's to read: its rows leave
+  # the tab the moment the block lands, and a page that still carries them
+  # does not bring them back. Unblocking returns them with a fresh page.
+  defp blocked_author?(row, blocked), do: MapSet.member?(blocked, author_of(row.msg))
 
   defp author_of(msg), do: msg["value"]["author"] || "unknown"
   defp text(msg), do: content(msg)["text"] || ""

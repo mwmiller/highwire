@@ -989,6 +989,57 @@ defmodule HighWire.TimelineTest do
       |> Map.put(:_follow, follow)
     end
 
+    test "a chess sentinel closes the pass instead of being dropped" do
+      ref = make_ref()
+
+      st =
+        drain_state(%{
+          :chess_chess_invite_ref => ref,
+          :chess_chess_invite_snapshot? => true
+        })
+
+      {:noreply, st} = Timeline.handle_info({Client, ref, {:item, %{"sync" => true}}}, st)
+
+      assert st[:chess_chess_invite_snapshot?] == false
+    end
+
+    test "both chess formats are buffered under the drain that carried them" do
+      invite_ref = make_ref()
+      move_ref = make_ref()
+
+      invite =
+        msg("@a.ed25519", "%ch1.sha256", 6_000, %{
+          "type" => "chess_invite",
+          "inviting" => "@b.ed25519",
+          "myColor" => "white"
+        })
+
+      move =
+        msg("@a.ed25519", "%ch2.sha256", 6_100, %{
+          "type" => "ssb_chess_move",
+          "root" => "%ch1.sha256",
+          "ply" => 1,
+          "orig" => "e2",
+          "dest" => "e4",
+          "pgnMove" => "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+          "fen" => "e4"
+        })
+
+      st =
+        drain_state(%{
+          :chess_chess_invite_ref => invite_ref,
+          :chess_chess_invite_snapshot? => true,
+          :chess_ssb_chess_move_ref => move_ref,
+          :chess_ssb_chess_move_snapshot? => true
+        })
+
+      {:noreply, st} = Timeline.handle_info({Client, invite_ref, {:item, invite}}, st)
+      {:noreply, st} = Timeline.handle_info({Client, move_ref, {:item, move}}, st)
+
+      assert st[:chess_chess_invite_buf] == [invite]
+      assert st[:chess_ssb_chess_move_buf] == [move]
+    end
+
     test "a stream failure stops the client it abandons" do
       # The client is only ever replaced, never stopped, on a reconnect:
       # a live one keeps its socket and streams into refs this process
@@ -1247,7 +1298,15 @@ defmodule HighWire.TimelineTest do
                 [%{"type" => "chess_invite_accept", "live" => true, "old" => true}]},
                {["messagesByType"], [%{"type" => "chess_move", "live" => true, "old" => true}]},
                {["messagesByType"],
-                [%{"type" => "chess_game_end", "live" => true, "old" => true}]}
+                [%{"type" => "chess_game_end", "live" => true, "old" => true}]},
+               {["messagesByType"],
+                [%{"type" => "ssb_chess_invite", "live" => true, "old" => true}]},
+               {["messagesByType"],
+                [%{"type" => "ssb_chess_invite_accept", "live" => true, "old" => true}]},
+               {["messagesByType"],
+                [%{"type" => "ssb_chess_move", "live" => true, "old" => true}]},
+               {["messagesByType"],
+                [%{"type" => "ssb_chess_game_end", "live" => true, "old" => true}]}
              ]
 
       # the shared connection carries only the per-feed windows

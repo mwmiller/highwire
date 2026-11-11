@@ -15,6 +15,7 @@ defmodule HighWireWeb.ProfileLive do
 
   alias HighWire.Avatar, as: Ident
   alias HighWire.Markdown
+  alias HighWire.SSB.{Profile, Relations}
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Nav
@@ -47,6 +48,7 @@ defmodule HighWireWeb.ProfileLive do
      |> assign(:resume, nil)
      |> assign(:follows, [])
      |> assign(:blocked, [])
+     |> assign(:relations, %{follows: [], blocked: []})
      |> assign(:self_id, nil)
      |> assign(:more, false)
      |> assign(:loading_more, false)
@@ -80,12 +82,22 @@ defmodule HighWireWeb.ProfileLive do
   # while the page is open has to be read again: reading once at load left
   # anyone fetched a moment later showing as a key until a reload.
   def handle_info({Timeline, :updated, payload}, socket) do
+    follows = Map.get(payload, :follows, socket.assigns.follows)
+    blocked = Map.get(payload, :blocked, socket.assigns.blocked)
+    self_id = Map.get(payload, :self_id, socket.assigns.self_id)
+    relations = relations(socket.assigns.id, self_id, follows, blocked)
+
+    # A payload is also how the read model reports a profile that landed,
+    # so this is where a listed feed's name and picture arrive.
+    ensure_relations_profiles(relations)
+
     {:noreply,
      assign(socket,
        blob_rev: Map.get(payload, :blob_rev, 0),
-       follows: Map.get(payload, :follows, socket.assigns.follows),
-       blocked: Map.get(payload, :blocked, socket.assigns.blocked),
-       self_id: Map.get(payload, :self_id, socket.assigns.self_id),
+       follows: follows,
+       blocked: blocked,
+       self_id: self_id,
+       relations: relations,
        profile: Timeline.profile(socket.assigns.id) || socket.assigns.profile
      )}
   end
@@ -396,18 +408,88 @@ defmodule HighWireWeb.ProfileLive do
   defp follow_settled(socket, id, true), do: update(socket, :follows, &List.delete(&1, id))
   defp follow_settled(socket, id, false), do: update(socket, :follows, &Enum.uniq([id | &1]))
 
-  defp block_settled(socket, id, true), do: update(socket, :blocked, &List.delete(&1, id))
+  # Unblocking the feed the reader is looking at is the press that asks
+  # for its posts again: the block took them off the screen, and the
+  # unblock reads as reading it once more.
+  defp block_settled(socket, id, true) do
+    socket = update(socket, :blocked, &List.delete(&1, id))
+
+    if id == socket.assigns.id, do: read_posts(socket, id), else: socket
+  end
 
   # A block arrives with the follow's retraction already in it, so the
-  # rail stops reading as following the moment the block lands.
+  # rail stops reading as following the moment the block lands — and the
+  # posts this page already had come off the screen with it.
   defp block_settled(socket, id, false) do
-    socket
-    |> update(:blocked, &Enum.uniq([id | &1]))
-    |> update(:follows, &List.delete(&1, id))
+    socket =
+      socket
+      |> update(:blocked, &Enum.uniq([id | &1]))
+      |> update(:follows, &List.delete(&1, id))
+
+    if id == socket.assigns.id, do: hide_posts(socket), else: socket
   end
+
+  defp read_posts(socket, id) do
+    queue_posts(id)
+
+    socket
+    |> assign(:messages, [])
+    |> assign(:posts_loading?, true)
+    |> assign(:posts_error, nil)
+    |> assign(:resume, nil)
+    |> assign(:more, false)
+  end
+
+  defp hide_posts(socket) do
+    socket
+    |> assign(:messages, [])
+    |> assign(:posts_loading?, false)
+    |> assign(:posts_error, nil)
+    |> assign(:resume, nil)
+    |> assign(:more, false)
+  end
+
+  # The relationship has three states, and each one is exclusive: a block
+  # retracts the follow in the same message, so a feed cannot be both
+  # followed and blocked. The default — no edge at all — is the passive
+  # one: the feed is readable, and nothing of the reader's is published
+  # about it.
+  defp state(id, self_id, follows, blocked) do
+    cond do
+      id == self_id -> :self
+      id in blocked -> :blocked
+      id in follows -> :following
+      true -> :reading
+    end
+  end
+
+  defp state_label(:following), do: "Following"
+  defp state_label(:blocked), do: "Blocked"
+  defp state_label(_), do: "Reading"
+
+  # What each state means, in the one line the reader needs: whether
+  # their word goes out, whether they can read the feed, and what a
+  # block does to both.
+  defp state_note(:following),
+    do: "Your follow is public: it rides your contact graph to the feeds that follow you."
+
+  defp state_note(:blocked),
+    do: "Their posts are hidden from you, and the block retracts any follow."
+
+  defp state_note(_),
+    do: "You can read this feed, and nothing is published about it."
+
+  defp state_dot(:following), do: "bg-accent"
+  defp state_dot(:blocked), do: "bg-bad"
+  defp state_dot(_), do: "bg-dot"
+
+  defp state_color(:following), do: "text-accent"
+  defp state_color(:blocked), do: "text-bad"
+  defp state_color(_), do: "text-sub"
 
   defp load(socket, id) do
     viewer = Timeline.viewer()
+    relations = relations(id, viewer.self_id, viewer.follows, viewer.blocked)
 
     # Neither render owes the browser a wait on the engine. The one
     # served before the socket opens does not ask at all — those rows
@@ -417,11 +499,19 @@ defmodule HighWireWeb.ProfileLive do
     # rows are still on their way. The identity reads from the read
     # model either way; only the posts are outstanding, and until they
     # land the page says so.
+    blocked? = id in viewer.blocked
+
     if connected?(socket) do
-      queue_posts(id)
+      # A blocked feed is not read here: the block hides its posts on this
+      # page the way it hides its activity from the reader's feeds, and
+      # the page says so rather than standing in with a silent, empty
+      # feed.
+      unless blocked?, do: queue_posts(id)
+
       # A feed this node has never fetched would otherwise stay a key until
       # something else in the app happened to want its profile.
       Timeline.ensure_profiles([id])
+      ensure_relations_profiles(relations)
     end
 
     assign(socket,
@@ -430,12 +520,13 @@ defmodule HighWireWeb.ProfileLive do
       profile: Timeline.profile(id),
       messages: [],
       posts_error: nil,
-      posts_loading?: true,
+      posts_loading?: not blocked?,
       resume: nil,
       more: false,
       follows: viewer.follows,
       blocked: viewer.blocked,
       self_id: viewer.self_id,
+      relations: relations,
       blob_rev: viewer.blob_rev,
       follow_pending: MapSet.new(),
       block_pending: MapSet.new(),
@@ -546,6 +637,32 @@ defmodule HighWireWeb.ProfileLive do
     end
   end
 
+  # Whom the page's feed follows and blocks. Our own list is the one the
+  # window already carries, because a press on Follow lands there before
+  # any contact pass sees the message; another feed's comes from the
+  # store-wide contact fold, which is the only place the whole graph is
+  # read. Self is never in either list — a feed cannot follow itself.
+  # The feeds in the two lists usually sit outside the window a payload
+  # covers, so their names and pictures are asked for by id — the same
+  # call every other page makes for the feeds it shows. Capped, because a
+  # graph of hundreds is a list to read, not hundreds of round trips on
+  # one page load.
+  defp ensure_relations_profiles(%{follows: follows, blocked: blocked}) do
+    (follows ++ blocked) |> Enum.take(80) |> Timeline.ensure_profiles()
+  end
+
+  defp relations(id, self_id, follows, blocked) when is_binary(id) do
+    if id == self_id do
+      %{follows: List.delete(follows, id), blocked: List.delete(blocked, id)}
+    else
+      Relations.of(id)
+    end
+  end
+
+  defp relations(_id, _self_id, _follows, _blocked), do: %{follows: [], blocked: []}
+
+  defp profile_href(id), do: "/profile?id=" <> URI.encode_www_form(id)
+
   defp heading(%{name: name}) when is_binary(name), do: name
   defp heading(_profile), do: nil
 
@@ -582,6 +699,32 @@ defmodule HighWireWeb.ProfileLive do
           </p>
           <p class="mt-0.5 break-all font-mono text-[10px] text-dim">{@id}</p>
 
+          <%!-- The relationship has three states, and the rail names the
+          one the reader is in before offering anything: following (a
+          public statement that puts the feed in the reader's list),
+          reading (the default, no edge at all) or blocked (the feed is
+          hidden from the reader). Naming the state is what makes the
+          controls legible: each state offers only the moves it has. --%>
+          <p
+            :if={@id != @self_id and @status != :disabled}
+            class="mt-3 flex items-center gap-1.5 text-xs"
+          >
+            <span class={[
+              "h-1.5 w-1.5 shrink-0 rounded-full",
+              state_dot(state(@id, @self_id, @follows, @blocked))
+            ]}></span>
+            <span class={["font-medium", state_color(state(@id, @self_id, @follows, @blocked))]}>
+              {state_label(state(@id, @self_id, @follows, @blocked))}
+            </span>
+          </p>
+
+          <p
+            :if={@id != @self_id and @status != :disabled}
+            class="mt-1 text-[11px] leading-snug text-faint"
+          >
+            {state_note(state(@id, @self_id, @follows, @blocked))}
+          </p>
+
           <%!-- A blocked feed is not offered the follow control: the two
           edges are independent in the protocol, but "following" a feed
           you block is a contradiction the reader should not have to
@@ -590,49 +733,129 @@ defmodule HighWireWeb.ProfileLive do
           pending state, not through phx-disable-with: that attribute
           restores the pre-click label over the reply that carries the
           outcome, and here the label is the outcome. --%>
-          <button
-            :if={@id != @self_id and @status != :disabled and @id not in @blocked}
-            type="button"
-            phx-click="toggle-follow"
-            phx-value-id={@id}
-            disabled={MapSet.member?(@follow_pending, @id)}
-            class={["btn mt-3 w-full", @id in @follows and "btn-primary"]}
-          >
-            {cond do
-              MapSet.member?(@follow_pending, @id) ->
-                if @id in @follows, do: "Unfollowing…", else: "Following…"
+          <div :if={@id != @self_id and @status != :disabled} class="mt-2 flex gap-1.5">
+            <button
+              :if={@id not in @blocked}
+              type="button"
+              phx-click="toggle-follow"
+              phx-value-id={@id}
+              disabled={MapSet.member?(@follow_pending, @id)}
+              class={[
+                "inline-flex flex-1 items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-xs leading-none transition-colors disabled:opacity-60",
+                if(@id in @follows,
+                  do: "border-edge bg-panel text-muted hover:border-focus hover:text-paper",
+                  else: "border-transparent bg-accent font-medium text-panel hover:opacity-90"
+                )
+              ]}
+            >
+              {cond do
+                MapSet.member?(@follow_pending, @id) ->
+                  if @id in @follows, do: "Unfollowing…", else: "Following…"
 
-              @id in @follows ->
-                "Following"
+                @id in @follows ->
+                  "Unfollow"
 
-              true ->
-                "Follow"
-            end}
-          </button>
+                true ->
+                  "Follow"
+              end}
+            </button>
 
-          <button
-            :if={@id != @self_id and @status != :disabled}
-            type="button"
-            phx-click="toggle-block"
-            phx-value-id={@id}
-            disabled={MapSet.member?(@block_pending, @id)}
-            class={["btn mt-2 w-full", @id not in @blocked and "text-bad"]}
-          >
-            {cond do
-              MapSet.member?(@block_pending, @id) ->
-                if @id in @blocked, do: "Unblocking…", else: "Blocking…"
+            <button
+              type="button"
+              phx-click="toggle-block"
+              phx-value-id={@id}
+              disabled={MapSet.member?(@block_pending, @id)}
+              class={[
+                "inline-flex flex-1 items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-xs leading-none transition-colors disabled:opacity-60",
+                if(@id in @blocked,
+                  do: "border-bad/50 bg-panel text-bad hover:bg-raised",
+                  else: "border-edge bg-panel text-muted hover:border-bad/50 hover:text-bad"
+                )
+              ]}
+            >
+              {cond do
+                MapSet.member?(@block_pending, @id) ->
+                  if @id in @blocked, do: "Unblocking…", else: "Blocking…"
 
-              @id in @blocked ->
-                "Unblock"
+                @id in @blocked ->
+                  "Unblock"
 
-              true ->
-                "Block"
-            end}
-          </button>
+                true ->
+                  "Block"
+              end}
+            </button>
+          </div>
 
           <p :if={@action_error} role="alert" class="mt-2 text-xs text-bad">
             {@action_error}
           </p>
+
+          <%!-- The feed's own contact record, beside the controls that
+          change it: whom this identity follows and blocks, read from the
+          store's contact graph rather than from the reader's list. Each
+          row opens the feed it names. --%>
+          <div
+            :if={@relations.follows != [] or @relations.blocked != []}
+            class="mt-4 border-t border-edge-soft pt-2"
+          >
+            <p class="text-[11px] uppercase tracking-wider text-faint">Relationships</p>
+
+            <details
+              :if={@relations.follows != []}
+              id="profile-follows"
+              class="mt-1"
+              open={length(@relations.follows) <= 8}
+            >
+              <summary class="cursor-pointer text-xs text-sub">
+                Following ({length(@relations.follows)})
+              </summary>
+              <div class="mt-1 max-h-48 space-y-px overflow-y-auto">
+                <.link
+                  :for={followed <- @relations.follows}
+                  navigate={profile_href(followed)}
+                  title={Profile.display_name(followed)}
+                  class="flex items-center gap-2 rounded px-1 py-1 text-xs text-muted transition-colors hover:bg-raised hover:text-paper"
+                >
+                  <Avatar.avatar
+                    id={followed}
+                    size={16}
+                    image={Profile.image(followed)}
+                    rev={@blob_rev}
+                    class="shrink-0"
+                  />
+                  <span class="min-w-0 truncate">{Profile.display_name(followed)}</span>
+                </.link>
+              </div>
+            </details>
+
+            <details
+              :if={@relations.blocked != []}
+              id="profile-blocked"
+              class="mt-2"
+              open={length(@relations.blocked) <= 8}
+            >
+              <summary class="cursor-pointer text-xs text-bad">
+                Blocking ({length(@relations.blocked)})
+              </summary>
+              <div class="mt-1 max-h-48 space-y-px overflow-y-auto">
+                <.link
+                  :for={blocked <- @relations.blocked}
+                  navigate={profile_href(blocked)}
+                  title={Profile.display_name(blocked)}
+                  class="flex items-center gap-2 rounded px-1 py-1 text-xs text-muted transition-colors hover:bg-raised hover:text-paper"
+                >
+                  <Avatar.avatar
+                    id={blocked}
+                    size={16}
+                    image={Profile.image(blocked)}
+                    rev={@blob_rev}
+                    class="shrink-0"
+                  />
+                  <span class="min-w-0 truncate">{Profile.display_name(blocked)}</span>
+                </.link>
+              </div>
+            </details>
+          </div>
         </div>
 
         <p :if={@id == nil} class="px-4 pb-4 text-xs italic text-faint">
@@ -783,20 +1006,28 @@ defmodule HighWireWeb.ProfileLive do
                 {@about_error}
               </p>
 
-              <%!-- The relationship, not the engine: an engine status
-              here read as a personal status ("alanz — Ok"), and the
-              rail already carries the Follow control. --%>
-              <div class="mt-3 flex gap-4 text-xs text-dim">
-                <span :if={@id == @self_id}>you</span>
-                <span :if={@id != @self_id and @id in @follows}>Following</span>
-                <span :if={@id != @self_id and @id in @blocked} class="text-bad">Blocked</span>
-              </div>
+              <%!-- The relationship itself lives in the rail, where the
+              controls that change it sit: a second "Following" up here
+              only said again what the pill already says. Other feeds get
+              nothing here. --%>
+              <p :if={@id == @self_id} class="mt-3 text-xs text-dim">you</p>
             </div>
           </div>
 
           <h2 class="mt-10 border-b border-edge pb-2 text-sm font-semibold uppercase tracking-wide text-sub">
             Posts
           </h2>
+
+          <%!-- A blocked feed is hidden here the way it is hidden from the
+          reader's feeds: the identity stays (the rail above is how the
+          block is taken back), the posts do not. --%>
+          <div
+            :if={@id != @self_id and @id in @blocked}
+            id="profile-posts-blocked"
+            class="py-8 text-sm text-faint"
+          >
+            You block this feed, so its posts are hidden.
+          </div>
 
           <%!-- Three ways this list starts, and they are different
           claims: a page still on its way, a feed with nothing in it,
@@ -807,7 +1038,7 @@ defmodule HighWireWeb.ProfileLive do
           read as the second, a failed load would pass for a silent
           feed. --%>
           <div
-            :if={@messages == [] and @posts_loading?}
+            :if={@messages == [] and @posts_loading? and @id not in @blocked}
             id="profile-posts-loading"
             class="py-8 text-sm italic text-faint"
           >
@@ -815,7 +1046,10 @@ defmodule HighWireWeb.ProfileLive do
           </div>
 
           <div
-            :if={@messages == [] and not @posts_loading? and @posts_error}
+            :if={
+              @messages == [] and not @posts_loading? and @posts_error != nil and
+                @id not in @blocked
+            }
             id="profile-posts-error"
             class="py-8 text-sm"
           >
@@ -826,7 +1060,9 @@ defmodule HighWireWeb.ProfileLive do
           </div>
 
           <div
-            :if={@messages == [] and not @posts_loading? and @posts_error == nil}
+            :if={
+              @messages == [] and not @posts_loading? and @posts_error == nil and @id not in @blocked
+            }
             class="py-8 text-sm italic text-faint"
           >
             No posts yet.
@@ -834,6 +1070,7 @@ defmodule HighWireWeb.ProfileLive do
 
           <div
             :for={msg <- @messages}
+            :if={@id not in @blocked}
             id={post_dom_id(msg)}
             phx-hook="OpenPost"
             data-key={msg["key"]}

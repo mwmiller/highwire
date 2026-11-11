@@ -21,8 +21,8 @@ defmodule HighWire.SSB.Identities do
   the next `ensure_boot/0`.
 
   Reads never write: the rail's avatar path (`active_id/0`) is a pure
-  lookup. Mutations — `create/1`, `activate/1`, `disable/1`,
-  `enable/1`, `destroy/1` — persist atomically (temp file + rename,
+  lookup. Mutations — `create/1`, `activate/1`, `rename/2`,
+  `disable/1`, `enable/1`, `destroy/1` — persist atomically (temp file + rename,
   0600, since the private keys live here), and each load → change →
   persist sequence runs under a lock so two overlapping edits cannot
   lose one another's change.
@@ -188,6 +188,43 @@ defmodule HighWire.SSB.Identities do
 
   defp created(:ok, id), do: {:ok, id}
   defp created({:error, _reason} = error, _id), do: error
+
+  @doc """
+  Change an identity's local label — this installation's own nickname
+  for the key, shown beside the name followers see. Only the registry
+  changes: nothing is published, and the secret mirror carries no
+  label, so a rename is invisible to everyone else and survives a
+  switch away and back.
+  """
+  @spec rename(String.t(), String.t()) :: :ok | {:error, term()}
+  def rename(id, label) when is_binary(id) and is_binary(label) do
+    with_registry_lock(fn -> do_rename(id, label) end)
+  end
+
+  def rename(_id, _label), do: {:error, :bad_label}
+
+  defp do_rename(id, label) do
+    case String.trim(label) do
+      "" ->
+        {:error, :bad_label}
+
+      trimmed ->
+        reg = load()
+
+        case registry_row(reg, id) do
+          nil ->
+            {:error, :unknown_identity}
+
+          _row ->
+            rows = Enum.map(reg["identities"], &relabel(&1, id, trimmed))
+            persist(Map.put(reg, "identities", rows))
+        end
+    end
+  end
+
+  defp relabel(row, id, label) do
+    if is_map(row) and row["id"] == id, do: Map.put(row, "label", label), else: row
+  end
 
   @doc """
   Whether `activate/1` would take this id: in the registry and not

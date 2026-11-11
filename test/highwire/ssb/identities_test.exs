@@ -160,6 +160,48 @@ defmodule HighWire.SSB.IdentitiesTest do
     end
   end
 
+  describe "rename" do
+    test "changes the local label and nothing else", %{home: home} do
+      {:ok, id} = Identities.create("Main")
+      before = File.read!(secret_path(home))
+
+      assert :ok = Identities.rename(id, "  NFL posting  ")
+
+      assert [row] = Identities.list()
+      assert row["id"] == id
+      assert row["label"] == "NFL posting"
+      assert row["active"]
+
+      # The key is untouched: a label is not key material and never
+      # reaches the secret the engine signs with.
+      assert File.read!(secret_path(home)) == before
+      assert Keys.load!(secret_path(home)).id == id
+    end
+
+    test "survives a reload of the registry", %{home: home} do
+      {:ok, id} = Identities.create("Main")
+      assert :ok = Identities.rename(id, "Bot")
+
+      # Read the file back the way a fresh process would.
+      reg = registry_path(home) |> File.read!() |> Jason.decode!()
+      assert Enum.map(reg["identities"], & &1["label"]) == ["Bot"]
+      assert reg["active"] == id
+    end
+
+    test "a blank label is refused and leaves the old one in place", %{home: _home} do
+      {:ok, id} = Identities.create("Main")
+
+      assert Identities.rename(id, "   ") == {:error, :bad_label}
+      assert [%{"label" => "Main"}] = Identities.list()
+    end
+
+    test "unknown ids are refused", %{home: _home} do
+      {:ok, _} = Identities.create("Main")
+
+      assert Identities.rename("@nope=.ed25519", "X") == {:error, :unknown_identity}
+    end
+  end
+
   describe "switching" do
     test "activate writes the target's keypair and marks it active", %{home: home} do
       {:ok, _first} = Identities.create("Main")

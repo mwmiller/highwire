@@ -1,8 +1,12 @@
 defmodule HighWireWeb.IdentityLive do
   @moduledoc """
   Identity management: every feed this install can sign as, and the
-  controls to switch, create, disable, export and — from the disabled
-  list only — permanently delete them.
+  controls to switch, create, rename, disable, export and — from the
+  disabled list only — permanently delete them.
+
+  A rename changes this installation's local label only: it is the
+  private nickname shown in parentheses beside the name followers see,
+  nothing is published, and the key is untouched.
 
   Switching follows the network page's discipline: the engine restart
   underneath (its stop → write → start lives in
@@ -45,6 +49,8 @@ defmodule HighWireWeb.IdentityLive do
        page_title: "Identity",
        switching: false,
        confirming: nil,
+       renaming: nil,
+       rename_label: "",
        exported: nil,
        notice: nil,
        form_label: ""
@@ -72,6 +78,36 @@ defmodule HighWireWeb.IdentityLive do
           # No engine to restart: the secret write is the whole switch.
           {:noreply, switched(socket, Sidecar.switch_identity(id), id)}
         end
+    end
+  end
+
+  def handle_event("rename-start", %{"id" => id}, socket) do
+    case Enum.find(socket.assigns.identities, &(&1["id"] == id)) do
+      nil -> {:noreply, socket}
+      row -> {:noreply, assign(socket, renaming: id, rename_label: row["label"])}
+    end
+  end
+
+  def handle_event("rename-cancel", _params, socket) do
+    {:noreply, assign(socket, renaming: nil, rename_label: "")}
+  end
+
+  def handle_event("rename", params, socket) do
+    # The form posts `identity_id` (a hidden field named `id` would
+    # collide with the element's own id); clicks and tests pass `id`.
+    id = params["id"] || params["identity_id"]
+    label = params["label"] || ""
+
+    case Identities.rename(id, label) do
+      :ok ->
+        {:noreply,
+         socket
+         |> assign(renaming: nil, rename_label: "")
+         |> reload()
+         |> assign(notice: {:info, "Renamed to #{String.trim(label)}"})}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, notice: {:error, "Could not rename: #{explain(reason)}"})}
     end
   end
 
@@ -362,7 +398,10 @@ defmodule HighWireWeb.IdentityLive do
           </h2>
 
           <div class="mt-4 space-y-3">
-            <div :for={row <- @identities} class="rounded-lg border border-edge bg-panel p-4">
+            <div
+              :for={{row, index} <- Enum.with_index(@identities)}
+              class="rounded-lg border border-edge bg-panel p-4"
+            >
               <div class="flex items-center gap-3">
                 <.link
                   navigate={"/profile?id=" <> URI.encode_www_form(row["id"])}
@@ -442,6 +481,14 @@ defmodule HighWireWeb.IdentityLive do
                   <button
                     type="button"
                     class="btn"
+                    phx-click="rename-start"
+                    phx-value-id={row["id"]}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    class="btn"
                     phx-click="export"
                     phx-value-id={row["id"]}
                   >
@@ -487,6 +534,34 @@ defmodule HighWireWeb.IdentityLive do
                   </button>
                 </div>
               </div>
+
+              <%!-- The label is local: editing it changes only this
+              install's nickname for the key. --%>
+              <form
+                :if={@renaming == row["id"]}
+                phx-submit="rename"
+                class="mt-3 rounded border border-edge bg-app p-3"
+              >
+                <input type="hidden" name="identity_id" value={row["id"]} />
+                <label for={"rename-#{index}"} class="block text-xs text-faint">
+                  Local label
+                </label>
+                <div class="mt-1 flex items-end gap-2">
+                  <input
+                    id={"rename-#{index}"}
+                    type="text"
+                    name="label"
+                    value={@rename_label}
+                    class="min-w-0 flex-1 rounded border border-edge bg-panel px-3 py-1.5 text-sm text-paper"
+                  />
+                  <button type="submit" class="btn btn-primary">Save</button>
+                  <button type="button" class="btn" phx-click="rename-cancel">Cancel</button>
+                </div>
+                <p class="mt-2 text-xs text-dim">
+                  This installation's own nickname for the key. Nothing is published,
+                  and followers never see it.
+                </p>
+              </form>
 
               <div :if={exporting?(@exported, row["id"])} class="mt-3">
                 <div class="flex items-center justify-between">

@@ -86,11 +86,15 @@ defmodule HighWire.Timeline do
   # two games land in different stores, and a shared cursor would let one
   # game's backlog hide the other's.
   #
-  # The canonical chess messages have distinct types (chess_invite,
-  # chess_invite_accept, chess_move, chess_game_end), so we open one
-  # drain per type to catch them all.
+  # The network's chess has distinct types (chess_invite,
+  # chess_invite_accept, chess_move, chess_game_end), and one early client
+  # published the same four under an `ssb_` prefix, so each type is a drain
+  # of its own. `chess/*` is this node's namespace, where every name
+  # (challenge, accept, move, resign, withdraw) shares a single drain.
   @chess_types ~w(chess_invite chess_invite_accept chess_move chess_game_end)
+  @chess_aliases Enum.map(@chess_types, &("ssb_" <> &1))
   @chess_wildcard "chess/*"
+  @chess_sources [@chess_wildcard | @chess_types ++ @chess_aliases]
 
   # First-paint: once this many feed streams have reported, broadcast
   # what has arrived instead of waiting for every stream (up to 400).
@@ -827,6 +831,11 @@ defmodule HighWire.Timeline do
     # table first. Creating it here means the writer owns it for the
     # whole life of this process.
     _ = Profile.create()
+
+    # Whom each feed follows and blocks: the contact pass leaves its
+    # graph here, so a profile can answer for the feed it is about
+    # rather than only for the reader.
+    _ = HighWire.SSB.Relations.create()
 
     state = %{
       status: :connecting,
@@ -2618,13 +2627,15 @@ defmodule HighWire.Timeline do
   def handle_info({Client, ref, {:item, msg}}, state) do
     case game_kind(state, ref) do
       nil -> other_item(state, ref, msg)
-      kind -> game_item(state, kind, msg)
+      :chess -> chess_item(state, ref, msg)
+      kind -> single_game_item(state, kind, msg)
     end
   end
 
   def handle_info({Client, ref, :done}, state) do
     case game_kind(state, ref) do
       nil -> feed_done(forget_abandoned(state, ref), ref, :done)
+      :chess -> chess_done(state, ref)
       kind -> game_backfilled(state, kind)
     end
   end
@@ -2634,6 +2645,10 @@ defmodule HighWire.Timeline do
       nil ->
         Logger.debug("timeline: feed stream error: #{inspect(reason)}")
         feed_done(forget_abandoned(state, ref), ref, :error)
+
+      :chess ->
+        Logger.debug("timeline: chess drain failed: #{inspect(reason)}")
+        {:noreply, close_chess(state)}
 
       kind ->
         Logger.debug("timeline: #{kind} drain failed: #{inspect(reason)}")
@@ -2675,18 +2690,15 @@ defmodule HighWire.Timeline do
     {:noreply, %{state | backgammon_client: nil, backgammon_ref: nil, backgammon_buf: []}}
   end
 
-  # A chess drain connection died: clear its ref so the next reload
-  # dials a fresh one rather than streaming on a dead client.
-  # This clause matches after the more specific chess_client clause above.
+  # The chess drains share one connection: when it dies, every source's ref
+  # and buffer goes with it, so the next reload dials a fresh one rather than
+  # streaming on a dead client.
   def handle_info({:EXIT, pid, _reason}, state) do
-    # Check if this pid is any of the chess drain clients
-    Enum.reduce(@chess_types, state, fn type, state ->
-      if Map.get(state, :"chess_#{type}_client") == pid do
-        %{state | "chess_#{type}_client": nil, "chess_#{type}_ref": nil, "chess_#{type}_buf": []}
-      else
-        state
-      end
-    end)
+    if Map.get(state, :chess_client) == pid do
+      {:noreply, close_chess(state)}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
@@ -2761,16 +2773,6 @@ defmodule HighWire.Timeline do
     end
   end
 
-  defp game_item(state, kind, msg) do
-    # For chess, we need to figure out which type this message belongs to
-    # so we can buffer it in the right place.
-    if kind == :chess do
-      chess_item(state, msg)
-    else
-      single_game_item(state, kind, msg)
-    end
-  end
-
   defp single_game_item(state, kind, msg) do
     snapshot? = Map.get(state, game_snapshot_field(kind), true)
 
@@ -2787,41 +2789,59 @@ defmodule HighWire.Timeline do
     end
   end
 
-  defp chess_item(state, msg) do
-    content = msg["value"]["content"]
-    raw_type = content && content["type"]
+  # A chess drain is one source: the `chess/*` namespace, a network type, or
+  # one of its `ssb_`-prefixed spellings. The source a ref belongs to is what
+  # tells a message which buffer it goes in; the stream itself carries one
+  # type, and each source owns its own cursor.
+  defp chess_item(state, ref, msg) do
+    case chess_source(state, ref) do
+      nil ->
+        Logger.debug("timeline: chess item on an unclaimed ref dropped")
+        {:noreply, state}
 
-    # Normalize the chess message type to the canonical form
-    # Guard against nil types (malformed messages, tombstones with no type)
-    type = if raw_type, do: HighWire.Chess.normalize_type(raw_type), else: nil
+      source ->
+        cond do
+          MessageIndex.sentinel?(msg) ->
+            chess_backfilled(state, source)
 
-    # Find which chess drain this message belongs to
-    type = if type in @chess_types, do: type, else: nil
+          Map.get(state, chess_snapshot_field(source), true) ->
+            buf = Map.get(state, chess_buf_field(source), [])
+            {:noreply, Map.put(state, chess_buf_field(source), [msg | buf])}
 
-    if type == nil do
-      # Unknown chess message type, ignore
-      {:noreply, state}
-    else
-      snapshot? = Map.get(state, chess_snapshot_field(type), true)
-
-      cond do
-        MessageIndex.sentinel?(msg) ->
-          chess_backfilled(Map.put(state, chess_snapshot_field(type), false), type)
-
-        snapshot? ->
-          buf = Map.get(state, chess_buf_field(type), [])
-          {:noreply, Map.put(state, chess_buf_field(type), [msg | buf])}
-
-        true ->
-          chess_drained(Map.put(state, chess_buf_field(type), [msg]), type)
-      end
+          true ->
+            chess_drained(Map.put(state, chess_buf_field(source), [msg]), source)
+        end
     end
   end
 
-  defp chess_backfilled(state, type) do
-    case Map.get(state, chess_buf_field(type), []) do
+  defp chess_backfilled(state, source) do
+    state = Map.put(state, chess_snapshot_field(source), false)
+
+    case Map.get(state, chess_buf_field(source), []) do
       [] -> {:noreply, state}
-      _buf -> chess_drained(Map.put(state, chess_buf_field(type), []), type)
+      _buf -> chess_drained(Map.put(state, chess_buf_field(source), []), source)
+    end
+  end
+
+  # The stream closed: what it buffered is folded, and its ref cleared so
+  # the next reload opens a fresh one.
+  defp chess_done(state, ref) do
+    case chess_source(state, ref) do
+      nil ->
+        {:noreply, state}
+
+      source ->
+        state = Map.put(state, chess_ref_field(source), nil)
+
+        state =
+          if Map.get(state, :chess_ref) == ref,
+            do: Map.put(state, :chess_ref, nil),
+            else: state
+
+        case Map.get(state, chess_buf_field(source), []) do
+          [] -> {:noreply, state}
+          _buf -> chess_drained(Map.put(state, chess_buf_field(source), []), source)
+        end
     end
   end
 
@@ -2845,33 +2865,44 @@ defmodule HighWire.Timeline do
     {:noreply, state}
   end
 
-  # One completed pass for a chess drain (one type): the games fold into
-  # their store, and the cursor moves past what was read so the next boot
-  # resumes where this one ended.
-  defp chess_drained(state, type) do
-    items = Map.get(state, chess_buf_field(type), [])
+  # One completed pass for a chess source: every message goes to the store
+  # that owns its format, and the source's cursor moves past what was read so
+  # the next boot resumes where this one ended.
+  defp chess_drained(state, source) do
+    items = Map.get(state, chess_buf_field(source), [])
 
-    store = game_store(:chess)
-    Enum.each(items, &store.observe/1)
-    advance_cursor(type, items)
+    Enum.each(items, &Chess.observe/1)
+    advance_cursor(source, items)
 
-    {:noreply, state}
+    {:noreply, Map.put(state, chess_buf_field(source), [])}
   end
 
   defp game_kind(state, ref) do
     cond do
       ref != nil and ref == Map.get(state, :backgammon_ref) -> :backgammon
-      ref != nil and chess_kind?(state, ref) -> :chess
+      ref != nil and chess_source(state, ref) != nil -> :chess
       true -> nil
     end
   end
 
-  # Check if a ref belongs to any of the chess drains (one per type)
-  defp chess_kind?(state, ref) do
-    ref == Map.get(state, :"chess_#{@chess_wildcard}_ref") or
-      Enum.any?(@chess_types, fn type ->
-        ref == Map.get(state, :"chess_#{type}_ref")
+  # The source a stream ref belongs to, or nil for a ref that is not a chess
+  # drain.
+  defp chess_source(state, ref) do
+    Enum.find(@chess_sources, fn source -> Map.get(state, chess_ref_field(source)) == ref end)
+  end
+
+  # Every chess drain rides one connection, so its death takes every source's
+  # ref and buffer with it — the next reload dials a fresh one.
+  defp close_chess(state) do
+    state =
+      Enum.reduce(@chess_sources, state, fn source, state ->
+        state
+        |> Map.put(chess_ref_field(source), nil)
+        |> Map.put(chess_buf_field(source), [])
+        |> Map.put(chess_snapshot_field(source), true)
       end)
+
+    state |> Map.put(:chess_ref, nil) |> Map.put(:chess_client, nil)
   end
 
   defp game_store(:backgammon), do: Backgammon.Store
@@ -2887,9 +2918,10 @@ defmodule HighWire.Timeline do
   defp game_snapshot_field(kind), do: :"#{kind}_snapshot?"
   defp game_client_field(kind), do: :"#{kind}_client"
 
-  # For chess drains, the ref field is per-type
-  defp chess_buf_field(type), do: :"chess_#{type}_buf"
-  defp chess_snapshot_field(type), do: :"chess_#{type}_snapshot?"
+  # For chess drains, the fields are per-source.
+  defp chess_ref_field(source), do: :"chess_#{source}_ref"
+  defp chess_buf_field(source), do: :"chess_#{source}_buf"
+  defp chess_snapshot_field(source), do: :"chess_#{source}_snapshot?"
 
   # The rail's "Whom to follow" rows, with the feeds this account blocks
   # taken out. The ranking drops blocked feeds before it cuts its pool
@@ -3008,7 +3040,10 @@ defmodule HighWire.Timeline do
   defp connect(state) do
     secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
 
-    if File.exists?(secret) do
+    # The sidecar knows its port before the engine it spawned can answer:
+    # dialling that window is a refused socket, logged as a failed connect
+    # on every retry. Ready is the gate.
+    if File.exists?(secret) and Sidecar.status() == :ready do
       case start_client(secret) do
         {:ok, client} ->
           send(self(), :fetch_follows)
@@ -3506,6 +3541,11 @@ defmodule HighWire.Timeline do
       state.contact_buf
       |> Enum.reverse()
       |> Enum.reject(&MapSet.member?(state.contact_keys, &1["key"]))
+
+    # The pass reads every contact message in the store, so the newest
+    # state of each follow or block is folded here once — this is the
+    # graph a profile shows for the feed it is about.
+    Enum.each(fresh, &HighWire.SSB.Relations.fold/1)
 
     state = %{
       state
@@ -4938,27 +4978,30 @@ defmodule HighWire.Timeline do
   defp open_backgammon(state), do: open_game_drain(state, :backgammon)
 
   defp open_chess(state) do
-    # `chess/*` is the format current clients publish; the four canonical
-    # names are what older ones published. One drain per source, each with
-    # its own cursor, so neither format is left out.
-    state = open_single_chess_drain(state, @chess_wildcard)
+    # `chess/*` is the namespace this node publishes; the four canonical
+    # network names and their `ssb_`-prefixed spelling are each a drain of
+    # their own. Every source carries its own cursor, so one format's backlog
+    # can never hide another's.
+    state = Enum.reduce(@chess_sources, state, &open_single_chess_drain(&2, &1))
 
-    Enum.reduce(@chess_types, state, fn type, state ->
-      open_single_chess_drain(state, type)
-    end)
+    # `open_once` keys off this marker, so any open stream is enough to keep
+    # the next heartbeat from walking the store again.
+    case Enum.find_value(@chess_sources, &Map.get(state, chess_ref_field(&1))) do
+      nil -> state
+      ref -> Map.put(state, :chess_ref, ref)
+    end
   end
 
-  defp open_single_chess_drain(state, type) do
+  defp open_single_chess_drain(state, source) do
     {client, state} = game_endpoint(state, :chess_client)
-    params = live_by_type(type, MessageIndex.cursor(type))
+    params = live_by_type(source, MessageIndex.cursor(source))
 
     with true <- is_pid(client),
          {:ok, ref} <- Client.stream(client, ["messagesByType"], params, self()) do
-      # Store the ref so we can track this drain's lifecycle
       state
-      |> Map.put(:"chess_#{type}_ref", ref)
-      |> Map.put(:"chess_#{type}_buf", [])
-      |> Map.put(:"chess_#{type}_snapshot?", true)
+      |> Map.put(chess_ref_field(source), ref)
+      |> Map.put(chess_buf_field(source), [])
+      |> Map.put(chess_snapshot_field(source), true)
     else
       _ -> state
     end

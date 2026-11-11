@@ -151,6 +151,41 @@ defmodule HighWireWeb.IdentityLiveTest do
       assert html =~ "You are dtBy (Main). Click to manage identities."
     end
 
+    test "renaming edits the local label, not the feed's own name", %{conn: conn} do
+      {:ok, id} = Identities.create("Main")
+      :ok = Profile.put_about(id, %{"name" => "dtBy"})
+
+      {:ok, view, html} = live(conn, "/identity")
+      assert html =~ ~r/dtBy\s*<span[^>]*>\(Main\)/
+
+      # The form opens prefilled with the current label.
+      html = render_click(view, "rename-start", %{"id" => id})
+      assert html =~ "Local label"
+      assert html =~ ~s(value="Main")
+
+      html = render_click(view, "rename", %{"id" => id, "label" => "NFL posting"})
+      assert html =~ "Renamed to NFL posting"
+      # The name followers see is unchanged; only the parens move.
+      assert html =~ ~r/dtBy\s*<span[^>]*>\(NFL posting\)/
+      assert Enum.find(Identities.list(), &(&1["id"] == id))["label"] == "NFL posting"
+
+      # Cancel closes the form without touching the label.
+      _html = render_click(view, "rename-start", %{"id" => id})
+      html = render_click(view, "rename-cancel", %{})
+      refute html =~ "Local label"
+      assert Enum.find(Identities.list(), &(&1["id"] == id))["label"] == "NFL posting"
+    end
+
+    test "an empty rename is refused with a message", %{conn: conn} do
+      {:ok, id} = Identities.create("Main")
+
+      {:ok, view, _html} = live(conn, "/identity")
+      html = render_click(view, "rename", %{"id" => id, "label" => "  "})
+
+      assert html =~ "Could not rename: give it a label first"
+      assert Enum.find(Identities.list(), &(&1["id"] == id))["label"] == "Main"
+    end
+
     test "delete is two-stage, and only ever offered on disabled rows", %{conn: conn} do
       {:ok, main} = Identities.create("Main")
       {:ok, bot} = Identities.create("Bot")

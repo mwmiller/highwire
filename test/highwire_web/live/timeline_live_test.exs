@@ -73,6 +73,30 @@ defmodule HighWireWeb.TimelineLiveTest do
     refute html =~ "6000,000"
   end
 
+  test "a blocked feed's rows leave the timeline", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    hidden = "@blockedfeed=.ed25519"
+    kept = "@keptfeed=.ed25519"
+
+    msgs = [
+      post_msg("%hidden.sha256", hidden, "words from the blocked feed"),
+      post_msg("%kept.sha256", kept, "words from the kept feed")
+    ]
+
+    html = notify(view, feed_payload(msgs, self_id: "@me=.ed25519"))
+    assert html =~ "words from the blocked feed"
+    assert html =~ "words from the kept feed"
+
+    # The block lands: the feed's activity is no longer the reader's to
+    # read, so its rows leave the tab while everyone else's stay.
+    html =
+      notify(view, feed_payload(msgs, self_id: "@me=.ed25519") |> Map.put(:blocked, [hidden]))
+
+    refute html =~ "words from the blocked feed"
+    assert html =~ "words from the kept feed"
+  end
+
   test "the contacts rail never sits empty", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/")
     assert html =~ "No contacts yet"
@@ -1850,6 +1874,19 @@ defmodule HighWireWeb.TimelineLiveTest do
 
   # A Timeline payload as finalize/1 broadcasts it — the window rows come
   # straight from the same builder the engine uses.
+  # A public post in the shape the window hands the rows: the block filter
+  # reads the author off `value.author`, the way the renderer does.
+  defp post_msg(key, author, text) do
+    %{
+      "key" => key,
+      "value" => %{
+        "author" => author,
+        "timestamp" => 1_700_000_000,
+        "content" => %{"type" => "post", "text" => text}
+      }
+    }
+  end
+
   defp feed_payload(msgs, opts \\ []) do
     self_id = Keyword.get(opts, :self_id)
     follows = Keyword.get(opts, :follows, [])
