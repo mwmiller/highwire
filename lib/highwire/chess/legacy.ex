@@ -10,6 +10,11 @@ defmodule HighWire.Chess.Legacy do
     * `chess_move` — `orig`, `dest`, `ply`, and the FEN it produced
     * `chess_game_end` — the same, plus `status` and `winner`
 
+  One early client published the same four messages under `ssb_chess_*`,
+  and wrote a move's FEN into `pgnMove` and its notation into `fen`. Both
+  spellings are read here, and the move fields are translated on the way
+  in, so a game folds the same whichever client published it.
+
   A move arrives with the position it led to, so these games are read rather
   than replayed: the FEN is the position, and reproducing it from the moves
   would be a second opinion nobody asked for. That also keeps the fold cheap
@@ -23,12 +28,20 @@ defmodule HighWire.Chess.Legacy do
   alias HighWire.Chess.Engine
 
   @types ~w(chess_invite chess_invite_accept chess_move chess_game_end)
+  @aliases Enum.map(@types, &("ssb_" <> &1))
 
-  @doc "The message types this module reads."
+  @doc "The canonical message types this module reads."
   def types, do: @types
 
+  @doc "Every raw type this module reads, canonical and prefixed."
+  def kinds, do: @types ++ @aliases
+
+  @doc "The canonical name for a type in this format."
+  def canonical(type) when type in @aliases, do: String.replace_prefix(type, "ssb_", "")
+  def canonical(type), do: type
+
   @doc "Whether a content map is a chess message in this format."
-  def message?(content) when is_map(content), do: content["type"] in @types
+  def message?(content) when is_map(content), do: content["type"] in kinds()
   def message?(_), do: false
 
   @doc "Whether a binary names a game in this format."
@@ -67,6 +80,7 @@ defmodule HighWire.Chess.Legacy do
   """
   @spec fold([map()]) :: map()
   def fold(rows) when is_list(rows) do
+    rows = Enum.map(rows, &normalize/1)
     invite = Enum.find(rows, &(type(&1) == "chess_invite"))
     accept = Enum.find(rows, &(type(&1) == "chess_invite_accept"))
 
@@ -149,6 +163,34 @@ defmodule HighWire.Chess.Legacy do
   def position(_), do: Engine.initial()
 
   # -- parsing -----------------------------------------------------------
+
+  # One row in canonical terms: the prefixed type becomes the canonical one,
+  # and a prefixed move has its two position fields put back the right way.
+  defp normalize(%{content: %{"type" => type} = content} = row) when is_binary(type) do
+    canonical = canonical(type)
+
+    content =
+      if canonical == "chess_move" and type != "chess_move",
+        do: move_fields(Map.put(content, "type", canonical)),
+        else: Map.put(content, "type", canonical)
+
+    %{row | content: content}
+  end
+
+  defp normalize(row), do: row
+
+  # This client wrote the FEN into `pgnMove` and the notation into `fen`: the
+  # FEN is the field with ranks in it, so that is what tells them apart.
+  defp move_fields(%{"fen" => fen, "pgnMove" => pgn} = content)
+       when is_binary(fen) and is_binary(pgn) do
+    if String.contains?(pgn, "/") and not String.contains?(fen, "/") do
+      content |> Map.put("fen", pgn) |> Map.put("pgnMove", fen)
+    else
+      content
+    end
+  end
+
+  defp move_fields(content), do: content
 
   defp type(%{content: content}), do: content["type"]
 

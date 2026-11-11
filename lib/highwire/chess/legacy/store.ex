@@ -142,7 +142,12 @@ defmodule HighWire.Chess.Legacy.Store do
 
   defp game_id(key, content) do
     # Every message in a game names its root; the invite is its own root.
-    Legacy.game_id(content["root"] || key)
+    # An accept published with neither cannot be placed in a game, so it is
+    # dropped rather than filed as a game that is only an accept.
+    case Legacy.canonical(content["type"]) do
+      "chess_invite" -> Legacy.game_id(content["root"] || key)
+      _ -> Legacy.game_id(content["root"])
+    end
   end
 
   defp lookup(game_id) do

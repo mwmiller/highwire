@@ -93,6 +93,48 @@ defmodule HighWire.Chess.LegacyTest do
   end
 
   describe "folding a game" do
+    test "the ssb_-prefixed format folds as the same game" do
+      invite =
+        row(
+          @invite_key,
+          @white,
+          %{"type" => "ssb_chess_invite", "inviting" => @black, "myColor" => "white"},
+          1
+        )
+
+      # This client wrote the FEN into `pgnMove` and the notation into `fen`.
+      moved =
+        row(
+          "%move1.sha256",
+          @white,
+          %{
+            "type" => "ssb_chess_move",
+            "root" => @invite_key,
+            "ply" => 1,
+            "orig" => "e2",
+            "dest" => "e4",
+            "pgnMove" => @after_e4,
+            "fen" => "e4"
+          },
+          2
+        )
+
+      game = Legacy.fold([invite, moved])
+
+      assert game.white == @white
+      assert game.black == @black
+      assert game.board["e4"] == {:pawn, :white}
+      assert [%{ply: 1, san: "e4", uci: "e2e4"}] = game.history
+    end
+
+    test "both spellings are one namespace" do
+      assert Legacy.message?(%{"type" => "ssb_chess_invite"})
+      assert Legacy.message?(%{"type" => "chess_move"})
+      refute Legacy.message?(%{"type" => "chess_chat"})
+      assert Legacy.canonical("ssb_chess_move") == "chess_move"
+      assert Legacy.canonical("chess_move") == "chess_move"
+    end
+
     test "an invite with no accept is waiting, with the sides the invite named" do
       game = Legacy.fold([invite()])
 
