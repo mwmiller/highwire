@@ -2809,7 +2809,7 @@ defmodule HighWire.Timeline do
             {:noreply, Map.put(state, chess_buf_field(source), [msg | buf])}
 
           true ->
-            chess_drained(Map.put(state, chess_buf_field(source), [msg]), source)
+            {:noreply, chess_drained(Map.put(state, chess_buf_field(source), [msg]), source)}
         end
     end
   end
@@ -2819,7 +2819,7 @@ defmodule HighWire.Timeline do
 
     case Map.get(state, chess_buf_field(source), []) do
       [] -> {:noreply, state}
-      _buf -> chess_drained(Map.put(state, chess_buf_field(source), []), source)
+      _buf -> {:noreply, chess_drained(Map.put(state, chess_buf_field(source), []), source)}
     end
   end
 
@@ -2838,10 +2838,16 @@ defmodule HighWire.Timeline do
             do: Map.put(state, :chess_ref, nil),
             else: state
 
-        case Map.get(state, chess_buf_field(source), []) do
-          [] -> {:noreply, state}
-          _buf -> chess_drained(Map.put(state, chess_buf_field(source), []), source)
-        end
+        state =
+          case Map.get(state, chess_buf_field(source), []) do
+            [] -> state
+            _buf -> chess_drained(state, source)
+          end
+
+        # The walk is done, so the live tail can open: everything published
+        # from here on rides it, and the next reload resumes the walk from
+        # the cursor this pass advanced.
+        {:noreply, open_chess_tail(state, source)}
     end
   end
 
@@ -2874,7 +2880,7 @@ defmodule HighWire.Timeline do
     Enum.each(items, &Chess.observe/1)
     advance_cursor(source, items)
 
-    {:noreply, Map.put(state, chess_buf_field(source), [])}
+    Map.put(state, chess_buf_field(source), [])
   end
 
   defp game_kind(state, ref) do
@@ -4992,16 +4998,58 @@ defmodule HighWire.Timeline do
     end
   end
 
+  # The walk is a plain request — no `live` — so the engine answers with the
+  # backlog and then ends the stream. Asking for the backlog and the tail in
+  # the same breath lost the backlog: the engine answered with its sync
+  # marker straight away and nothing else, and the stream stayed open as a
+  # tail that had never been shown anything.
   defp open_single_chess_drain(state, source) do
+    if Map.get(state, chess_ref_field(source)) != nil do
+      state
+    else
+      {client, state} = game_endpoint(state, :chess_client)
+
+      with true <- is_pid(client),
+           {:ok, ref} <-
+             Client.stream(client, ["messagesByType"], chess_walk_args(source), self()) do
+        state
+        |> Map.put(chess_ref_field(source), ref)
+        |> Map.put(chess_buf_field(source), [])
+        |> Map.put(chess_snapshot_field(source), true)
+      else
+        _ -> state
+      end
+    end
+  catch
+    _, _ -> state
+  end
+
+  defp chess_walk_args(source) do
+    base = %{"type" => source}
+
+    case MessageIndex.cursor(source) do
+      nil -> [base]
+      ts -> [Map.put(base, "gt", ts)]
+    end
+  end
+
+  # The tail only: it carries what is published after the walk, and its sync
+  # marker says only that the tail is live.
+  defp open_chess_tail(state, source) do
     {client, state} = game_endpoint(state, :chess_client)
-    params = live_by_type(source, MessageIndex.cursor(source))
 
     with true <- is_pid(client),
-         {:ok, ref} <- Client.stream(client, ["messagesByType"], params, self()) do
+         {:ok, ref} <-
+           Client.stream(
+             client,
+             ["messagesByType"],
+             [%{"type" => source, "live" => true}],
+             self()
+           ) do
       state
       |> Map.put(chess_ref_field(source), ref)
       |> Map.put(chess_buf_field(source), [])
-      |> Map.put(chess_snapshot_field(source), true)
+      |> Map.put(chess_snapshot_field(source), false)
     else
       _ -> state
     end

@@ -1003,6 +1003,31 @@ defmodule HighWire.TimelineTest do
       assert st[:chess_chess_invite_snapshot?] == false
     end
 
+    test "a finished chess walk is followed by a live tail" do
+      ref = make_ref()
+      main = start_supervised!(%{id: :tail_main, start: {FakeClient, :start_link, [nil]}})
+      dedicated = start_supervised!(%{id: :tail_drain, start: {FakeClient, :start_link, [nil]}})
+
+      st =
+        drain_state(%{
+          :chess_chess_invite_ref => ref,
+          :chess_chess_invite_snapshot? => true,
+          client: main,
+          drain_client: dedicated
+        })
+
+      # The walk ends: the source keeps reading through a tail of its own,
+      # which is what carries anything published after the backlog.
+      {:noreply, st} = Timeline.handle_info({Client, ref, :done}, st)
+
+      assert st[:chess_chess_invite_ref] != nil
+      assert st[:chess_chess_invite_snapshot?] == false
+
+      assert FakeClient.streams(dedicated) == [
+               {["messagesByType"], [%{"type" => "chess_invite", "live" => true}]}
+             ]
+    end
+
     test "both chess formats are buffered under the drain that carried them" do
       invite_ref = make_ref()
       move_ref = make_ref()
@@ -1292,21 +1317,18 @@ defmodule HighWire.TimelineTest do
                {["messagesByType"], [%{"type" => "delete", "live" => true, "old" => true}]},
                {["messagesByType"], [%{"type" => "post-edit", "live" => true, "old" => true}]},
                {["messagesByType"], [%{"type" => "backgammon/*", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "chess/*", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "chess_invite", "live" => true, "old" => true}]},
-               {["messagesByType"],
-                [%{"type" => "chess_invite_accept", "live" => true, "old" => true}]},
-               {["messagesByType"], [%{"type" => "chess_move", "live" => true, "old" => true}]},
-               {["messagesByType"],
-                [%{"type" => "chess_game_end", "live" => true, "old" => true}]},
-               {["messagesByType"],
-                [%{"type" => "ssb_chess_invite", "live" => true, "old" => true}]},
-               {["messagesByType"],
-                [%{"type" => "ssb_chess_invite_accept", "live" => true, "old" => true}]},
-               {["messagesByType"],
-                [%{"type" => "ssb_chess_move", "live" => true, "old" => true}]},
-               {["messagesByType"],
-                [%{"type" => "ssb_chess_game_end", "live" => true, "old" => true}]}
+               # The chess walks are plain requests: asking for the backlog
+               # and the live tail together lost the backlog, so the tail
+               # opens only once a walk has ended.
+               {["messagesByType"], [%{"type" => "chess/*"}]},
+               {["messagesByType"], [%{"type" => "chess_invite"}]},
+               {["messagesByType"], [%{"type" => "chess_invite_accept"}]},
+               {["messagesByType"], [%{"type" => "chess_move"}]},
+               {["messagesByType"], [%{"type" => "chess_game_end"}]},
+               {["messagesByType"], [%{"type" => "ssb_chess_invite"}]},
+               {["messagesByType"], [%{"type" => "ssb_chess_invite_accept"}]},
+               {["messagesByType"], [%{"type" => "ssb_chess_move"}]},
+               {["messagesByType"], [%{"type" => "ssb_chess_game_end"}]}
              ]
 
       # the shared connection carries only the per-feed windows
