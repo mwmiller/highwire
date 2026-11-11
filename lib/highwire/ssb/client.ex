@@ -75,35 +75,56 @@ defmodule HighWire.SSB.Client do
     net_id = Keyword.fetch!(opts, :net_id)
     keys = Keyword.fetch!(opts, :keys)
 
-    {:ok, sock} = :gen_tcp.connect(host, port, [:binary, active: false, packet: :raw], 5_000)
-
-    send! = fn data ->
-      case :gen_tcp.send(sock, data) do
-        :ok -> :ok
-        {:error, reason} -> raise "SHS send failed: #{inspect(reason)}"
-      end
+    case connect(host, port, remote_pk, net_id, keys) do
+      {:ok, state} -> {:ok, state}
+      {:error, reason} -> {:stop, {:connect, reason}}
     end
+  end
 
-    recv! = fn n ->
-      case :gen_tcp.recv(sock, n, 5_000) do
-        {:ok, data} -> data
-        {:error, reason} -> raise "SHS receive failed: #{inspect(reason)}"
-      end
+  # A socket that is not there yet is an answer, not a crash: the sidecar
+  # spawns the engine and hands out its port before the engine can answer,
+  # so the first dials of a boot meet a refused socket. Callers retry;
+  # raising here left a crash report in the log for every one of them.
+  defp connect(host, port, remote_pk, net_id, keys) do
+    case :gen_tcp.connect(host, port, [:binary, active: false, packet: :raw], 5_000) do
+      {:ok, sock} ->
+        try do
+          send! = fn data ->
+            case :gen_tcp.send(sock, data) do
+              :ok -> :ok
+              {:error, reason} -> raise "SHS send failed: #{inspect(reason)}"
+            end
+          end
+
+          recv! = fn n ->
+            case :gen_tcp.recv(sock, n, 5_000) do
+              {:ok, data} -> data
+              {:error, reason} -> raise "SHS receive failed: #{inspect(reason)}"
+            end
+          end
+
+          {:ok, %{enc_key: ek, enc_nonce: en, dec_key: dk, dec_nonce: dn}} =
+            SHS.handshake(send!, recv!, remote_pk, net_id, keys)
+
+          :ok = :inet.setopts(sock, active: :once)
+
+          {:ok,
+           %__MODULE__{
+             sock: sock,
+             enc_key: ek,
+             enc_nonce: en,
+             dec_key: dk,
+             dec_nonce: dn
+           }}
+        rescue
+          e ->
+            :gen_tcp.close(sock)
+            {:error, {:handshake, e}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
-
-    {:ok, %{enc_key: ek, enc_nonce: en, dec_key: dk, dec_nonce: dn}} =
-      SHS.handshake(send!, recv!, remote_pk, net_id, keys)
-
-    :ok = :inet.setopts(sock, active: :once)
-
-    {:ok,
-     %__MODULE__{
-       sock: sock,
-       enc_key: ek,
-       enc_nonce: en,
-       dec_key: dk,
-       dec_nonce: dn
-     }}
   end
 
   @impl true

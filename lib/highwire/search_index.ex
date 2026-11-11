@@ -424,24 +424,34 @@ defmodule HighWire.SearchIndex do
   def handle_info(:connect, %{enabled?: true} = state) do
     state = stop_client(state)
 
-    case start_client() do
-      nil ->
-        Logger.warning("[search_index] could not start SSB client; retrying in 2s")
-        put_status(:connecting)
-        Process.send_after(self(), :connect, 2_000)
-        {:noreply, state}
+    # The sidecar answers with its port before the engine it spawned can
+    # take a request. Dialling into that window is refused at the socket,
+    # and an engine that is listening but not up answers "method not
+    # found" — neither is a failure worth logging once per two seconds.
+    if Sidecar.status() == :ready do
+      case start_client() do
+        nil ->
+          Logger.warning("[search_index] could not start SSB client; retrying in 2s")
+          put_status(:connecting)
+          Process.send_after(self(), :connect, 2_000)
+          {:noreply, state}
 
-      client ->
-        case open_backlog(client, resume_gt(state.cursor)) do
-          nil ->
-            Logger.warning("[search_index] could not open backlog stream; retrying in 2s")
-            put_status(:connecting)
-            Process.send_after(self(), :connect, 2_000)
-            {:noreply, stop_client(%{state | client: client})}
+        client ->
+          case open_backlog(client, resume_gt(state.cursor)) do
+            nil ->
+              Logger.warning("[search_index] could not open backlog stream; retrying in 2s")
+              put_status(:connecting)
+              Process.send_after(self(), :connect, 2_000)
+              {:noreply, stop_client(%{state | client: client})}
 
-          ref ->
-            {:noreply, begin_stream(%{state | client: client}, ref, :backlog)}
-        end
+            ref ->
+              {:noreply, begin_stream(%{state | client: client}, ref, :backlog)}
+          end
+      end
+    else
+      put_status(:connecting)
+      Process.send_after(self(), :connect, 2_000)
+      {:noreply, state}
     end
   end
 
