@@ -93,8 +93,15 @@ defmodule HighWire.Timeline do
   # (challenge, accept, move, resign, withdraw) shares a single drain.
   @chess_types ~w(chess_invite chess_invite_accept chess_move chess_game_end)
   @chess_aliases Enum.map(@chess_types, &("ssb_" <> &1))
-  @chess_wildcard "chess/*"
-  @chess_sources [@chess_wildcard | @chess_types ++ @chess_aliases]
+
+  # This node's own namespace, one stream per message name. The engine has no
+  # wildcard `messagesByType`, so asking for `chess/*` asked for a type nothing
+  # is published under: every game played here was invisible to the room by the
+  # same token that filled it with 2018's network games. Kept in step with
+  # `HighWire.Chess.Game.names/0` by the drain test.
+  @chess_local_types ~w(chess/challenge chess/accept chess/move chess/resign chess/withdraw)
+
+  @chess_sources @chess_local_types ++ @chess_types ++ @chess_aliases
 
   # First-paint: once this many feed streams have reported, broadcast
   # what has arrived instead of waiting for every stream (up to 400).
