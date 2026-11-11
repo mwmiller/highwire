@@ -19,7 +19,7 @@ defmodule HighWireWeb.DiagnosticsLive do
   use HighWireWeb, :live_view
 
   alias HighWire.Timeline
-  alias HighWireWeb.Components.Nav
+  alias HighWireWeb.Components.{Nav, Shell}
 
   # Re-probe while the tab is active; short enough to feel live, long
   # enough that a stream of probes never hammers the engine.
@@ -58,12 +58,12 @@ defmodule HighWireWeb.DiagnosticsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail gossip={@gossip}>
+    <Shell.app gossip={@gossip}>
+      <:rail>
         <Nav.rail_label>On this page</Nav.rail_label>
         <Nav.rail_link href="#engine">Engine views</Nav.rail_link>
         <Nav.rail_link href="#window">Local window</Nav.rail_link>
-      </Nav.rail>
+      </:rail>
 
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-10">
@@ -111,7 +111,7 @@ defmodule HighWireWeb.DiagnosticsLive do
           <p class="mt-10 text-xs text-dim">HighWire {@version} · diagnostics</p>
         </div>
       </section>
-    </div>
+    </Shell.app>
     """
   end
 

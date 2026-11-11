@@ -19,7 +19,7 @@ defmodule HighWireWeb.ImportLive do
   use HighWireWeb, :live_view
 
   alias HighWire.SSB.{Import, Sidecar}
-  alias HighWireWeb.Components.Nav
+  alias HighWireWeb.Components.Shell
 
   # One dot is one 5000 messages, and the converter prints the first at
   # zero — so dots on screen overstate by exactly one.
@@ -67,9 +67,7 @@ defmodule HighWireWeb.ImportLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail />
-
+    <Shell.app>
       <section class="flex flex-1 items-center justify-center overflow-y-auto px-6 py-12">
         <div class="w-full max-w-xl">
           <div :if={@mode == :import_pending} class="space-y-5">
@@ -208,7 +206,7 @@ defmodule HighWireWeb.ImportLive do
           <div :if={@mode == :gone} class="text-sm text-dim"></div>
         </div>
       </section>
-    </div>
+    </Shell.app>
     """
   end
 

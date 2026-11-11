@@ -18,7 +18,7 @@ defmodule HighWireWeb.ProfileLive do
   alias HighWire.SSB.{Profile, Relations}
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
-  alias HighWireWeb.Components.Nav
+  alias HighWireWeb.Components.{Nav, Shell}
 
   import HighWireWeb.Components.Time, only: [age: 1]
 
@@ -679,12 +679,8 @@ defmodule HighWireWeb.ProfileLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div
-      id="profile-root"
-      phx-hook="TabActivity"
-      class="flex h-screen overflow-hidden bg-app text-ink"
-    >
-      <Nav.rail gossip={@gossip}>
+    <Shell.app id="profile-root" phx-hook="TabActivity" gossip={@gossip}>
+      <:rail>
         <Nav.rail_label>Profile</Nav.rail_label>
 
         <div :if={@id} class="px-4 pb-4">
@@ -861,7 +857,7 @@ defmodule HighWireWeb.ProfileLive do
         <p :if={@id == nil} class="px-4 pb-4 text-xs italic text-faint">
           Open a profile from the timeline to see it here.
         </p>
-      </Nav.rail>
+      </:rail>
 
       <section class="flex-1 overflow-y-auto">
         <div :if={@id} class="mx-auto max-w-2xl px-6 py-10">
@@ -1098,7 +1094,7 @@ defmodule HighWireWeb.ProfileLive do
           No feed selected.
         </div>
       </section>
-    </div>
+    </Shell.app>
     """
   end
 end

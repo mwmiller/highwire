@@ -17,7 +17,7 @@ defmodule HighWireWeb.GamesLive do
   alias HighWire.Chess
   alias HighWire.Games.{Catalog, Filter, Interest}
   alias HighWire.SSB.{Identities, Profile}
-  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Time}
+  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Shell, Time}
 
   # The stores are append-only, so the room shows a page of what changed
   # recently and pages back through every game the catalog holds. Nothing
@@ -645,22 +645,22 @@ defmodule HighWireWeb.GamesLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail>
+    <Shell.app>
+      <:rail>
         <h1 class="sr-only">Games</h1>
         <Nav.rail_label>Games</Nav.rail_label>
         <p class="px-4 pb-4 text-xs leading-relaxed text-dim">
           Backgammon and chess games this node has seen. A game appears once its challenge reaches you.
         </p>
         <Nav.rail_link navigate={~p"/"}>Timeline</Nav.rail_link>
-      </Nav.rail>
+      </:rail>
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-4xl px-6 py-6">
           <header class="mb-5 flex items-baseline justify-between gap-3">
             <h2 class="text-lg font-semibold text-paper">Gameroom</h2>
 
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center justify-end gap-2">
               <span class="text-xs text-faint">
                 {if @total > 0, do: "#{length(@games)} of #{@total} games", else: "0 games"}
               </span>
@@ -736,7 +736,7 @@ defmodule HighWireWeb.GamesLive do
           </div>
         </div>
       </main>
-    </div>
+    </Shell.app>
     """
   end
 

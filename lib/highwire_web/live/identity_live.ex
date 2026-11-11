@@ -35,7 +35,7 @@ defmodule HighWireWeb.IdentityLive do
   alias HighWire.Avatar, as: Ident
   alias HighWire.SSB.{Identities, Profile, Sidecar}
   alias HighWire.Timeline
-  alias HighWireWeb.Components.{Avatar, Nav}
+  alias HighWireWeb.Components.{Avatar, Nav, Shell}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -322,13 +322,13 @@ defmodule HighWireWeb.IdentityLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail gossip={@gossip} identity={presented(@active, @profiles)}>
+    <Shell.app gossip={@gossip} identity={presented(@active, @profiles)}>
+      <:rail>
         <Nav.rail_label>On this page</Nav.rail_label>
         <Nav.rail_link href="#current">Current identity</Nav.rail_link>
         <Nav.rail_link href="#all">All identities</Nav.rail_link>
         <Nav.rail_link href="#create">Create</Nav.rail_link>
-      </Nav.rail>
+      </:rail>
 
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-10">
@@ -615,7 +615,7 @@ defmodule HighWireWeb.IdentityLive do
           </form>
         </div>
       </section>
-    </div>
+    </Shell.app>
     """
   end
 end

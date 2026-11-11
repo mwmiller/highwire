@@ -22,7 +22,7 @@ defmodule HighWireWeb.PostLive do
   alias HighWireWeb.Components.Heart
   alias HighWireWeb.Components.Likers
   alias HighWireWeb.Components.Mentions
-  alias HighWireWeb.Components.Nav
+  alias HighWireWeb.Components.{Nav, Shell}
   alias HighWireWeb.MessageText
 
   import HighWireWeb.Components.Time, only: [age: 1]
@@ -467,8 +467,8 @@ defmodule HighWireWeb.PostLive do
       )
 
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail gossip={@gossip}>
+    <Shell.app gossip={@gossip}>
+      <:rail>
         <Nav.rail_label>In this thread</Nav.rail_label>
 
         <div :if={@root}>
@@ -500,7 +500,7 @@ defmodule HighWireWeb.PostLive do
         <p :if={@root == nil} class="px-4 pb-4 text-xs italic text-faint">
           Nothing loaded. This message may not have arrived yet.
         </p>
-      </Nav.rail>
+      </:rail>
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-6">
           <.link id="post-back" navigate="/" title="Back to the timeline" class="btn mb-4">
@@ -769,7 +769,7 @@ defmodule HighWireWeb.PostLive do
           </div>
         </div>
       </section>
-    </div>
+    </Shell.app>
     """
   end
 end

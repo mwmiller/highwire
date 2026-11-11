@@ -41,7 +41,7 @@ defmodule HighWireWeb.NetworkLive do
   alias HighWire.SSB.{Admin, ConnSuppress, Invite, Network, PeerAddress, Sidecar}
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
-  alias HighWireWeb.Components.Nav
+  alias HighWireWeb.Components.{Nav, Shell}
 
   import HighWireWeb.Components.Time, only: [age: 1]
 
@@ -497,12 +497,8 @@ defmodule HighWireWeb.NetworkLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div
-      id="network-root"
-      phx-hook="TabActivity"
-      class="flex h-screen overflow-hidden bg-app text-ink"
-    >
-      <Nav.rail gossip={@gossip}>
+    <Shell.app id="network-root" phx-hook="TabActivity" gossip={@gossip}>
+      <:rail>
         <Nav.rail_label>On this page</Nav.rail_label>
         <Nav.rail_link href="#which-network">Which network</Nav.rail_link>
         <Nav.rail_link href="#dialer">Dialer</Nav.rail_link>
@@ -512,7 +508,7 @@ defmodule HighWireWeb.NetworkLive do
         <Nav.rail_link href="#connections">Connections</Nav.rail_link>
         <Nav.rail_link href="#known-peers">Known peers</Nav.rail_link>
         <Nav.rail_link href="#dials">Recent dials</Nav.rail_link>
-      </Nav.rail>
+      </:rail>
 
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-10">
@@ -1262,7 +1258,7 @@ defmodule HighWireWeb.NetworkLive do
           </div>
         </div>
       </section>
-    </div>
+    </Shell.app>
     """
   end
 

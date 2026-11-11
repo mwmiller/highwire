@@ -4,7 +4,7 @@ defmodule HighWireWeb.Live do
   """
   use HighWireWeb, :live_view
 
-  alias HighWireWeb.Components.Nav
+  alias HighWireWeb.Components.Shell
 
   @impl true
   def mount(_params, _session, socket) do
@@ -18,9 +18,7 @@ defmodule HighWireWeb.Live do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail gossip={@gossip} />
-
+    <Shell.app gossip={@gossip}>
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-3xl p-6">
           <img src={~p"/images/highwire-mark.png"} alt="" class="mt-2 h-32 w-32 rounded-2xl" />
@@ -48,7 +46,7 @@ defmodule HighWireWeb.Live do
           </.link>
         </div>
       </section>
-    </div>
+    </Shell.app>
     """
   end
 end

@@ -17,7 +17,7 @@ defmodule HighWireWeb.SettingsLive do
 
   use HighWireWeb, :live_view
 
-  alias HighWireWeb.Components.Nav
+  alias HighWireWeb.Components.{Nav, Shell}
 
   @modes ["system", "light", "dark"]
 
@@ -62,14 +62,14 @@ defmodule HighWireWeb.SettingsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail gossip={@gossip}>
+    <Shell.app gossip={@gossip}>
+      <:rail>
         <Nav.rail_label>On this page</Nav.rail_label>
         <Nav.rail_link href="#appearance">Appearance</Nav.rail_link>
         <Nav.rail_link href="#notifications">Notification options</Nav.rail_link>
         <Nav.rail_link href="#writing">Writing</Nav.rail_link>
         <Nav.rail_link href="#information">Information</Nav.rail_link>
-      </Nav.rail>
+      </:rail>
 
       <section class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-10">
@@ -187,7 +187,7 @@ defmodule HighWireWeb.SettingsLive do
           </div>
         </div>
       </section>
-    </div>
+    </Shell.app>
     """
   end
 end

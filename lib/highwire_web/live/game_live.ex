@@ -17,7 +17,7 @@ defmodule HighWireWeb.GameLive do
   alias HighWire.Chess.Legacy
   alias HighWire.Games.Catalog
   alias HighWire.SSB.{Identities, Profile}
-  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav}
+  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Shell}
 
   # How long one ply of playback stays on the board: fast enough to read a
   # game, slow enough to see the move land.
@@ -764,11 +764,11 @@ defmodule HighWireWeb.GameLive do
   @impl true
   def render(%{game: nil} = assigns) do
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail>
+    <Shell.app>
+      <:rail>
         <Nav.rail_label>Games</Nav.rail_label>
         <Nav.rail_link navigate={~p"/games"}>Gameroom</Nav.rail_link>
-      </Nav.rail>
+      </:rail>
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-10">
@@ -781,7 +781,7 @@ defmodule HighWireWeb.GameLive do
           </.link>
         </div>
       </main>
-    </div>
+    </Shell.app>
     """
   end
 
@@ -789,11 +789,11 @@ defmodule HighWireWeb.GameLive do
     assigns = assign(assigns, current: current(assigns), now: now(assigns))
 
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail>
+    <Shell.app>
+      <:rail>
         <Nav.rail_label>Games</Nav.rail_label>
         <Nav.rail_link navigate={~p"/games"}>Gameroom</Nav.rail_link>
-      </Nav.rail>
+      </:rail>
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-4xl px-6 py-6">
@@ -960,17 +960,17 @@ defmodule HighWireWeb.GameLive do
           </div>
         </div>
       </main>
-    </div>
+    </Shell.app>
     """
   end
 
   def render(assigns) do
     ~H"""
-    <div class="flex h-screen overflow-hidden bg-app text-ink">
-      <Nav.rail>
+    <Shell.app>
+      <:rail>
         <Nav.rail_label>Games</Nav.rail_label>
         <Nav.rail_link navigate={~p"/games"}>Gameroom</Nav.rail_link>
-      </Nav.rail>
+      </:rail>
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-6">
@@ -1126,7 +1126,7 @@ defmodule HighWireWeb.GameLive do
           </ol>
         </div>
       </main>
-    </div>
+    </Shell.app>
     """
   end
 

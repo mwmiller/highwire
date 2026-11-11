@@ -32,7 +32,7 @@ defmodule HighWireWeb.TimelineLive do
   alias HighWireWeb.Components.Heart
   alias HighWireWeb.Components.Likers
   alias HighWireWeb.Components.Mentions
-  alias HighWireWeb.Components.Nav
+  alias HighWireWeb.Components.Shell
   alias HighWireWeb.MessageText
 
   import HighWireWeb.Components.Time, only: [age: 1]
@@ -1166,12 +1166,8 @@ defmodule HighWireWeb.TimelineLive do
       )
 
     ~H"""
-    <div
-      id="timeline-root"
-      phx-hook="TabActivity"
-      class="flex h-screen overflow-hidden bg-app text-ink"
-    >
-      <Nav.rail gossip={@gossip}>
+    <Shell.app id="timeline-root" phx-hook="TabActivity" gossip={@gossip}>
+      <:rail>
         <h1 class="sr-only">Timeline</h1>
 
         <div class="px-4 pb-1 pt-5 text-[11px] uppercase tracking-wider text-faint">
@@ -1239,7 +1235,7 @@ defmodule HighWireWeb.TimelineLive do
             {if @suggestions_pending, do: "Finding…", else: "Show another set"}
           </button>
         </div>
-      </Nav.rail>
+      </:rail>
 
       <div class="flex min-w-0 flex-1 flex-col">
         <header class="flex h-11 shrink-0 items-center gap-2 border-b border-edge bg-panel px-4">
@@ -1584,7 +1580,7 @@ defmodule HighWireWeb.TimelineLive do
           </div>
         </div>
       </div>
-    </div>
+    </Shell.app>
     """
   end
 
