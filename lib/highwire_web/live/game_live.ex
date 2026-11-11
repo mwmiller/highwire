@@ -707,8 +707,33 @@ defmodule HighWireWeb.GameLive do
     """
   end
 
-  defp name(nil), do: "unknown"
-  defp name(id), do: Profile.display_name(id)
+  # A seat is named by the feed in it; an empty seat is a seat, not an
+  # unknown person.
+  defp name(id) when is_binary(id), do: Profile.display_name(id)
+  defp name(_id), do: "open"
+
+  # The feed the challenge was addressed to, when it names one: that feed
+  # is who the empty seat is waiting for.
+  defp invited(game) do
+    case Map.get(game, :directed_to) do
+      "@" <> _ = id -> id
+      _ -> nil
+    end
+  end
+
+  # The other side of a game: the feed that accepted it, or — before anyone
+  # has — the feed the challenge was addressed to. A game nobody has been
+  # named in has an open seat, not an unknown player.
+  defp opponent(game), do: Map.get(game, :accepter) || invited(game)
+
+  # What an unaccepted game is waiting on, naming the feed the challenge
+  # was addressed to when it named one.
+  defp awaiting(game) do
+    case invited(game) do
+      nil -> "Waiting for an opponent to accept"
+      id -> "Waiting for #{name(id)} to accept"
+    end
+  end
 
   # Live is the end of the line, so the highlighted move is the last one
   # played whether or not the reader has stepped back. A game the node holds
@@ -776,8 +801,8 @@ defmodule HighWireWeb.GameLive do
 
           <header class="mb-4">
             <div class="grid grid-cols-2 gap-2">
-              <.side id={@game.white} color={:white} turn={@game.turn} />
-              <.side id={@game.black} color={:black} turn={@game.turn} />
+              <.side id={@game.white || invited(@game)} color={:white} turn={@game.turn} />
+              <.side id={@game.black || invited(@game)} color={:black} turn={@game.turn} />
             </div>
             <p class="mt-2 flex items-center gap-2 text-xs text-dim">
               <span :if={@now.live?}>{chess_line(@game, @self_id)}</span>
@@ -955,9 +980,11 @@ defmodule HighWireWeb.GameLive do
             <div class="flex items-center gap-2">
               <Avatar.face :if={@game.challenger} id={@game.challenger} size={20} />
               <span class="text-sm text-paper">{name(@game.challenger)}</span>
-              <span class="text-[10px] uppercase tracking-wide text-faint">vs</span>
-              <Avatar.face :if={@game.accepter} id={@game.accepter} size={20} />
-              <span class="text-sm text-paper">{name(@game.accepter)}</span>
+              <span :if={seat = opponent(@game)} class="flex items-center gap-2">
+                <span class="text-[10px] uppercase tracking-wide text-faint">vs</span>
+                <Avatar.face id={seat} size={20} />
+                <span class="text-sm text-paper">{name(seat)}</span>
+              </span>
             </div>
             <p class="mt-1 flex items-center gap-2 text-xs text-dim">
               <span>{turn_line(@game, @self_id)}</span>
@@ -982,7 +1009,7 @@ defmodule HighWireWeb.GameLive do
             class="mb-3 flex flex-wrap items-center gap-2 rounded border border-edge bg-panel px-3 py-2 text-xs"
           >
             <span :if={@game.phase == :opening and @game.accepter == nil} class="text-dim">
-              Waiting for an opponent to accept before the opening roll.
+              {awaiting(@game)} before the opening roll.
             </span>
 
             <span
@@ -1158,7 +1185,7 @@ defmodule HighWireWeb.GameLive do
 
   defp chess_line(%{status: :finished} = game, _self), do: result_sentence(game)
   defp chess_line(%{status: :withdrawn}, _self), do: "Withdrawn by the challenger"
-  defp chess_line(%{status: :opening}, _self), do: "Waiting for an opponent to accept"
+  defp chess_line(%{status: :opening} = game, _self), do: awaiting(game)
   defp chess_line(%{status: :broken}, _self), do: "The fold stopped on a move it cannot verify"
 
   defp chess_line(%{mover: mover} = game, self) when mover == self,
@@ -1203,6 +1230,8 @@ defmodule HighWireWeb.GameLive do
 
   defp turn_line(%{status: :withdrawn}, _self), do: "Withdrawn by the challenger"
   defp turn_line(%{status: :broken}, _self), do: "The fold stopped on an entry it cannot verify"
+
+  defp turn_line(%{accepter: nil} = game, _self), do: awaiting(game)
 
   defp turn_line(%{mover: mover}, self) when mover == self, do: "Your move"
 

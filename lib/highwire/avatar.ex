@@ -49,9 +49,10 @@ defmodule HighWire.Avatar do
   everywhere, so a feed is called the same thing on every page.
 
   `profiles` may be the bare id→profile map or a row ctx carrying one
-  under `:profiles`. An id that is not a binary renders as `"unknown"`
-  instead of raising — rows built from half an engine answer still
-  have something to show.
+  under `:profiles`. A feed is a public key, so it always has a name:
+  its alias, or the key's own short form. An id that is not a feed at
+  all renders as the empty string — a row built from half an engine
+  answer names nobody rather than inventing an unknown feed.
   """
   @spec display_name(term(), map()) :: binary()
   def display_name(id, %{profiles: profiles}), do: display_name(id, profiles)
@@ -63,7 +64,7 @@ defmodule HighWire.Avatar do
     end
   end
 
-  def display_name(_id, _profiles), do: "unknown"
+  def display_name(_id, _profiles), do: ""
 
   @doc """
   The URL of the Excon `:framed` identicon for a feed id (hex-encoded id

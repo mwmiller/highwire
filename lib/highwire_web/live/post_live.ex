@@ -343,8 +343,8 @@ defmodule HighWireWeb.PostLive do
     |> Enum.uniq()
   end
 
-  # A recipient must be a real feed id; `author_of/1` answers "unknown"
-  # for a message with no author on it, which is not one.
+  # A recipient must be a real feed id; `author_of/1` answers "" for a
+  # message with no author on it, which is not one.
   defp feed_id?(<<"@", _::binary>> = id), do: String.ends_with?(id, ".ed25519")
   defp feed_id?(_), do: false
 
@@ -407,7 +407,10 @@ defmodule HighWireWeb.PostLive do
   end
 
   defp text(msg), do: content(msg)["text"] || ""
-  defp author_of(msg), do: msg["value"]["author"] || "unknown"
+  # A real message carries its author's feed id — a key — so it always has
+  # a name. A row with no author on it names nobody rather than inventing
+  # an unknown feed.
+  defp author_of(msg), do: msg["value"]["author"] || ""
 
   defp ts(msg) do
     case msg["value"]["timestamp"] do

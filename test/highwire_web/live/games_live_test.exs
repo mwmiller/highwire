@@ -7,6 +7,37 @@ defmodule HighWireWeb.GamesLiveTest do
   alias HighWire.Chess
   alias HighWire.Games.Catalog
 
+  # The room reads the reader's follows from the Timeline. The engine is off
+  # under test, so a stub under that name answers with the contact list a
+  # live one would have.
+  defmodule TimelineStub do
+    @moduledoc false
+    use GenServer
+
+    def start_link(state), do: GenServer.start_link(__MODULE__, state, name: HighWire.Timeline)
+
+    @impl true
+    def init(state), do: {:ok, state}
+
+    @impl true
+    def handle_call(:viewer, _from, state) do
+      viewer = %{
+        status: :ok,
+        self_id: nil,
+        follows: state.follows,
+        blocked: [],
+        blob_rev: 0
+      }
+
+      {:reply, viewer, state}
+    end
+
+    def handle_call(_call, _from, state), do: {:reply, :ok, state}
+
+    @impl true
+    def handle_cast(_msg, state), do: {:noreply, state}
+  end
+
   setup do
     Store.clear()
     Chess.Store.clear()
@@ -70,6 +101,43 @@ defmodule HighWireWeb.GamesLiveTest do
       stale_at = :binary.match(html, stale) |> elem(0)
 
       assert fresh_at < stale_at
+    end
+  end
+
+  # A challenge can be aimed at one follower instead of the whole room: the
+  # picker lists the contact list the rest of the app reads, and the
+  # challenge carries the key the reader picked.
+  describe "inviting a follower" do
+    test "aims a new challenge at the follower the toolbar names", %{conn: conn} do
+      with_follows(["@friend.ed25519"])
+      capture_publisher()
+
+      {:ok, view, html} = live(conn, "/games")
+
+      # The menu names the feed with the same short key the room uses.
+      assert html =~ "friend.ed"
+      assert html =~ "anyone"
+
+      view |> element("button[phx-value-to='@friend.ed25519']") |> render_click()
+
+      view |> element("button[phx-value-color='white']") |> render_click()
+      assert_received {:published, content}
+      assert content["to"] == "@friend.ed25519"
+      assert content["color"] == "white"
+    end
+
+    # With nobody named, the challenge is what it was before the picker
+    # existed: a game anybody may take.
+    test "leaves the challenge open when the toolbar names nobody", %{conn: conn} do
+      with_follows([])
+      capture_publisher()
+
+      {:ok, view, html} = live(conn, "/games")
+      refute html =~ "phx-value-to"
+
+      view |> element("button[phx-value-color='black']") |> render_click()
+      assert_received {:published, content}
+      assert content["to"] == nil
     end
   end
 
@@ -355,6 +423,35 @@ defmodule HighWireWeb.GamesLiveTest do
     )
 
     game_id
+  end
+
+  # The Timeline, handed a contact list for the length of one test.
+  defp with_follows(follows) do
+    :ok = Supervisor.terminate_child(HighWire.Supervisor, HighWire.Timeline)
+
+    on_exit(fn ->
+      {:ok, _pid} = Supervisor.restart_child(HighWire.Supervisor, HighWire.Timeline)
+    end)
+
+    start_supervised!({TimelineStub, %{follows: follows}})
+  end
+
+  # A publisher that hands what it was given back to the test instead of
+  # filing it: the challenge's content is the assertion.
+  defp capture_publisher do
+    owner = self()
+    previous = Application.get_env(:highwire, :game_publisher)
+
+    Application.put_env(:highwire, :game_publisher, fn content ->
+      send(owner, {:published, content})
+      {:ok, "%captured-#{System.unique_integer([:positive])}.sha256"}
+    end)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:highwire, :game_publisher, previous),
+        else: Application.delete_env(:highwire, :game_publisher)
+    end)
   end
 
   # A publisher standing in for the engine: it files what it was handed so

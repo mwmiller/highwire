@@ -70,6 +70,8 @@ defmodule HighWireWeb.GamesLive do
      |> assign(:total, Catalog.count())
      |> assign(:filters, %{})
      |> assign(:group, :room)
+     |> assign(:invitee, nil)
+     |> assign(:invitees, invitees(self_id))
      |> assign_games(page(self_id, 0))}
   end
 
@@ -89,13 +91,29 @@ defmodule HighWireWeb.GamesLive do
   # played list is read off the games in hand, which is what the ranking is
   # about to order anyway.
   defp viewer(self_id, games) do
-    follows =
-      case Process.whereis(HighWire.Timeline) do
-        nil -> []
-        _pid -> HighWire.Timeline.viewer().follows
-      end
+    %{self_id: self_id, follows: contacts().follows, played: played(self_id, games)}
+  end
 
-    %{self_id: self_id, follows: follows, played: played(self_id, games)}
+  # The reader's contact graph, read from the Timeline, which is already
+  # reading it for the rest of the app. A timeline that is not running has
+  # nobody in it.
+  defp contacts do
+    case Process.whereis(HighWire.Timeline) do
+      nil -> %{follows: [], blocked: []}
+      _pid -> HighWire.Timeline.viewer()
+    end
+  end
+
+  # The feeds a challenge can be addressed to: everyone the reader follows,
+  # minus themselves and anyone they have blocked, in the order their names
+  # sort.
+  defp invitees(self_id) do
+    %{follows: follows, blocked: blocked} = contacts()
+
+    follows
+    |> Enum.reject(&(&1 == self_id or &1 in blocked))
+    |> Enum.uniq()
+    |> Enum.sort_by(&Profile.display_name/1)
   end
 
   defp played(nil, _games), do: MapSet.new()
@@ -125,10 +143,18 @@ defmodule HighWireWeb.GamesLive do
     {:noreply, push_navigate(socket, to: ~p"/games/#{id}")}
   end
 
+  # Who a new challenge is addressed to. Choosing again on the open entry
+  # puts the game back to anybody.
+  def handle_event("invitee", %{"to" => to}, socket) do
+    {:noreply, assign(socket, :invitee, if(to == "", do: nil, else: to))}
+  end
+
   # Opening a game publishes the challenge from this identity, so the key
-  # that comes back is the thread root every later move answers to.
+  # that comes back is the thread root every later move answers to. The
+  # challenge is addressed to whoever the toolbar names, or to nobody when
+  # it names no one — an open game anybody may take.
   def handle_event("new", %{"color" => color}, socket) do
-    case HighWire.Chess.Log.open(color) do
+    case HighWire.Chess.Log.open(color, to: socket.assigns.invitee) do
       {:ok, game_id, _key} ->
         {:noreply, push_navigate(socket, to: ~p"/games/#{game_id}")}
 
@@ -139,7 +165,7 @@ defmodule HighWireWeb.GamesLive do
 
   # Backgammon has no side to choose: the opening roll decides who starts.
   def handle_event("new", %{"kind" => "backgammon"}, socket) do
-    case HighWire.Backgammon.Log.open() do
+    case HighWire.Backgammon.Log.open(to: socket.assigns.invitee) do
       {:ok, game_id, _key} ->
         {:noreply, push_navigate(socket, to: ~p"/games/#{game_id}")}
 
@@ -541,8 +567,80 @@ defmodule HighWireWeb.GamesLive do
   defp count([]), do: "none"
   defp count(games), do: length(games)
 
-  defp name(nil), do: "unknown"
-  defp name(id), do: Profile.display_name(id)
+  attr :invitee, :string, default: nil
+  attr :invitees, :list, required: true
+
+  # Who a new challenge is addressed to. The menu lists the feeds this
+  # reader follows, named the way the rest of the room names them; the open
+  # entry at the top is a game anyone may take.
+  defp invite_picker(assigns) do
+    ~H"""
+    <details :if={@invitees != []} class="group relative">
+      <summary class="flex cursor-pointer list-none items-center gap-1 rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper [&::-webkit-details-marker]:hidden">
+        <span class="text-[10px] uppercase tracking-wide text-faint">with</span>
+        <span class="max-w-24 truncate">{choice(@invitee)}</span>
+        <svg
+          class="h-2.5 w-2.5 text-faint transition group-open:rotate-180"
+          viewBox="0 0 10 10"
+          aria-hidden="true"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+        >
+          <path d="M2 4l3 3 3-3" />
+        </svg>
+      </summary>
+      <div class="absolute right-0 top-full z-20 mt-1 w-44 rounded border border-edge bg-panel py-1 shadow-lg shadow-black/30">
+        <button
+          phx-click="invitee"
+          phx-value-to=""
+          onclick="this.closest('details').removeAttribute('open')"
+          class={choice_class(@invitee == nil)}
+        >
+          anyone
+        </button>
+        <button
+          :for={id <- @invitees}
+          phx-click="invitee"
+          phx-value-to={id}
+          onclick="this.closest('details').removeAttribute('open')"
+          class={choice_class(id == @invitee)}
+        >
+          {name(id)}
+        </button>
+      </div>
+    </details>
+    """
+  end
+
+  defp choice(nil), do: "anyone"
+  defp choice(id), do: name(id)
+
+  defp choice_class(current?) do
+    [
+      "block w-full truncate px-2 py-1 text-left text-[11px] transition",
+      if(current?, do: "text-accent", else: "text-muted hover:bg-raised hover:text-paper")
+    ]
+  end
+
+  # A seat is named by the feed in it; an empty seat is a seat, not an
+  # unknown person.
+  defp name(id) when is_binary(id), do: Profile.display_name(id)
+  defp name(_id), do: "open"
+
+  # The feed a challenge was addressed to, when it names one.
+  defp invited(game) do
+    case Map.get(game, :directed_to) do
+      "@" <> _ = id -> id
+      _ -> nil
+    end
+  end
+
+  # The other side of a game: the feed that accepted it, or — before anyone
+  # has — the feed the challenge was addressed to.
+  defp opponent(%{accepter: id}) when is_binary(id), do: id
+  defp opponent(game), do: invited(game)
 
   @impl true
   def render(assigns) do
@@ -567,6 +665,8 @@ defmodule HighWireWeb.GamesLive do
                 {if @total > 0, do: "#{length(@games)} of #{@total} games", else: "0 games"}
               </span>
               <span class="text-[10px] uppercase tracking-wide text-faint">new game</span>
+
+              <.invite_picker invitee={@invitee} invitees={@invitees} />
 
               <button
                 phx-click="new"
@@ -660,9 +760,11 @@ defmodule HighWireWeb.GamesLive do
           <div class="flex min-w-0 items-center gap-2">
             <Avatar.face :if={@game.challenger} id={@game.challenger} size={18} />
             <span class="truncate text-xs text-muted">{name(@game.challenger)}</span>
-            <span class="text-[10px] uppercase tracking-wide text-faint">vs</span>
-            <Avatar.face :if={@game.accepter} id={@game.accepter} size={18} />
-            <span class="truncate text-xs text-muted">{name(@game.accepter)}</span>
+            <span :if={seat = opponent(@game)} class="flex min-w-0 items-center gap-2">
+              <span class="text-[10px] uppercase tracking-wide text-faint">vs</span>
+              <Avatar.face id={seat} size={18} />
+              <span class="truncate text-xs text-muted">{name(seat)}</span>
+            </span>
           </div>
         </div>
 
@@ -751,9 +853,20 @@ defmodule HighWireWeb.GamesLive do
   defp label(%{mover: mover}), do: "#{name(mover)} to move"
 
   defp phase_label(%{phase: :finished} = game), do: chess_end(game, "finished")
-  defp phase_label(%{kind: :chess, phase: :opening}), do: "waiting"
-  defp phase_label(%{phase: :opening}), do: "opening roll"
+
+  # A game waiting on an answer says who it is waiting on, when the
+  # challenge named them.
+  defp phase_label(%{phase: :opening} = game) do
+    case invited(game) do
+      nil -> opening_word(game)
+      id -> "waiting for " <> name(id)
+    end
+  end
+
   defp phase_label(_), do: "playing"
+
+  defp opening_word(%{kind: :chess}), do: "waiting"
+  defp opening_word(_game), do: "opening roll"
 
   # A chess game that is over says how: the verdict is the engine's, not a
   # sentence someone typed.

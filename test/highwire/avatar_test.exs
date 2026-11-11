@@ -38,9 +38,16 @@ defmodule HighWire.AvatarTest do
     assert Avatar.display_name(id, %{id => %{name: 42}}) == "DgsA6kZle"
   end
 
-  test "display_name/2 renders a half-parsed id as unknown instead of raising" do
-    assert Avatar.display_name(nil, %{}) == "unknown"
-    assert Avatar.display_name(42, %{profiles: %{}}) == "unknown"
+  test "display_name/2 always names a feed by its alias or its own key" do
+    id = "@nobody=.ed25519"
+
+    assert Avatar.display_name(id, %{}) == Avatar.short_id(id)
+    refute Avatar.display_name(id, %{}) == "unknown"
+  end
+
+  test "display_name/2 names nobody for a half-parsed id instead of raising" do
+    assert Avatar.display_name(nil, %{}) == ""
+    assert Avatar.display_name(42, %{profiles: %{}}) == ""
   end
 
   test "identicon_url/1 hex-encodes the feed id" do

@@ -2213,7 +2213,10 @@ defmodule HighWireWeb.TimelineLive do
   # does not bring them back. Unblocking returns them with a fresh page.
   defp blocked_author?(row, blocked), do: MapSet.member?(blocked, author_of(row.msg))
 
-  defp author_of(msg), do: msg["value"]["author"] || "unknown"
+  # A real message carries its author's feed id — a key — so it always has
+  # a name. A row with no author on it names nobody rather than inventing
+  # an unknown feed.
+  defp author_of(msg), do: msg["value"]["author"] || ""
   defp text(msg), do: content(msg)["text"] || ""
 
   defp ts(msg) do

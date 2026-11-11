@@ -29,17 +29,22 @@ defmodule HighWireWeb.Components.Avatar do
     # The feed is the one place that knows what someone looks like, so a tile
     # drawn anywhere in the app shows their face rather than an identicon
     # standing in for a face we already have.
-    assigns = assign(assigns, :image, assigns.image || Profile.image(assigns.id))
+    assigns =
+      assigns
+      |> assign(:feed?, feed?(assigns.id))
+      |> assign(:image, assigns.image || image_for(assigns.id))
 
     ~H"""
     <div
       class={[
         "relative shrink-0 overflow-hidden rounded-[3px] border border-edge",
+        if(@feed?, do: nil, else: "bg-raised"),
         @class
       ]}
-      style={"width:#{@size}px;height:#{@size}px;background-color:#{Ident.hex(@id)}"}
+      style={tile_style(@id, @size)}
     >
       <img
+        :if={@feed?}
         src={Ident.avatar_src(@id, @image) <> Ident.rev_query(@rev)}
         alt=""
         loading="lazy"
@@ -59,9 +64,9 @@ defmodule HighWireWeb.Components.Avatar do
   its accessible label, so a face says who it is on hover and to a
   screen reader even where the byline beside it does not.
 
-  An id that cannot have a profile page ("unknown", from a row
-  half-built out of an engine answer) keeps its tile unlinked rather
-  than pointing at a page that cannot name it.
+  An id that is not a feed (a row half-built out of an engine
+  answer) keeps its tile unlinked rather than pointing at a page that
+  cannot name it.
   """
 
   attr :id, :string, required: true, doc: "the feed id the tile stands for"
@@ -102,10 +107,24 @@ defmodule HighWireWeb.Components.Avatar do
     """
   end
 
-  # Only a feed id has a profile page. Anything else ("unknown") keeps
-  # its tile unlinked rather than pointing at a page that cannot name it.
+  # Only a feed id has a profile page. Anything else keeps its tile
+  # unlinked rather than pointing at a page that cannot name it.
   defp profile_href("@" <> _ = id), do: "/profile?id=" <> URI.encode_www_form(id)
   defp profile_href(_id), do: nil
+
+  # Only a feed id is an identity: anything else is a row with no feed
+  # on it, and a tile that hashed one would be inventing a face.
+  defp feed?(<<?@, _::binary>>), do: true
+  defp feed?(_id), do: false
+
+  defp image_for(id) do
+    if feed?(id), do: Profile.image(id)
+  end
+
+  defp tile_style(id, size) do
+    base = "width:#{size}px;height:#{size}px"
+    if feed?(id), do: base <> ";background-color:#{Ident.hex(id)}", else: base
+  end
 
   defp image_of(id, %{profiles: profiles}), do: image_of(id, profiles)
 

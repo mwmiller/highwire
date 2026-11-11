@@ -47,6 +47,16 @@ defmodule HighWireWeb.GameLiveTest do
 
       assert html =~ "This game does not verify"
     end
+
+    # Before anyone accepts, the page names the feed the challenge was
+    # addressed to: the invitation carries the key.
+    test "says which feed an unaccepted challenge is waiting for", %{conn: conn} do
+      game_id = seed_open_directed("@friend.ed25519")
+      {:ok, _view, html} = live(conn, "/games/#{game_id}")
+
+      assert html =~ "Waiting for friend"
+      refute html =~ "unknown"
+    end
   end
 
   # A game opened, accepted, rolled out and played a turn — through the
@@ -85,6 +95,22 @@ defmodule HighWireWeb.GameLiveTest do
       {:ok, _} = Log.roll(game, as.(game.mover))
       roll_until_playing(game_id, as)
     end
+  end
+
+  defp seed_open_directed(to) do
+    spec = %{"length" => 8}
+    game_id = Game.new_id()
+    chall = Chain.generate(:crypto.strong_rand_bytes(32), spec)
+
+    Store.ingest(
+      envelope(
+        "@challenger.ed25519",
+        Game.challenge(game_id, hex(Chain.commit(chall)), to: to),
+        "%t1.sha256"
+      )
+    )
+
+    game_id
   end
 
   defp seed_opening do
