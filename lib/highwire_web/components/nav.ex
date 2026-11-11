@@ -1,14 +1,15 @@
 defmodule HighWireWeb.Components.Nav do
   @moduledoc """
-  The shared left rail: the crab mark at the top left (linking to the
-  timeline) and, at the top right beside the settings gear — the other
-  identity-adjacent control — the current identity's avatar (linking to
-  the identity page, `/identity`); and, pinned to the bottom, the
-  current network badge, which links to the network page (`/network`)
-  — the general place to manage dialing and the network profile. Pages
-  add their own content to the rail through the default slot; pages
-  that pass none get the same wide frame, so the column never jumps
-  between pages.
+  The shared left rail: the top row opens with back and forward through
+  this window's page history, then the crab mark (linking to the
+  timeline) and the table (linking to the gameroom); at the top right
+  beside the settings gear — the other identity-adjacent control — the
+  current identity's avatar (linking to the identity page, `/identity`);
+  and, pinned to the bottom, the current network badge, which links to
+  the network page (`/network`) — the general place to manage dialing
+  and the network profile. Pages add their own content to the rail
+  through the default slot; pages that pass none get the same wide
+  frame, so the column never jumps between pages.
 
   The avatar and its title show what followers see: the resolved alias
   and image from the `HighWire.SSB.Profile` read model, with the local
@@ -55,6 +56,31 @@ defmodule HighWireWeb.Components.Nav do
     ~H"""
     <aside class="flex w-56 min-w-0 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-edge bg-panel">
       <div class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4">
+        <div
+          id="rail-history"
+          phx-hook="HistoryNav"
+          class="flex items-center overflow-hidden rounded-md border border-edge"
+        >
+          <button
+            type="button"
+            data-history="back"
+            title="Back"
+            aria-label="Back"
+            class="flex h-6 w-6 items-center justify-center text-dim transition hover:bg-raised hover:text-paper disabled:cursor-default disabled:text-faint disabled:hover:bg-transparent"
+          >
+            <.chevron direction={:back} />
+          </button>
+          <span class="h-4 w-px shrink-0 bg-edge" aria-hidden="true"></span>
+          <button
+            type="button"
+            data-history="forward"
+            title="Forward"
+            aria-label="Forward"
+            class="flex h-6 w-6 items-center justify-center text-dim transition hover:bg-raised hover:text-paper disabled:cursor-default disabled:text-faint disabled:hover:bg-transparent"
+          >
+            <.chevron direction={:forward} />
+          </button>
+        </div>
         <div class="flex items-center overflow-hidden rounded-md border border-edge">
           <.link
             navigate="/"
@@ -207,6 +233,28 @@ defmodule HighWireWeb.Components.Nav do
       <path d="M4 16a2.5 2.5 0 0 1 2.5-2.5H20" />
       <path d="M7 8.5h8" />
       <path d="M7 11.5h5" />
+    </svg>
+    """
+  end
+
+  attr :direction, :atom, required: true, values: [:back, :forward]
+
+  # A chevron pointing back through the history, and the same mark turned
+  # around for forward. Drawn to the same box as the crab's neighbours, so the
+  # row keeps its line whichever way the reader is going.
+  defp chevron(assigns) do
+    ~H"""
+    <svg
+      class="h-4 w-4"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.8"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d={if @direction == :back, do: "M14 6 8 12l6 6", else: "M10 6l6 6-6 6"} />
     </svg>
     """
   end

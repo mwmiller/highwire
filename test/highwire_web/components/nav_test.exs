@@ -12,6 +12,22 @@ defmodule HighWireWeb.Components.NavTest do
     assert html =~ "· 3"
   end
 
+  test "the rail opens with back and forward through the page history" do
+    html = render_component(&Nav.rail/1, [])
+
+    assert html =~ ~s(phx-hook="HistoryNav")
+    assert html =~ ~s(data-history="back")
+    assert html =~ ~s(data-history="forward")
+    assert html =~ ~s(aria-label="Back")
+    assert html =~ ~s(aria-label="Forward")
+
+    # Both sit on the top line, ahead of the two page links.
+    {back, _} = :binary.match(html, ~s(data-history="back"))
+    {forward, _} = :binary.match(html, ~s(data-history="forward"))
+    {crab, _} = :binary.match(html, ~s(aria-label="Timeline"))
+    assert back < forward and forward < crab
+  end
+
   test "a quiet rail shows the idle dot and no count" do
     html = render_component(&Nav.rail/1, [])
 

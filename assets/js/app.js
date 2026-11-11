@@ -49,6 +49,116 @@ let InfiniteScroll = {
   }
 }
 
+// The rail's back and forward controls walk the browser's own history rather
+// than a list the app keeps, so they agree with the swipe and the keyboard.
+// LiveView records where each entry sits in that stack (history.state.position)
+// and announces every move with phx:navigate; history.length cannot say
+// whether there is a page behind the reader or ahead, because it never shrinks.
+const historyStack = (() => {
+  const KEY = "highwire.history.deepest"
+
+  const position = () => {
+    const state = window.history.state
+    return (state && state.position) || 0
+  }
+
+  const remember = () => {
+    try {
+      window.sessionStorage.setItem(KEY, String(deepest))
+    } catch (_) {}
+  }
+
+  const recall = () => {
+    try {
+      return Number(window.sessionStorage.getItem(KEY)) || 0
+    } catch (_) {
+      return 0
+    }
+  }
+
+  // Where this tab had got to before and where it is now: a reload keeps the
+  // entry it was on, and the pages around it, so the deeper of the two is how
+  // far the reader has been.
+  let deepest = Math.max(recall(), position())
+
+  return {
+    position,
+    deepest: () => deepest,
+    // A push is the only move that throws away what was ahead, so it is the
+    // only one that can bring the deep point back to where the reader is.
+    pushed() {
+      deepest = position()
+      remember()
+    },
+    // Any other landing — a step back, a step forward, a first read — is
+    // somewhere the reader has already been.
+    landed() {
+      deepest = Math.max(deepest, position())
+      remember()
+    },
+    back: () => window.history.back(),
+    forward: () => window.history.forward()
+  }
+})()
+
+// The controls are painted from the history: back goes quiet on the first page
+// of the tab, forward goes quiet at the far end of what the reader has seen.
+const refreshHistoryNav = () => {
+  const nav = document.querySelector("#rail-history")
+  if (!nav) return
+
+  const back = nav.querySelector("[data-history='back']")
+  const forward = nav.querySelector("[data-history='forward']")
+  if (!back || !forward) return
+
+  const at = historyStack.position()
+  back.disabled = at <= 0
+  forward.disabled = at >= historyStack.deepest()
+}
+
+// One pair of listeners for the document, rather than one per rail: a live
+// redirect replaces the rail, and the hook that owns the new one mounts after
+// the push it would have to hear about, so a listener living inside the hook
+// would miss the very navigation that moved the reader.
+window.addEventListener("phx:navigate", (e) => {
+  if (e.detail.pop) {
+    historyStack.landed()
+  } else {
+    historyStack.pushed()
+  }
+
+  refreshHistoryNav()
+})
+
+window.addEventListener("popstate", () => {
+  historyStack.landed()
+  refreshHistoryNav()
+})
+
+// The two controls themselves: the rail re-renders under them as pages come
+// and go, so they are found again on every mount and every patch.
+let HistoryNav = {
+  mounted() {
+    this.back = this.el.querySelector("[data-history='back']")
+    this.forward = this.el.querySelector("[data-history='forward']")
+
+    this.onBack = () => historyStack.back()
+    this.onForward = () => historyStack.forward()
+
+    this.back.addEventListener("click", this.onBack)
+    this.forward.addEventListener("click", this.onForward)
+
+    refreshHistoryNav()
+  },
+  updated() {
+    refreshHistoryNav()
+  },
+  destroyed() {
+    this.back.removeEventListener("click", this.onBack)
+    this.forward.removeEventListener("click", this.onForward)
+  }
+}
+
 // The move list follows the board: whatever ply is showing is kept in view, so
 // a game long enough to overflow is followed rather than hunted for.
 let FollowMoves = {
@@ -1175,6 +1285,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     ClampRows,
     LandOn,
     FollowMoves,
+    HistoryNav,
     ReplayKeys,
     PieceInk
   }
