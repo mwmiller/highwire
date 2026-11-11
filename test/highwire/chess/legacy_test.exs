@@ -47,6 +47,30 @@ defmodule HighWire.Chess.LegacyTest do
 
   @after_e4 "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
 
+  describe "folding a rematch" do
+    test "the second challenger does not take over both sides" do
+      rematch =
+        row(
+          "%rematch.sha256",
+          @black,
+          %{"type" => "chess_invite", "myColor" => "black", "inviting" => @white},
+          3
+        )
+
+      game =
+        Legacy.fold([
+          rematch,
+          move(1, "e2", "e4", "e4", @after_e4, @white, 4),
+          accept(),
+          invite()
+        ])
+
+      assert game.challenger == @white
+      assert game.accepter == @black
+      assert {game.white, game.black} == {@white, @black}
+    end
+  end
+
   describe "game ids" do
     test "a message key becomes the same shape this node's own games use" do
       id = Legacy.game_id(@invite_key)

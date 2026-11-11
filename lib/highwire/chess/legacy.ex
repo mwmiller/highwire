@@ -81,7 +81,7 @@ defmodule HighWire.Chess.Legacy do
   @spec fold([map()]) :: map()
   def fold(rows) when is_list(rows) do
     rows = Enum.map(rows, &normalize/1)
-    invite = Enum.find(rows, &(type(&1) == "chess_invite"))
+    invite = opening_invite(rows)
     accept = Enum.find(rows, &(type(&1) == "chess_invite_accept"))
 
     root_key = root_key(invite, rows)
@@ -193,6 +193,22 @@ defmodule HighWire.Chess.Legacy do
   defp move_fields(content), do: content
 
   defp type(%{content: content}), do: content["type"]
+
+  # The invitation the thread answers, not the latest one filed under the
+  # same root: a rematch reuses the root, and reading it as the opening put
+  # the second challenger on both sides of the board.
+  defp opening_invite(rows) do
+    root =
+      Enum.find_value(rows, fn row ->
+        type(row) in ["chess_invite_accept", "chess_move", "chess_game_end"] and
+          row.content["root"]
+      end)
+
+    Enum.find(rows, &(type(&1) == "chess_invite" and &1.key == root)) ||
+      rows
+      |> Enum.filter(&(type(&1) == "chess_invite"))
+      |> Enum.min_by(&(&1.ts || 0), fn -> nil end)
+  end
 
   # The challenge opens the thread; a game whose invite never arrived still
   # names its root on every message that follows it.
