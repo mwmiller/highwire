@@ -16,11 +16,22 @@ defmodule HighWireWeb.Endpoint do
   #
   # You should set gzip to true if you are running phx.digest
   # when deploying your static files in production.
-  plug Plug.Static,
-    at: "/",
-    from: :highwire,
-    gzip: false,
-    only: ~w(assets fonts images favicon.ico robots.txt)
+  if Mix.env() == :prod do
+    # The release build digests the assets and writes a .gz beside each, so
+    # serve the compressed copy to a client that takes it. Dev keeps gzip
+    # off: old .gz files sit beside fresh sources there.
+    plug Plug.Static,
+      at: "/",
+      from: :highwire,
+      gzip: true,
+      only: ~w(assets fonts images favicon.ico robots.txt)
+  else
+    plug Plug.Static,
+      at: "/",
+      from: :highwire,
+      gzip: false,
+      only: ~w(assets fonts images favicon.ico robots.txt)
+  end
 
   # Serve images directly from the application images directory.
   # Path is resolved at runtime because Application.compile_env bakes in
