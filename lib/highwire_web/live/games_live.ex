@@ -8,7 +8,8 @@ defmodule HighWireWeb.GamesLive do
   opponent's turn appears in a second instead of on a feed reload.
 
   Games that are waiting on you sort first: that is the only thing this page
-  has to tell a reader at a glance.
+  has to tell a reader at a glance. The rail carries the filters and the
+  grouping; the column beside it is the room itself.
   """
 
   use HighWireWeb, :live_view
@@ -413,11 +414,9 @@ defmodule HighWireWeb.GamesLive do
   # long it ran, when it last moved, which game it is — and a fifth about how
   # to read the answer. One chip per answer, and the chip that is on is the
   # answer in force; clicking it again takes the question back off.
-  # The filters read as a sentence rather than a panel of switches: four
-  # words you can open, the grouping, and how much of the room survives them.
-  # A facet says its own name while it is asking for nothing, and the answer
-  # once it has one — so a room that is not being filtered reads as four
-  # quiet words, and one that is says what it is asking.
+  # The rail's filter panel: four facets you can open, the grouping, and how
+  # much of the room survives them. Each facet shows its answer, quiet while
+  # it asks for nothing, so the whole panel reads at a glance.
   defp filters(assigns) do
     assigns =
       assign(assigns,
@@ -440,31 +439,33 @@ defmodule HighWireWeb.GamesLive do
       )
 
     ~H"""
-    <div class="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-      <.facet_menu title="who" facet="who" key={:who} options={@who} filters={@filters} />
-      <.facet_menu title="when" facet="age" key={:age} options={@age} filters={@filters} />
-      <.facet_menu title="moves" facet="length" key={:length} options={@length} filters={@filters} />
-      <.facet_menu title="game" facet="kind" key={@kind} options={@kind} filters={@filters} />
+    <div class="px-4 pb-4 text-[11px]">
+      <div class="mb-1 flex items-center justify-between">
+        <span class="text-[10px] uppercase tracking-wider text-faint">Filters</span>
+        <button
+          :if={@filters != %{}}
+          phx-click="clear_filters"
+          class="rounded px-1 py-0.5 text-[10px] uppercase tracking-wide text-muted transition hover:text-paper"
+        >
+          clear
+        </button>
+      </div>
 
-      <span class="h-3 w-px shrink-0 bg-edge" aria-hidden="true" />
+      <div class="space-y-0.5">
+        <.facet_menu title="who" facet="who" key={:who} options={@who} filters={@filters} />
+        <.facet_menu title="when" facet="age" key={:age} options={@age} filters={@filters} />
+        <.facet_menu title="moves" facet="length" key={:length} options={@length} filters={@filters} />
+        <.facet_menu title="game" facet="kind" key={:kind} options={@kind} filters={@filters} />
+      </div>
 
-      <span class="flex items-center gap-1.5">
+      <div class="mt-3 flex items-center gap-1.5">
         <span class="text-[10px] uppercase tracking-wider text-faint">by</span>
         <.group_chip by={:room} label="room" group={@group} />
         <.group_chip by={:period} label="period" group={@group} />
         <.group_chip by={:result} label="result" group={@group} />
-      </span>
+      </div>
 
-      <span class="ml-auto flex items-center gap-2 text-[10px] text-faint">
-        <span>{@shown} of {@total} shown</span>
-        <button
-          :if={@filters != %{}}
-          phx-click="clear_filters"
-          class="rounded px-1 py-0.5 uppercase tracking-wide text-muted transition hover:text-paper"
-        >
-          clear
-        </button>
-      </span>
+      <p class="mt-2 text-[10px] text-faint">{@shown} of {@total} shown</p>
     </div>
     """
   end
@@ -488,20 +489,25 @@ defmodule HighWireWeb.GamesLive do
 
     ~H"""
     <details class="group relative">
-      <summary class="flex cursor-pointer list-none items-center gap-1 rounded px-1 py-0.5 transition hover:text-paper [&::-webkit-details-marker]:hidden">
+      <summary class="flex cursor-pointer list-none items-center justify-between gap-2 rounded px-1 py-1 transition hover:text-paper [&::-webkit-details-marker]:hidden">
         <span class="text-[10px] uppercase tracking-wider text-faint">{@title}</span>
-        <span :if={@current != :any} class="text-accent">{@current_label}</span>
-        <svg
-          class="h-2.5 w-2.5 text-faint transition group-open:rotate-180"
-          viewBox="0 0 10 10"
-          aria-hidden="true"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.4"
-          stroke-linecap="round"
-        >
-          <path d="M2 4l3 3 3-3" />
-        </svg>
+        <span class={[
+          "flex items-center gap-1",
+          if(@current == :any, do: "text-faint", else: "text-accent")
+        ]}>
+          {@current_label}
+          <svg
+            class="h-2.5 w-2.5 transition group-open:rotate-180"
+            viewBox="0 0 10 10"
+            aria-hidden="true"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+          >
+            <path d="M2 4l3 3 3-3" />
+          </svg>
+        </span>
       </summary>
       <div class="absolute left-0 top-full z-20 mt-1 w-40 rounded border border-edge bg-panel py-1 shadow-lg shadow-black/30">
         <button
@@ -656,9 +662,12 @@ defmodule HighWireWeb.GamesLive do
       <:rail>
         <h1 class="sr-only">Games</h1>
         <Nav.rail_label>Games</Nav.rail_label>
-        <p class="px-4 pb-4 text-xs leading-relaxed text-dim">
-          Backgammon and chess games this node has seen. A game appears once its challenge reaches you.
-        </p>
+        <.filters
+          filters={@filters}
+          group={@group}
+          shown={count_games(@sections)}
+          total={length(@games)}
+        />
         <Nav.rail_link navigate={~p"/"}>Timeline</Nav.rail_link>
       </:rail>
 
@@ -711,13 +720,6 @@ defmodule HighWireWeb.GamesLive do
             No games yet. Open one above and it appears here at once; when someone challenges you,
             their game lands here on the next move.
           </p>
-
-          <.filters
-            filters={@filters}
-            group={@group}
-            shown={count_games(@sections)}
-            total={length(@games)}
-          />
 
           <p
             :if={@filters != %{} and count_games(@sections) == 0}
