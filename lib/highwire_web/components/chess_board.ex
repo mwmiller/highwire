@@ -87,9 +87,9 @@ defmodule HighWireWeb.Components.ChessBoard do
     ~H"""
     <div
       phx-click={@playable && "square"}
-      phx-value-sq={@square}
+      phx-value-sq={@playable && @square}
       class={[
-        "chess-square relative flex aspect-square items-center justify-center leading-none",
+        "chess-square",
         @playable && "cursor-pointer",
         @light? && "board-light",
         !@light? && "board-dark",
