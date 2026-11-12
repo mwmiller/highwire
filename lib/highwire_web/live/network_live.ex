@@ -49,7 +49,12 @@ defmodule HighWireWeb.NetworkLive do
   # come back (2s intervals), matching Settings' old 60-second window.
   @switch_polls 30
 
-  # Show the full address book/history rather than capping it.
+  # The list opens with a page of the address book; the sky still draws
+  # every peer. "Show all" lifts the cap, so nothing is out of reach, and
+  # a book of hundreds does not sit in the first paint.
+  @known_peers_page 100
+
+  # What the sky draws: everyone.
   @known_peers_cap :all
 
   # Consecutive failed dials, with no handshake at all on record, before
@@ -113,7 +118,7 @@ defmodule HighWireWeb.NetworkLive do
        polls: 0,
        dial_notice: nil,
        dialing: false,
-       known_peers_cap: @known_peers_cap,
+       known_peers_cap: @known_peers_page,
        suppress_preview: nil,
        suppress_notice: nil,
        suppressing: false,
@@ -381,6 +386,10 @@ defmodule HighWireWeb.NetworkLive do
   # report's knownPeers drops the autoconnect flag, so it cannot tell an
   # already-suppressed entry from a live one, and it is the book that
   # apply/1 edits.
+  def handle_event("show-all-peers", _params, socket) do
+    {:noreply, assign(socket, :known_peers_cap, :all)}
+  end
+
   def handle_event("suppress-preview", _params, socket) do
     {addrs, counts} = ConnSuppress.classify(ConnSuppress.book_peers(), socket.assigns.peer_meta)
 
@@ -1195,15 +1204,24 @@ defmodule HighWireWeb.NetworkLive do
                   </span>
                 </div>
 
-                <p
+                <div
                   :if={
                     is_integer(@known_peers_cap) and
                       length(@report["knownPeers"] || []) > @known_peers_cap
                   }
-                  class="px-2 pt-1 text-[11px] text-faint"
+                  class="flex items-center justify-between gap-3 px-2 pt-1 text-[11px] text-faint"
                 >
-                  Showing first {@known_peers_cap} of {length(@report["knownPeers"] || [])}.
-                </p>
+                  <span>
+                    Showing first {@known_peers_cap} of {length(@report["knownPeers"] || [])}.
+                  </span>
+                  <button
+                    type="button"
+                    phx-click="show-all-peers"
+                    class="text-accent transition hover:text-paper"
+                  >
+                    Show all
+                  </button>
+                </div>
               </div>
             </section>
 

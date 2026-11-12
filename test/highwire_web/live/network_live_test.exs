@@ -394,6 +394,28 @@ defmodule HighWireWeb.NetworkLiveTest do
       assert html =~ "10.0.0.52:8008"
     end
 
+    test "the address book opens on a page, and Show all lifts the cap" do
+      peers =
+        for i <- 1..120 do
+          %{"address" => "net:10.0.0.#{i}:8008~shs:key#{i}", "autoconnect" => true}
+        end
+
+      html =
+        render_with_report(
+          %{"enabled" => true, "connections" => [], "knownPeers" => peers, "dialTry" => []},
+          %{known_peers_cap: 100}
+        )
+
+      assert html =~ "Showing first 100 of 120."
+      assert html =~ ~s(phx-click="show-all-peers")
+
+      {:ok, socket} = NetworkLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
+      assert socket.assigns.known_peers_cap == 100
+
+      {:noreply, socket} = NetworkLive.handle_event("show-all-peers", %{}, socket)
+      assert socket.assigns.known_peers_cap == :all
+    end
+
     test "marks known peers that never answered as no reply" do
       peers = [%{"address" => "net:dead.example:8008~shs:key", "autoconnect" => true}]
 
