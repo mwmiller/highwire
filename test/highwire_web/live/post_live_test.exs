@@ -15,10 +15,9 @@ defmodule HighWireWeb.PostLiveTest do
     # of an empty column
     assert html =~ "In this thread"
     assert html =~ "Nothing loaded"
-    # and a way back — the content column's own control, which Escape
-    # follows too (the rail row alone is a small target)
-    assert html =~ ~s(id="post-back")
-    assert html =~ "← Timeline"
+    # and a way back: the top bar's timeline icon, which Escape follows
+    assert html =~ ~s(id="rail-timeline")
+    refute html =~ ~s(id="post-back")
   end
 
   test "a transient fetch failure does not blank the thread on screen", %{conn: conn} do
@@ -350,20 +349,17 @@ defmodule HighWireWeb.PostLiveTest do
     assert html =~ "posted in #drama"
   end
 
-  test "the rail opens on the thread; the way back is the control beside the post",
+  test "the rail opens on the thread; the top bar's icon is the only way back",
        %{conn: conn} do
     key = Base.url_encode64("%rail=.sha256", padding: false)
     {:ok, _view, html} = live(conn, "/post/" <> key)
 
     assert html =~ "In this thread"
 
-    # A Timeline row of its own sat above the thread here: a second way
-    # back, on top of the app icon in the top bar. Two links to the
-    # timeline are left and not a third — the icon and the content
-    # column's control — and the rail opens where the timeline's first
-    # label opens.
-    assert html =~ ~s(id="post-back")
-    assert length(:binary.matches(html, ~s(href="/"))) == 2
+    # One link to the timeline is left on the page — the app icon in the
+    # top bar — and the rail opens where the timeline's first label opens.
+    assert html =~ ~s(id="rail-timeline")
+    assert length(:binary.matches(html, ~s(href="/"))) == 1
   end
 
   test "every message on the page has a place of its own", %{conn: conn} do

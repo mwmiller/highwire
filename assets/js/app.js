@@ -1225,14 +1225,16 @@ document.addEventListener("keydown", e => {
       return
     }
 
-    // On a post, Escape walks back to the timeline — unless a text
-    // field holds the key (the reply box's mention popup handles its
-    // own Escape on the way past) or that popup is still rendered.
+    // On a post, Escape walks back to the timeline through the app
+    // icon in the top bar — the one Timeline link the frame keeps —
+    // unless a text field holds the key (the reply box's mention popup
+    // handles its own Escape on the way past) or that popup is still
+    // rendered.
     if (!window.location.pathname.startsWith("/post/")) return
     const t = e.target
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return
     if (document.getElementById("mention-list")) return
-    const back = document.getElementById("post-back")
+    const back = document.getElementById("rail-timeline")
     if (!back) return
     e.preventDefault()
     back.click()

@@ -668,7 +668,6 @@ defmodule HighWireWeb.GamesLive do
           shown={count_games(@sections)}
           total={length(@games)}
         />
-        <Nav.rail_link navigate={~p"/"}>Timeline</Nav.rail_link>
       </:rail>
 
       <main class="flex-1 overflow-y-auto">

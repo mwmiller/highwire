@@ -83,6 +83,7 @@ defmodule HighWireWeb.Components.Nav do
         </div>
         <div class="flex items-center overflow-hidden rounded-md border border-edge">
           <.link
+            id="rail-timeline"
             navigate="/"
             title="Timeline"
             aria-label="Timeline"
