@@ -514,6 +514,37 @@ defmodule HighWireWeb.ProfileLiveTest do
       assert html =~ "Followed Feed"
       assert html =~ "/identicon/" <> Base.encode16(followed, case: :lower)
     end
+
+    test "the lists sort by display name, with the viewer first", %{conn: conn} do
+      target = "@profile-sort-target=.ed25519"
+      me = "@profile-sort-viewer=.ed25519"
+      zed = "@zzz-sort=.ed25519"
+      amy = "@aaa-sort=.ed25519"
+
+      HighWire.SSB.Profile.create()
+      HighWire.SSB.Profile.put_about(zed, %{"name" => "Zed"}, :own)
+      HighWire.SSB.Profile.put_about(amy, %{"name" => "Amy"}, :own)
+
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(target))
+
+      html =
+        view
+        |> seed(
+          self_id: me,
+          relations: %{
+            follows: [zed, me, amy],
+            blocked: [zed, me]
+          }
+        )
+        |> render()
+
+      # Amy sorts before Zed by name, and the viewer leads both lists even
+      # though the viewer's short key would otherwise sort between them.
+      assert view |> element("#profile-follows") |> render() |> relation_order() == [me, amy, zed]
+      assert view |> element("#profile-blocked") |> render() |> relation_order() == [me, zed]
+      assert html =~ "Following (3)"
+      assert html =~ "Blocking (2)"
+    end
   end
 
   # Engine off under test, so relationship state is seeded straight into
@@ -543,6 +574,12 @@ defmodule HighWireWeb.ProfileLiveTest do
 
     send(view.pid, :nudge)
     view
+  end
+
+  defp relation_order(html) do
+    ~r/href="\/profile\?id=([^"]+)"/
+    |> Regex.scan(html)
+    |> Enum.map(fn [_, encoded] -> URI.decode_www_form(encoded) end)
   end
 
   defp active?(pid), do: Map.has_key?(:sys.get_state(HighWire.Timeline).active, pid)

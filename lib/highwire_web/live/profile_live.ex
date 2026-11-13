@@ -661,6 +661,14 @@ defmodule HighWireWeb.ProfileLive do
 
   defp relations(_id, _self_id, _follows, _blocked), do: %{follows: [], blocked: []}
 
+  # The viewer's own feed leads when the profile's graph includes it; the
+  # rest read by the name shown, falling back to the key's short form.
+  defp sorted_relations(ids, self_id) do
+    Enum.sort_by(ids, fn id ->
+      {id != self_id, id |> Profile.display_name() |> String.downcase(), id}
+    end)
+  end
+
   defp profile_href(id), do: "/profile?id=" <> URI.encode_www_form(id)
 
   defp heading(%{name: name}) when is_binary(name), do: name
@@ -807,7 +815,7 @@ defmodule HighWireWeb.ProfileLive do
               </summary>
               <div class="mt-1 max-h-48 space-y-px overflow-y-auto">
                 <.link
-                  :for={followed <- @relations.follows}
+                  :for={followed <- sorted_relations(@relations.follows, @self_id)}
                   navigate={profile_href(followed)}
                   title={Profile.display_name(followed)}
                   class="flex items-center gap-2 rounded px-1 py-1 text-xs text-muted transition-colors hover:bg-raised hover:text-paper"
@@ -835,7 +843,7 @@ defmodule HighWireWeb.ProfileLive do
               </summary>
               <div class="mt-1 max-h-48 space-y-px overflow-y-auto">
                 <.link
-                  :for={blocked <- @relations.blocked}
+                  :for={blocked <- sorted_relations(@relations.blocked, @self_id)}
                   navigate={profile_href(blocked)}
                   title={Profile.display_name(blocked)}
                   class="flex items-center gap-2 rounded px-1 py-1 text-xs text-muted transition-colors hover:bg-raised hover:text-paper"
@@ -1006,7 +1014,6 @@ defmodule HighWireWeb.ProfileLive do
               controls that change it sit: a second "Following" up here
               only said again what the pill already says. Other feeds get
               nothing here. --%>
-              <p :if={@id == @self_id} class="mt-3 text-xs text-dim">you</p>
             </div>
           </div>
 
