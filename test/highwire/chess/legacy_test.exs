@@ -243,6 +243,15 @@ defmodule HighWire.Chess.LegacyTest do
       assert game.verdict == {:checkmate, :black}
     end
 
+    test "an invite with moves but no accept names the other seat" do
+      game = Legacy.fold([invite(), move(1, "e2", "e4", "e4", @after_e4, @white, 3)])
+
+      assert game.challenger == @white
+      assert game.accepter == @black
+      assert {game.white, game.black} == {@white, @black}
+      assert game.phase == :playing
+    end
+
     test "a game with no invite still names the player who moved" do
       game = Legacy.fold([move(1, "e2", "e4", "e4", @after_e4, @white, 3)])
 
