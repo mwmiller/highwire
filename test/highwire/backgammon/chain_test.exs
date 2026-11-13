@@ -141,7 +141,10 @@ defmodule HighWire.Backgammon.ChainTest do
       assert [d1, d2] = Chain.dice(a, b)
       assert d1 in 1..6 and d2 in 1..6
       assert Chain.dice(a, b) == [d1, d2]
-      assert Chain.dice(b, a) != [d1, d2] or d1 == d2
+
+      # A fixed pair whose reversed order gives different dice, so the
+      # assertion cannot flake on a hash coincidence.
+      assert Chain.dice(<<1::256>>, <<7::256>>) != Chain.dice(<<7::256>>, <<1::256>>)
     end
 
     test "one die mixes one half with one other" do

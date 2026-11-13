@@ -3,495 +3,517 @@ defmodule HighWireWeb.ProfileLiveTest do
 
   import Phoenix.LiveViewTest
 
-  test "profile renders and load-more with no engine is a no-op", %{conn: conn} do
-    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+  @id "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
 
-    assert html =~ "Posts"
-    # sidecar disabled under test: no more pages, nothing to load
-    refute html =~ "profile-sentinel"
+  describe "loading the page" do
+    test "profile renders and load-more with no engine is a no-op", %{conn: conn} do
+      id = @id
+      {:ok, view, html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
 
-    assert render_hook(view, "load-more", %{}) =~ "Posts"
+      assert html =~ "Posts"
+      # sidecar disabled under test: no more pages, nothing to load
+      refute html =~ "profile-sentinel"
+
+      assert render_hook(view, "load-more", %{}) =~ "Posts"
+    end
+
+    test "the render before the socket opens asks for no posts", %{conn: conn} do
+      id = @id
+
+      # A plain request, never upgraded to a socket: this is the HTML the
+      # browser paints while the LiveView connects.
+      html =
+        conn
+        |> get("/profile?id=" <> URI.encode_www_form(id))
+        |> html_response(200)
+
+      # The identity is on the page — the read model answers it either
+      # way — and the posts say they are on their way rather than asking
+      # the engine here, only for the connected mount to ask again.
+      assert html =~ id
+      assert html =~ "profile-posts-loading"
+      refute html =~ "profile-posts-error"
+      refute html =~ "profile-sentinel"
+    end
   end
 
-  test "the render before the socket opens asks for no posts", %{conn: conn} do
-    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+  describe "paging" do
+    test "a page on the way says so, and lands where it was asked for", %{conn: conn} do
+      id = @id
 
-    # A plain request, never upgraded to a socket: this is the HTML the
-    # browser paints while the LiveView connects.
-    html =
-      conn
-      |> get("/profile?id=" <> URI.encode_www_form(id))
-      |> html_response(200)
-
-    # The identity is on the page — the read model answers it either
-    # way — and the posts say they are on their way rather than asking
-    # the engine here, only for the connected mount to ask again.
-    assert html =~ id
-    assert html =~ "profile-posts-loading"
-    refute html =~ "profile-posts-error"
-    refute html =~ "profile-sentinel"
-  end
-
-  test "a page on the way says so, and lands where it was asked for", %{conn: conn} do
-    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-
-    msg = %{
-      "key" => "%p1.sha256",
-      "value" => %{
-        "author" => id,
-        "timestamp" => 1_700_000_000_000,
-        "content" => %{"type" => "post", "text" => "the thing"}
+      msg = %{
+        "key" => "%p1.sha256",
+        "value" => %{
+          "author" => id,
+          "timestamp" => 1_700_000_000_000,
+          "content" => %{"type" => "post", "text" => "the thing"}
+        }
       }
-    }
 
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
-    seed(view, %{id: id, messages: [msg], more: true, resume: "cursor-1"})
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+      seed(view, %{id: id, messages: [msg], more: true, resume: "cursor-1"})
 
-    # The sentinel asks for the next page, and the request is answered
-    # by the line going up: the reader can see the page is on its way.
-    html = element(view, "#profile-sentinel") |> render_hook("load-more", %{})
-    assert html =~ "Loading more…"
+      # The sentinel asks for the next page, and the request is answered
+      # by the line going up: the reader can see the page is on its way.
+      html = element(view, "#profile-sentinel") |> render_hook("load-more", %{})
+      assert html =~ "Loading more…"
 
-    # Under test the store has nothing behind the cursor: the line
-    # clears and the posts the reader had are still there.
-    send(view.pid, {:load_more, id, "cursor-1"})
-    html = render(view)
-    refute html =~ "Loading more…"
-    assert html =~ "the thing"
+      # Under test the store has nothing behind the cursor: the line
+      # clears and the posts the reader had are still there.
+      send(view.pid, {:load_more, id, "cursor-1"})
+      html = render(view)
+      refute html =~ "Loading more…"
+      assert html =~ "the thing"
 
-    # The profile moved on while the next page was out. The answer
-    # belongs to where the reader was, so it clears its own line and
-    # lands nothing on the feed now on screen.
-    seed(view, %{id: "@someone=.ed25519", messages: [msg], more: true, resume: "cursor-2"})
-    html = element(view, "#profile-sentinel") |> render_hook("load-more", %{})
-    assert html =~ "Loading more…"
+      # The profile moved on while the next page was out. The answer
+      # belongs to where the reader was, so it clears its own line and
+      # lands nothing on the feed now on screen.
+      seed(view, %{id: "@someone=.ed25519", messages: [msg], more: true, resume: "cursor-2"})
+      html = element(view, "#profile-sentinel") |> render_hook("load-more", %{})
+      assert html =~ "Loading more…"
 
-    seed(view, %{id: "@someone=.ed25519", messages: [msg], more: true, resume: "cursor-2"})
-    send(view.pid, {:load_more, id, "cursor-1"})
+      seed(view, %{id: "@someone=.ed25519", messages: [msg], more: true, resume: "cursor-2"})
+      send(view.pid, {:load_more, id, "cursor-1"})
 
-    html = render(view)
-    refute html =~ "Loading more…"
-    assert html =~ "the thing"
+      html = render(view)
+      refute html =~ "Loading more…"
+      assert html =~ "the thing"
+    end
   end
 
-  test "profile without an id defaults to the signed-in feed", %{conn: conn} do
-    {:ok, _view, html} = live(conn, "/profile")
-    # sidecar disabled under test: no signed-in feed resolves
-    assert html =~ "No feed selected."
+  describe "the feed's identity" do
+    test "profile without an id defaults to the signed-in feed", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/profile")
+      # sidecar disabled under test: no signed-in feed resolves
+      assert html =~ "No feed selected."
+    end
+
+    test "identity resolution falls back cleanly with no engine", %{conn: conn} do
+      id = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+      html = await_posts(view)
+
+      # alias: no name resolves through the engine, so the heading falls
+      # back to Patchwork's shortFeedId (id.slice(1, 10))
+      assert html =~ ~r/<h1[^>]*>\s*vkdMlsuBg\s*<\/h1>/
+      # the full id stays on the page for copy/paste
+      assert html =~ id
+
+      # avatar: no image resolves, so the tile falls back to the Excon
+      # identicon keyed by the feed id — never a broken image
+      assert html =~ "/identicon/" <> Base.encode16(id, case: :lower)
+
+      # The engine is off, so the page could not be read: the list says
+      # that — under the press that asks again — rather than passing for
+      # a feed with nothing in it.
+      assert html =~ "Not connected yet."
+      assert html =~ "Try again"
+      refute html =~ "No posts yet."
+      # engine off: no follow control is offered
+      refute html =~ "toggle-follow"
+
+      # the rail identity card carries the id a second time (header + rail)
+      assert length(Regex.scan(~r/vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=/, html)) >= 2
+    end
   end
 
-  test "identity resolution falls back cleanly with no engine", %{conn: conn} do
-    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
-    html = await_posts(view)
+  describe "the posts line" do
+    test "the posts line can be asked again, and the answer stands in for it", %{conn: conn} do
+      id = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+      html = await_posts(view)
 
-    # alias: no name resolves through the engine, so the heading falls
-    # back to Patchwork's shortFeedId (id.slice(1, 10))
-    assert html =~ ~r/<h1[^>]*>\s*vkdMlsuBg\s*<\/h1>/
-    # the full id stays on the page for copy/paste
-    assert html =~ id
+      # The page could not be read, so it says so under the press.
+      assert html =~ "profile-posts-error"
+      assert html =~ "Not connected yet."
 
-    # avatar: no image resolves, so the tile falls back to the Excon
-    # identicon keyed by the feed id — never a broken image
-    assert html =~ "/identicon/" <> Base.encode16(id, case: :lower)
+      # The press asks again. Under test the engine is still off, so the
+      # second ask fails the same way and the line stays — the press is
+      # answered, never a dead button over a silent list.
+      html = render_click(view, "retry-posts", %{})
+      assert html =~ "profile-posts-error"
+      assert html =~ "Not connected yet."
 
-    # The engine is off, so the page could not be read: the list says
-    # that — under the press that asks again — rather than passing for
-    # a feed with nothing in it.
-    assert html =~ "Not connected yet."
-    assert html =~ "Try again"
-    refute html =~ "No posts yet."
-    # engine off: no follow control is offered
-    refute html =~ "toggle-follow"
-
-    # the rail identity card carries the id a second time (header + rail)
-    assert length(Regex.scan(~r/vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=/, html)) >= 2
-  end
-
-  test "the posts line can be asked again, and the answer stands in for it", %{conn: conn} do
-    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
-    html = await_posts(view)
-
-    # The page could not be read, so it says so under the press.
-    assert html =~ "profile-posts-error"
-    assert html =~ "Not connected yet."
-
-    # The press asks again. Under test the engine is still off, so the
-    # second ask fails the same way and the line stays — the press is
-    # answered, never a dead button over a silent list.
-    html = render_click(view, "retry-posts", %{})
-    assert html =~ "profile-posts-error"
-    assert html =~ "Not connected yet."
-
-    # Once the posts are in hand the line is gone for good: the retry
-    # only speaks for an empty, failed list.
-    msg = %{
-      "key" => "%p1.sha256",
-      "value" => %{
-        "author" => id,
-        "timestamp" => 1_700_000_000_000,
-        "content" => %{"type" => "post", "text" => "the thing"}
+      # Once the posts are in hand the line is gone for good: the retry
+      # only speaks for an empty, failed list.
+      msg = %{
+        "key" => "%p1.sha256",
+        "value" => %{
+          "author" => id,
+          "timestamp" => 1_700_000_000_000,
+          "content" => %{"type" => "post", "text" => "the thing"}
+        }
       }
-    }
 
-    seed(view, %{id: id, messages: [msg], posts_error: nil})
-    html = render(view)
-    refute html =~ "profile-posts-error"
-    assert html =~ "the thing"
+      seed(view, %{id: id, messages: [msg], posts_error: nil})
+      html = render(view)
+      refute html =~ "profile-posts-error"
+      assert html =~ "the thing"
+    end
   end
 
-  test "a short dev-era handle renders whole, not stubbed", %{conn: conn} do
-    {:ok, _view, html} = live(conn, "/profile?id=" <> URI.encode_www_form("@dtBy.ed25519"))
+  describe "the display fallbacks" do
+    test "a short dev-era handle renders whole, not stubbed", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/profile?id=" <> URI.encode_www_form("@dtBy.ed25519"))
 
-    # Nine characters off a short handle just cuts the readable part
-    # ("dtBy.ed25"); the stub is for full base64 feed ids only.
-    assert html =~ ~r/<h1[^>]*>\s*dtBy\.ed25519\s*<\/h1>/
-    refute html =~ "dtBy.ed25<"
+      # Nine characters off a short handle just cuts the readable part
+      # ("dtBy.ed25"); the stub is for full base64 feed ids only.
+      assert html =~ ~r/<h1[^>]*>\s*dtBy\.ed25519\s*<\/h1>/
+      refute html =~ "dtBy.ed25<"
+    end
+
+    test "the rail never sits empty without an id", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/profile")
+
+      assert html =~ "Open a profile from the timeline"
+    end
   end
 
-  test "the rail never sits empty without an id", %{conn: conn} do
-    {:ok, _view, html} = live(conn, "/profile")
+  describe "opening a post" do
+    test "profile posts open their thread like timeline posts", %{conn: conn} do
+      id = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
 
-    assert html =~ "Open a profile from the timeline"
-  end
+      key = "fake-post-key"
 
-  test "profile posts open their thread like timeline posts", %{conn: conn} do
-    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
-
-    key = "fake-post-key"
-
-    row = %{
-      "key" => key,
-      "value" => %{
-        "content" => %{"type" => "post", "text" => "seedit"},
-        "timestamp" => 1_700_000_000_000
+      row = %{
+        "key" => key,
+        "value" => %{
+          "content" => %{"type" => "post", "text" => "seedit"},
+          "timestamp" => 1_700_000_000_000
+        }
       }
-    }
 
-    # Engine is off under test, so the profile mounts with no posts.
-    # Seed one row straight into the assigns and record the old value in
-    # __changed__ (LiveView's dirty map) so the next render computes a
-    # diff for :messages instead of serving the cached tree.
-    :sys.replace_state(view.pid, fn state ->
-      socket = state.socket
-      assigns = socket.assigns
-      changed = Map.put(assigns.__changed__, :messages, assigns.messages)
+      # Engine is off under test, so the profile mounts with no posts.
+      # Seed one row straight into the assigns and record the old value in
+      # __changed__ (LiveView's dirty map) so the next render computes a
+      # diff for :messages instead of serving the cached tree.
+      :sys.replace_state(view.pid, fn state ->
+        socket = state.socket
+        assigns = socket.assigns
+        changed = Map.put(assigns.__changed__, :messages, assigns.messages)
 
-      assigns =
-        assigns
-        |> Map.put(:messages, [row])
-        |> Map.put(:__changed__, changed)
+        assigns =
+          assigns
+          |> Map.put(:messages, [row])
+          |> Map.put(:__changed__, changed)
 
-      %{state | socket: %{socket | assigns: assigns}}
-    end)
+        %{state | socket: %{socket | assigns: assigns}}
+      end)
 
-    # Any message wakes the view so it computes that diff — the label
-    # tick this replaced is gone; ages now refresh client-side from
-    # the data-ts the row ships with.
-    send(view.pid, :nudge)
+      # Any message wakes the view so it computes that diff — the label
+      # tick this replaced is gone; ages now refresh client-side from
+      # the data-ts the row ships with.
+      send(view.pid, :nudge)
 
-    html = render(view)
-    assert html =~ "phx-hook=\"OpenPost\""
-    assert html =~ "data-key=\"fake-post-key\""
-    assert html =~ "cursor-pointer"
-    assert html =~ "seedit"
-    assert html =~ ~s(data-ts="1700000000000")
+      html = render(view)
+      assert html =~ "phx-hook=\"OpenPost\""
+      assert html =~ "data-key=\"fake-post-key\""
+      assert html =~ "cursor-pointer"
+      assert html =~ "seedit"
+      assert html =~ ~s(data-ts="1700000000000")
 
-    render_hook(view, "open-post", %{"key" => key})
-    assert_redirect(view, "/post/" <> Base.url_encode64(key, padding: false))
+      render_hook(view, "open-post", %{"key" => key})
+      assert_redirect(view, "/post/" <> Base.url_encode64(key, padding: false))
+    end
   end
 
-  # The timeline refreshes only while a view says it is being read, and
-  # the only Follow button lives here: a profile page that never
-  # registered would leave the heartbeat stopped while the press it
-  # just took waits for someone to open a timeline again.
-  test "the profile holds the timeline active, and lets go when it is not read", %{conn: conn} do
-    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
+  describe "activity" do
+    # The timeline refreshes only while a view says it is being read, and
+    # the only Follow button lives here: a profile page that never
+    # registered would leave the heartbeat stopped while the press it
+    # just took waits for someone to open a timeline again.
+    test "the profile holds the timeline active, and lets go when it is not read", %{conn: conn} do
+      id = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
 
-    await_active(view.pid, true)
+      await_active(view.pid, true)
 
-    # The pair the TabActivity hook drives: an unfocused window stops
-    # the timers here exactly as it does on the timeline.
-    render_click(view, "tab-inactive", %{})
-    await_active(view.pid, false)
+      # The pair the TabActivity hook drives: an unfocused window stops
+      # the timers here exactly as it does on the timeline.
+      render_click(view, "tab-inactive", %{})
+      await_active(view.pid, false)
 
-    render_click(view, "tab-active", %{})
-    await_active(view.pid, true)
+      render_click(view, "tab-active", %{})
+      await_active(view.pid, true)
+    end
   end
 
-  test "the rail offers Follow and Block, and reflects the relationship", %{conn: conn} do
-    me = "@me=.ed25519"
-    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+  describe "relationships" do
+    test "the rail offers Follow and Block, and reflects the relationship", %{conn: conn} do
+      me = "@me=.ed25519"
+      peer = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
 
-    seed(view, status: :ok, self_id: me, follows: [me], blocked: [])
-    html = render(view)
+      seed(view, status: :ok, self_id: me, follows: [me], blocked: [])
+      html = render(view)
 
-    assert html =~ "toggle-follow"
-    assert html =~ "toggle-block"
-    assert html =~ "Follow"
-    # the label is exactly "Block" — no block is in force
-    refute html =~ "Unblock"
-    refute html =~ "Blocked"
+      assert html =~ "toggle-follow"
+      assert html =~ "toggle-block"
+      assert html =~ "Follow"
+      # the label is exactly "Block" — no block is in force
+      refute html =~ "Unblock"
+      refute html =~ "Blocked"
 
-    # a click publishes through the same chokepoint as follow (the engine
-    # is off, so the publish refuses — the view must not come down with it)
-    assert render_click(view, "toggle-block", %{"id" => peer}) =~ "toggle-block"
+      # a click publishes through the same chokepoint as follow (the engine
+      # is off, so the publish refuses — the view must not come down with it)
+      assert render_click(view, "toggle-block", %{"id" => peer}) =~ "Blocking…"
 
-    seed(view, blocked: [peer])
-    html = render(view)
+      seed(view, blocked: [peer])
+      html = render(view)
 
-    assert html =~ "Unblock"
-    # The state is named, not left to be inferred from which control is
-    # on screen, and a blocked feed's posts are hidden rather than
-    # offered as an empty feed.
-    assert html =~ "Blocked"
-    assert html =~ "You block this feed, so its posts are hidden."
-    refute html =~ "No posts yet."
-    # a blocked feed is not offered the follow control at all
-    refute html =~ "toggle-follow"
+      assert html =~ "Unblock"
+      # The state is named, not left to be inferred from which control is
+      # on screen, and a blocked feed's posts are hidden rather than
+      # offered as an empty feed.
+      assert html =~ "Blocked"
+      assert html =~ "You block this feed, so its posts are hidden."
+      refute html =~ "No posts yet."
+      # a blocked feed is not offered the follow control at all
+      refute html =~ "toggle-follow"
+    end
+
+    test "every publish control holds the press while the engine takes its time", %{conn: conn} do
+      peer = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+      seed(view, status: :ok, self_id: "@me=.ed25519", follows: [peer], blocked: [])
+
+      # The engine can take seconds, and the reader has to see the press
+      # was taken before the engine answers it: the control names the verb
+      # in flight — the one it is undoing, since the label beside it
+      # already reads "Following" — and goes dead under the finger.
+      held = render_click(view, "toggle-follow", %{"id" => peer})
+
+      assert held =~ "Unfollowing…"
+      assert held =~ ~r/phx-click="toggle-follow"[^>]*disabled/
+
+      held = render_click(view, "toggle-block", %{"id" => peer})
+
+      assert held =~ "Blocking…"
+      assert held =~ ~r/phx-click="toggle-block"[^>]*disabled/
+    end
+
+    test "a publish the engine refuses says so under the buttons", %{conn: conn} do
+      peer = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+      seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
+
+      # The engine is off under test, so the publish comes back refused.
+      # The refusal lands under the buttons and the press is let go, so a
+      # click that did not take says so instead of reading as one that did
+      # nothing at all.
+      assert render_click(view, "toggle-follow", %{"id" => peer}) =~ "Following…"
+
+      html = render(view)
+      assert html =~ "Not connected yet. Try again in a moment."
+      refute html =~ "Following…"
+
+      assert render_click(view, "toggle-block", %{"id" => peer}) =~ "Blocking…"
+
+      html = render(view)
+      assert html =~ "Not connected yet. Try again in a moment."
+      refute html =~ "Blocking…"
+    end
   end
 
-  test "every publish control holds the press while the engine takes its time", %{conn: conn} do
-    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+  describe "about" do
+    test "the about info is edited and published from the profile", %{conn: conn} do
+      peer = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
 
-    seed(view, status: :ok, self_id: "@me=.ed25519", follows: [peer], blocked: [])
+      # The engine is off: nothing is offered that cannot answer a press.
+      refute render(view) =~ "edit-about"
 
-    # The engine can take seconds, and the reader has to see the press
-    # was taken before the engine answers it: the control names the verb
-    # in flight — the one it is undoing, since the label beside it
-    # already reads "Following" — and goes dead under the finger.
-    held = render_click(view, "toggle-follow", %{"id" => peer})
+      seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
 
-    assert held =~ "Unfollowing…"
-    assert held =~ ~r/phx-click="toggle-follow"[^>]*disabled/
+      assert render(view) =~ ~r/phx-click="edit-about"/
 
-    held = render_click(view, "toggle-block", %{"id" => peer})
+      html = render_click(view, "edit-about", %{})
+      assert html =~ ~r/id="about-form"/
+      assert html =~ ~r/id="about-name"/
+      assert html =~ ~r/id="about-bio"/
 
-    assert held =~ "Blocking…"
-    assert held =~ ~r/phx-click="toggle-block"[^>]*disabled/
+      # The press is answered by holding Save down the way Follow and
+      # Block hold theirs: the verb in flight, the button dead under it.
+      held =
+        render_submit(view, "save-about", %{"name" => "Our alias", "description" => "short bio"})
+
+      assert held =~ "Saving…"
+      assert held =~ ~r/type="submit"[^>]*disabled/
+
+      # The engine is off under test, so the publish comes back refused:
+      # the line lands, the press is let go, and the form stays up with
+      # what was typed so the save can be pressed again.
+      html = render(view)
+      assert html =~ "Not connected yet. Try again in a moment."
+      refute html =~ "Saving…"
+      assert html =~ ~r/id="about-name"[^>]*value="Our alias"/
+      assert html =~ "short bio"
+    end
+
+    test "a save with nothing changed sends nothing and closes the form", %{conn: conn} do
+      peer = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+      seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
+
+      render_click(view, "edit-about", %{})
+
+      # The page shows no name or bio for this feed, so submitting the
+      # fields as they stand changes nothing: the press is answered by
+      # the form closing, with no publish behind it — the engine being
+      # off would otherwise have refused, and no refusal line appears.
+      html = render_submit(view, "save-about", %{"name" => "", "description" => ""})
+
+      refute html =~ "about-form"
+      refute html =~ "Saving…"
+
+      # The refusal that must not appear is the about one — the posts
+      # list carries its own line, and the two say different things.
+      refute html =~ "Not connected yet. Try again in a moment."
+
+      # Cancel answers the same way when the reader walks back out.
+      html = render_click(view, "edit-about", %{})
+      assert html =~ "about-form"
+
+      html = render_click(view, "cancel-about", %{})
+      refute html =~ "about-form"
+    end
+
+    test "the avatar is staged in the form and published with the save", %{conn: conn} do
+      peer = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+      seed(view,
+        status: :ok,
+        self_id: "@me=.ed25519",
+        follows: [],
+        blocked: [],
+        profile: %{name: "Their word", image: "&base=.sha256", description: "their bio"}
+      )
+
+      html = render_click(view, "edit-about", %{})
+
+      # The form carries the picture the page shows, and the controls to
+      # change it — the file input behind Choose image, and Remove, which
+      # is only offered when there is a picture to take back.
+      assert html =~ ~r/id="avatar-attach"/
+      assert html =~ "data-avatar-input"
+      assert html =~ "Choose image"
+      assert html =~ "Remove"
+
+      # The hook's answer lands the picked ref: the preview follows it,
+      # and the save below carries it. The hook lives on the ignored div
+      # (so a re-render cannot tear down the file input mid-pick), so the
+      # event is addressed to the view — the way it arrives from the
+      # client.
+      html = render_hook(view, "avatar-picked", %{"ref" => "&new=.sha256"})
+
+      # Under test the store has no blob for the ref, so the tile falls
+      # back — what matters here is that the ref is the one staged, which
+      # the Remove control's presence confirms.
+      assert html =~ "Remove"
+
+      # The press is held down while the engine takes it, the way Save
+      # always holds.
+      held =
+        render_submit(view, "save-about", %{"name" => "Their word", "description" => "their bio"})
+
+      assert held =~ "Saving…"
+
+      # The engine is off under test: the publish comes back refused, the
+      # line lands, the press is let go, and the form stays up with the
+      # picture still staged so the save can be pressed again.
+      html = render(view)
+      assert html =~ "Not connected yet. Try again in a moment."
+      refute html =~ "Saving…"
+      assert html =~ "Remove"
+    end
+
+    test "Remove takes the picture back, and the save publishes the clear", %{conn: conn} do
+      peer = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+      seed(view,
+        status: :ok,
+        self_id: "@me=.ed25519",
+        follows: [],
+        blocked: [],
+        profile: %{name: nil, image: "&base=.sha256", description: nil}
+      )
+
+      render_click(view, "edit-about", %{})
+      assert render(view) =~ "Remove"
+
+      # Remove clears the staged picture: the control goes with it, since
+      # there is nothing left to take back.
+      html = render_click(view, "avatar-clear", %{})
+      refute html =~ "Remove"
+
+      # The save still goes through the held-down press — and the engine
+      # being off refuses it, so the clear can be pressed again.
+      held = render_submit(view, "save-about", %{"name" => "", "description" => ""})
+      assert held =~ "Saving…"
+
+      html = render(view)
+      assert html =~ "Not connected yet. Try again in a moment."
+      refute html =~ "Saving…"
+    end
+
+    test "an upload that fails says so and clears the working state", %{conn: conn} do
+      peer = @id
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+
+      seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
+      render_click(view, "edit-about", %{})
+
+      html = render_hook(view, "avatar-uploading", %{})
+      assert html =~ "Uploading…"
+
+      # Save holds while the picture is on its way: a press cannot publish
+      # a picture the reader has not landed yet.
+      held = render_submit(view, "save-about", %{"name" => "n", "description" => "b"})
+      refute held =~ "Saving…"
+
+      html = render_hook(view, "avatar-failed", %{})
+      # Phoenix escapes the apostrophe to &#39; in the rendered HTML, so
+      # match on the text around it rather than the raw string.
+      assert html =~ "didn&#39;t upload. Try again."
+      refute html =~ "Uploading…"
+    end
   end
 
-  test "a publish the engine refuses says so under the buttons", %{conn: conn} do
-    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
+  describe "the relationship lists" do
+    test "the profile shows whom its feed follows and blocks", %{conn: conn} do
+      id = @id
+      followed = "@followed=.ed25519"
+      blocked = "@blocked=.ed25519"
 
-    seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
+      # The pill resolves through the same read model the timeline and the
+      # rail use, so a feed the store can name shows that name by its face.
+      HighWire.SSB.Profile.create()
+      HighWire.SSB.Profile.put_about(followed, %{"name" => "Followed Feed"}, :own)
 
-    # The engine is off under test, so the publish comes back refused.
-    # The refusal lands under the buttons and the press is let go, so a
-    # click that did not take says so instead of reading as one that did
-    # nothing at all.
-    assert render_click(view, "toggle-follow", %{"id" => peer}) =~ "Following…"
+      {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
 
-    html = render(view)
-    assert html =~ "Not connected yet. Try again in a moment."
-    refute html =~ "Following…"
+      html =
+        view
+        |> seed(relations: %{follows: [followed], blocked: [blocked]})
+        |> render()
 
-    assert render_click(view, "toggle-block", %{"id" => peer}) =~ "Blocking…"
-
-    html = render(view)
-    assert html =~ "Not connected yet. Try again in a moment."
-    refute html =~ "Blocking…"
-  end
-
-  test "the about info is edited and published from the profile", %{conn: conn} do
-    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
-
-    # The engine is off: nothing is offered that cannot answer a press.
-    refute render(view) =~ "edit-about"
-
-    seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
-
-    assert render(view) =~ ~r/phx-click="edit-about"/
-
-    html = render_click(view, "edit-about", %{})
-    assert html =~ ~r/id="about-form"/
-    assert html =~ ~r/id="about-name"/
-    assert html =~ ~r/id="about-bio"/
-
-    # The press is answered by holding Save down the way Follow and
-    # Block hold theirs: the verb in flight, the button dead under it.
-    held =
-      render_submit(view, "save-about", %{"name" => "Our alias", "description" => "short bio"})
-
-    assert held =~ "Saving…"
-    assert held =~ ~r/type="submit"[^>]*disabled/
-
-    # The engine is off under test, so the publish comes back refused:
-    # the line lands, the press is let go, and the form stays up with
-    # what was typed so the save can be pressed again.
-    html = render(view)
-    assert html =~ "Not connected yet. Try again in a moment."
-    refute html =~ "Saving…"
-    assert html =~ ~r/id="about-name"[^>]*value="Our alias"/
-    assert html =~ "short bio"
-  end
-
-  test "a save with nothing changed sends nothing and closes the form", %{conn: conn} do
-    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
-
-    seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
-
-    render_click(view, "edit-about", %{})
-
-    # The page shows no name or bio for this feed, so submitting the
-    # fields as they stand changes nothing: the press is answered by
-    # the form closing, with no publish behind it — the engine being
-    # off would otherwise have refused, and no refusal line appears.
-    html = render_submit(view, "save-about", %{"name" => "", "description" => ""})
-
-    refute html =~ "about-form"
-    refute html =~ "Saving…"
-
-    # The refusal that must not appear is the about one — the posts
-    # list carries its own line, and the two say different things.
-    refute html =~ "Not connected yet. Try again in a moment."
-
-    # Cancel answers the same way when the reader walks back out.
-    html = render_click(view, "edit-about", %{})
-    assert html =~ "about-form"
-
-    html = render_click(view, "cancel-about", %{})
-    refute html =~ "about-form"
-  end
-
-  test "the avatar is staged in the form and published with the save", %{conn: conn} do
-    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
-
-    seed(view,
-      status: :ok,
-      self_id: "@me=.ed25519",
-      follows: [],
-      blocked: [],
-      profile: %{name: "Their word", image: "&base=.sha256", description: "their bio"}
-    )
-
-    html = render_click(view, "edit-about", %{})
-
-    # The form carries the picture the page shows, and the controls to
-    # change it — the file input behind Choose image, and Remove, which
-    # is only offered when there is a picture to take back.
-    assert html =~ ~r/id="avatar-attach"/
-    assert html =~ "data-avatar-input"
-    assert html =~ "Choose image"
-    assert html =~ "Remove"
-
-    # The hook's answer lands the picked ref: the preview follows it,
-    # and the save below carries it. The hook lives on the ignored div
-    # (so a re-render cannot tear down the file input mid-pick), so the
-    # event is addressed to the view — the way it arrives from the
-    # client.
-    html = render_hook(view, "avatar-picked", %{"ref" => "&new=.sha256"})
-
-    # Under test the store has no blob for the ref, so the tile falls
-    # back — what matters here is that the ref is the one staged, which
-    # the Remove control's presence confirms.
-    assert html =~ "Remove"
-
-    # The press is held down while the engine takes it, the way Save
-    # always holds.
-    held =
-      render_submit(view, "save-about", %{"name" => "Their word", "description" => "their bio"})
-
-    assert held =~ "Saving…"
-
-    # The engine is off under test: the publish comes back refused, the
-    # line lands, the press is let go, and the form stays up with the
-    # picture still staged so the save can be pressed again.
-    html = render(view)
-    assert html =~ "Not connected yet. Try again in a moment."
-    refute html =~ "Saving…"
-    assert html =~ "Remove"
-  end
-
-  test "Remove takes the picture back, and the save publishes the clear", %{conn: conn} do
-    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
-
-    seed(view,
-      status: :ok,
-      self_id: "@me=.ed25519",
-      follows: [],
-      blocked: [],
-      profile: %{name: nil, image: "&base=.sha256", description: nil}
-    )
-
-    render_click(view, "edit-about", %{})
-    assert render(view) =~ "Remove"
-
-    # Remove clears the staged picture: the control goes with it, since
-    # there is nothing left to take back.
-    html = render_click(view, "avatar-clear", %{})
-    refute html =~ "Remove"
-
-    # The save still goes through the held-down press — and the engine
-    # being off refuses it, so the clear can be pressed again.
-    held = render_submit(view, "save-about", %{"name" => "", "description" => ""})
-    assert held =~ "Saving…"
-
-    html = render(view)
-    assert html =~ "Not connected yet. Try again in a moment."
-    refute html =~ "Saving…"
-  end
-
-  test "an upload that fails says so and clears the working state", %{conn: conn} do
-    peer = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(peer))
-
-    seed(view, status: :ok, self_id: "@me=.ed25519", follows: [], blocked: [])
-    render_click(view, "edit-about", %{})
-
-    html = render_hook(view, "avatar-uploading", %{})
-    assert html =~ "Uploading…"
-
-    # Save holds while the picture is on its way: a press cannot publish
-    # a picture the reader has not landed yet.
-    held = render_submit(view, "save-about", %{"name" => "n", "description" => "b"})
-    refute held =~ "Saving…"
-
-    html = render_hook(view, "avatar-failed", %{})
-    # Phoenix escapes the apostrophe to &#39; in the rendered HTML, so
-    # match on the text around it rather than the raw string.
-    assert html =~ "didn&#39;t upload. Try again."
-    refute html =~ "Uploading…"
-  end
-
-  test "the profile shows whom its feed follows and blocks", %{conn: conn} do
-    id = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
-    followed = "@followed=.ed25519"
-    blocked = "@blocked=.ed25519"
-
-    # The pill resolves through the same read model the timeline and the
-    # rail use, so a feed the store can name shows that name by its face.
-    HighWire.SSB.Profile.create()
-    HighWire.SSB.Profile.put_about(followed, %{"name" => "Followed Feed"}, :own)
-
-    {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
-
-    html =
-      view
-      |> seed(relations: %{follows: [followed], blocked: [blocked]})
-      |> render()
-
-    # The counts are the identity's own graph, and each name opens the
-    # feed it names — the list is how a reader gets from "this feed
-    # follows someone" to that someone.
-    assert html =~ "Relationships"
-    assert html =~ "Following (1)"
-    assert html =~ "Blocking (1)"
-    assert html =~ "/profile?id=" <> URI.encode_www_form(followed)
-    assert html =~ "/profile?id=" <> URI.encode_www_form(blocked)
-    assert html =~ "Followed Feed"
-    assert html =~ "/identicon/" <> Base.encode16(followed, case: :lower)
+      # The counts are the identity's own graph, and each name opens the
+      # feed it names — the list is how a reader gets from "this feed
+      # follows someone" to that someone.
+      assert html =~ "Relationships"
+      assert html =~ "Following (1)"
+      assert html =~ "Blocking (1)"
+      assert html =~ "/profile?id=" <> URI.encode_www_form(followed)
+      assert html =~ "/profile?id=" <> URI.encode_www_form(blocked)
+      assert html =~ "Followed Feed"
+      assert html =~ "/identicon/" <> Base.encode16(followed, case: :lower)
+    end
   end
 
   # Engine off under test, so relationship state is seeded straight into

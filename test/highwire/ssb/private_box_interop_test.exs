@@ -119,80 +119,86 @@ defmodule HighWire.SSB.PrivateBoxInteropTest do
     end
   end
 
-  test "the engine opens a box this module wrote" do
-    kp = keypair()
-    id = feed_id(kp)
-    home = Path.join(System.tmp_dir!(), "hw-box-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf(home) end)
-    write_secret!(home, kp)
+  describe "the engine opens our boxes" do
+    test "the engine opens a box this module wrote" do
+      kp = keypair()
+      id = feed_id(kp)
+      home = Path.join(System.tmp_dir!(), "hw-box-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf(home) end)
+      write_secret!(home, kp)
 
-    plaintext = ~s({"type":"post","text":"written by the app"})
-    box = PrivateBox.encrypt(plaintext, [id])
+      plaintext = ~s({"type":"post","text":"written by the app"})
+      box = PrivateBox.encrypt(plaintext, [id])
 
-    opened =
-      engine_eval(
-        "begin " <>
-          "{ok, _} = config:start_link(\"no-such-cfg\"), " <>
-          "{ok, _} = keys:start_link(), " <>
-          "Result = case private_box:decrypt(<<" <>
-          inspect(box) <>
-          ">>) of {ok, P} -> P; Other -> Other end, " <>
-          "gen_server:stop(keys), gen_server:stop(config), Result end",
-        home
-      )
+      opened =
+        engine_eval(
+          "begin " <>
+            "{ok, _} = config:start_link(\"no-such-cfg\"), " <>
+            "{ok, _} = keys:start_link(), " <>
+            "Result = case private_box:decrypt(<<" <>
+            inspect(box) <>
+            ">>) of {ok, P} -> P; Other -> Other end, " <>
+            "gen_server:stop(keys), gen_server:stop(config), Result end",
+          home
+        )
 
-    assert opened == plaintext
-  end
-
-  test "this module opens a box the engine wrote" do
-    kp = keypair()
-    id = feed_id(kp)
-    plaintext = ~s({"type":"post","text":"written by the engine"})
-
-    box =
-      engine_eval(
-        "private_box:encrypt(<<" <>
-          inspect(plaintext) <>
-          ">>, [<<" <> inspect(id) <> ">>])",
-        nil
-      )
-
-    assert String.ends_with?(box, ".box")
-    assert {:ok, ^plaintext} = PrivateBox.decrypt(box, kp.secret)
-  end
-
-  test "the engine's is_private and ours agree" do
-    kp = keypair()
-
-    for content <- [
-          PrivateBox.encrypt(~s({"type":"post"}), [feed_id(kp)]),
-          "%abc=.sha256",
-          "plain text"
-        ] do
-      theirs = engine_eval("private_box:is_private(<<" <> inspect(content) <> ">>)", nil)
-
-      assert theirs == PrivateBox.private?(content)
+      assert opened == plaintext
     end
   end
 
-  test "the engine does not open a box addressed only to someone else" do
-    addressee = keypair()
-    reader = keypair()
-    home = Path.join(System.tmp_dir!(), "hw-box-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf(home) end)
-    write_secret!(home, reader)
+  describe "we open the engine's boxes" do
+    test "this module opens a box the engine wrote" do
+      kp = keypair()
+      id = feed_id(kp)
+      plaintext = ~s({"type":"post","text":"written by the engine"})
 
-    box = PrivateBox.encrypt(~s({"type":"post","text":"not for you"}), [feed_id(addressee)])
+      box =
+        engine_eval(
+          "private_box:encrypt(<<" <>
+            inspect(plaintext) <>
+            ">>, [<<" <> inspect(id) <> ">>])",
+          nil
+        )
 
-    assert engine_eval(
-             "begin " <>
-               "{ok, _} = config:start_link(\"no-such-cfg\"), " <>
-               "{ok, _} = keys:start_link(), " <>
-               "Result = private_box:decrypt(<<" <>
-               inspect(box) <>
-               ">>), " <>
-               "gen_server:stop(keys), gen_server:stop(config), Result end",
-             home
-           ) == :not_for_me
+      assert String.ends_with?(box, ".box")
+      assert {:ok, ^plaintext} = PrivateBox.decrypt(box, kp.secret)
+    end
+  end
+
+  describe "recognising a box" do
+    test "the engine's is_private and ours agree" do
+      kp = keypair()
+
+      for content <- [
+            PrivateBox.encrypt(~s({"type":"post"}), [feed_id(kp)]),
+            "%abc=.sha256",
+            "plain text"
+          ] do
+        theirs = engine_eval("private_box:is_private(<<" <> inspect(content) <> ">>)", nil)
+
+        assert theirs == PrivateBox.private?(content)
+      end
+    end
+
+    test "the engine does not open a box addressed only to someone else" do
+      addressee = keypair()
+      reader = keypair()
+      home = Path.join(System.tmp_dir!(), "hw-box-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf(home) end)
+      write_secret!(home, reader)
+
+      box = PrivateBox.encrypt(~s({"type":"post","text":"not for you"}), [feed_id(addressee)])
+
+      assert engine_eval(
+               "begin " <>
+                 "{ok, _} = config:start_link(\"no-such-cfg\"), " <>
+                 "{ok, _} = keys:start_link(), " <>
+                 "Result = private_box:decrypt(<<" <>
+                 inspect(box) <>
+                 ">>), " <>
+                 "gen_server:stop(keys), gen_server:stop(config), Result end",
+               home
+             ) == :not_for_me
+    end
   end
 end

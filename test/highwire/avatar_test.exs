@@ -14,60 +14,67 @@ defmodule HighWire.AvatarTest do
     {"@0W1ekqmNIN4e1", "#53ac99"}
   ]
 
-  test "hex/1 matches color-hash v1.0.3 byte for byte" do
-    for {id, expected} <- @vectors do
-      assert Avatar.hex(id) == expected, "hex(#{inspect(id)})"
+  describe "the id" do
+    test "hex/1 matches color-hash v1.0.3 byte for byte" do
+      for {id, expected} <- @vectors do
+        assert Avatar.hex(id) == expected, "hex(#{inspect(id)})"
+      end
+    end
+
+    test "short_id/1 is Patchwork's shortFeedId (id.slice(1, 10))" do
+      assert Avatar.short_id("@DgsA6kZleyiuliE8SeUDtF3Slw3f92tUaT2xjH5cNg8=.ed25519") ==
+               "DgsA6kZle"
     end
   end
 
-  test "short_id/1 is Patchwork's shortFeedId (id.slice(1, 10))" do
-    assert Avatar.short_id("@DgsA6kZleyiuliE8SeUDtF3Slw3f92tUaT2xjH5cNg8=.ed25519") ==
-             "DgsA6kZle"
+  describe "display names" do
+    test "display_name/2 resolves the alias first, then the short id" do
+      id = "@DgsA6kZleyiuliE8SeUDtF3Slw3f92tUaT2xjH5cNg8=.ed25519"
+      profiles = %{id => %{name: "Matt", image: nil}}
+
+      # The profiles may arrive bare or as a row ctx carrying one.
+      assert Avatar.display_name(id, profiles) == "Matt"
+      assert Avatar.display_name(id, %{profiles: profiles}) == "Matt"
+
+      assert Avatar.display_name(id, %{}) == "DgsA6kZle"
+      # A name that is not a binary is no name at all.
+      assert Avatar.display_name(id, %{id => %{name: 42}}) == "DgsA6kZle"
+    end
+
+    test "display_name/2 always names a feed by its alias or its own key" do
+      id = "@nobody=.ed25519"
+
+      assert Avatar.display_name(id, %{}) == Avatar.short_id(id)
+    end
+
+    test "display_name/2 names nobody for a half-parsed id instead of raising" do
+      assert Avatar.display_name(nil, %{}) == ""
+      assert Avatar.display_name(42, %{profiles: %{}}) == ""
+    end
   end
 
-  test "display_name/2 resolves the alias first, then the short id" do
-    id = "@DgsA6kZleyiuliE8SeUDtF3Slw3f92tUaT2xjH5cNg8=.ed25519"
-    profiles = %{id => %{name: "Matt", image: nil}}
+  describe "the image" do
+    test "identicon_url/1 hex-encodes the feed id" do
+      assert Avatar.identicon_url("@ab=.ed25519") ==
+               "/identicon/" <> Base.encode16("@ab=.ed25519", case: :lower)
+    end
 
-    # The profiles may arrive bare or as a row ctx carrying one.
-    assert Avatar.display_name(id, profiles) == "Matt"
-    assert Avatar.display_name(id, %{profiles: profiles}) == "Matt"
+    test "avatar_src/1 prefers the blob and falls back to the identicon" do
+      digest = :crypto.strong_rand_bytes(32)
+      ref = "&" <> Base.encode64(digest) <> ".sha256"
+      hex = Base.encode16(digest, case: :lower)
 
-    assert Avatar.display_name(id, %{}) == "DgsA6kZle"
-    # A name that is not a binary is no name at all.
-    assert Avatar.display_name(id, %{id => %{name: 42}}) == "DgsA6kZle"
+      assert Avatar.avatar_src("@id", ref) == "/blob/" <> hex
+      assert Avatar.avatar_src("@id", nil) == Avatar.identicon_url("@id")
+      assert Avatar.avatar_src("@id", "not-a-ref") == Avatar.identicon_url("@id")
+    end
   end
 
-  test "display_name/2 always names a feed by its alias or its own key" do
-    id = "@nobody=.ed25519"
-
-    assert Avatar.display_name(id, %{}) == Avatar.short_id(id)
-    refute Avatar.display_name(id, %{}) == "unknown"
-  end
-
-  test "display_name/2 names nobody for a half-parsed id instead of raising" do
-    assert Avatar.display_name(nil, %{}) == ""
-    assert Avatar.display_name(42, %{profiles: %{}}) == ""
-  end
-
-  test "identicon_url/1 hex-encodes the feed id" do
-    assert Avatar.identicon_url("@ab=.ed25519") ==
-             "/identicon/" <> Base.encode16("@ab=.ed25519", case: :lower)
-  end
-
-  test "avatar_src/1 prefers the blob and falls back to the identicon" do
-    digest = :crypto.strong_rand_bytes(32)
-    ref = "&" <> Base.encode64(digest) <> ".sha256"
-    hex = Base.encode16(digest, case: :lower)
-
-    assert Avatar.avatar_src("@id", ref) == "/blob/" <> hex
-    assert Avatar.avatar_src("@id", nil) == Avatar.identicon_url("@id")
-    assert Avatar.avatar_src("@id", "not-a-ref") == Avatar.identicon_url("@id")
-  end
-
-  test "rev_query/1 only busts caches for a positive revision" do
-    assert Avatar.rev_query(nil) == ""
-    assert Avatar.rev_query(0) == ""
-    assert Avatar.rev_query(7) == "?v=7"
+  describe "cache busting" do
+    test "rev_query/1 only busts caches for a positive revision" do
+      assert Avatar.rev_query(nil) == ""
+      assert Avatar.rev_query(0) == ""
+      assert Avatar.rev_query(7) == "?v=7"
+    end
   end
 end

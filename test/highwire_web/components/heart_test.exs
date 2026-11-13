@@ -5,22 +5,26 @@ defmodule HighWireWeb.Components.HeartTest do
 
   alias HighWireWeb.Components.Heart
 
-  test "the unliked pill is an outline heart with a Like label" do
-    html = render_component(&Heart.pill/1, key: "%k.sha256", liked: false)
+  describe "the unliked pill" do
+    test "the unliked pill is an outline heart with a Like label" do
+      html = render_component(&Heart.pill/1, key: "%k.sha256", liked: false)
 
-    assert html =~ ~s(phx-click="like")
-    assert html =~ ~s(phx-value-key="%k.sha256")
-    assert html =~ ~s(aria-pressed="false")
-    assert html =~ ~s(title="Like")
-    assert html =~ ~s(fill="none")
+      assert html =~ ~s(phx-click="like")
+      assert html =~ ~s(phx-value-key="%k.sha256")
+      assert html =~ ~s(aria-pressed="false")
+      assert html =~ ~s(title="Like")
+      assert html =~ ~s(fill="none")
+    end
   end
 
-  test "the liked pill reads pressed with a filled heart" do
-    html = render_component(&Heart.pill/1, key: "%k.sha256", liked: true)
+  describe "the liked pill" do
+    test "the liked pill reads pressed with a filled heart" do
+      html = render_component(&Heart.pill/1, key: "%k.sha256", liked: true)
 
-    assert html =~ ~s(aria-pressed="true")
-    assert html =~ ~s(title="Unlike")
-    assert html =~ ~s(fill="currentColor")
-    refute html =~ ~s(fill="none")
+      assert html =~ ~s(aria-pressed="true")
+      assert html =~ ~s(title="Unlike")
+      assert html =~ ~s(fill="currentColor")
+      refute html =~ ~s(fill="none")
+    end
   end
 end
