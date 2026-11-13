@@ -484,12 +484,6 @@ defmodule HighWireWeb.PostLive do
               rev={@blob_rev}
             />
             <span class="min-w-0 truncate">{Ident.display_name(who, @profiles)}</span>
-            <span
-              :if={who == @self_id}
-              class="ml-auto shrink-0 text-[10px] uppercase text-faint"
-            >
-              you
-            </span>
           </Nav.rail_link>
 
           <p :if={@replies != []} class="px-4 pt-3 text-xs text-faint">
@@ -535,9 +529,6 @@ defmodule HighWireWeb.PostLive do
                       <span :if={profile_href(author_of(@root)) == nil}>
                         {Ident.display_name(author_of(@root), @profiles)}
                       </span>
-                    </span>
-                    <span :if={author_of(@root) == @self_id} class="text-[10px] uppercase text-faint">
-                      you
                     </span>
                     <span class="text-xs text-faint"><.age ts={ts(@root)} /></span>
                     <span
@@ -639,9 +630,6 @@ defmodule HighWireWeb.PostLive do
                     <span :if={profile_href(author_of(reply)) == nil}>
                       {Ident.display_name(author_of(reply), @profiles)}
                     </span>
-                  </span>
-                  <span :if={author_of(reply) == @self_id} class="text-[10px] uppercase text-faint">
-                    you
                   </span>
                   <span class="text-xs text-faint"><.age ts={ts(reply)} /></span>
                   <span

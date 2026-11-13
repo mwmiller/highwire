@@ -1665,7 +1665,6 @@ defmodule HighWireWeb.TimelineLive do
             </.link>
             <span :if={@author_href == nil}>{Ident.display_name(@author, @ctx)}</span>
           </span>
-          <span :if={@row.self?} class="text-[10px] uppercase text-faint">you</span>
           <span class="text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
           <span :if={@row.activity > ts(@row.msg)} class="text-xs text-faint">
             · active <.age ts={@row.activity} />
