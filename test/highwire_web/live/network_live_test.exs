@@ -35,14 +35,19 @@ defmodule HighWireWeb.NetworkLiveTest do
     :ok
   end
 
-  describe "nav badge" do
-    test "links to the network page, not settings", %{conn: conn} do
+  describe "rail network link" do
+    test "sits above the page's rail content and links to the network page", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/network")
 
-      # The badge is the general entry point; it used to point at
-      # settings, which no longer holds any network controls.
+      # The rail entry is the general way in; it stays above the page's
+      # own anchors so a long index cannot push it out of reach.
+      assert html =~ ~s(id="rail-network")
       assert html =~ ~s(href="/network")
       assert html =~ ~s(aria-label="Network")
+
+      {network, _} = :binary.match(html, ~s(id="rail-network"))
+      {page_index, _} = :binary.match(html, "On this page")
+      assert network < page_index
     end
   end
 

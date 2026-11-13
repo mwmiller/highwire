@@ -21,6 +21,16 @@ defmodule HighWireWeb.Components.NavTest do
     end
   end
 
+  describe "network link" do
+    test "the rail always carries the way into the network page" do
+      html = render_component(&Nav.rail/1, [])
+
+      assert html =~ ~s(id="rail-network")
+      assert html =~ ~s(href="/network")
+      assert html =~ ~s(aria-label="Network")
+    end
+  end
+
   describe "page history" do
     test "the rail opens with back and forward through the page history" do
       html = render_component(&Nav.rail/1, [])

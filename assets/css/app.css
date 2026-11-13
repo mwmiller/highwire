@@ -356,7 +356,7 @@ html[data-participating="off"] [data-pref-tab] {
   display: none;
 }
 
-/* Gossip: the rail's footer dot flares when the connection set
+/* Gossip: the rail's network dot flares when the connection set
    changes and breathes while a peer is live. The keyed element the
    HEEx renders replays both animations on every pulse. */
 .gossip-dot {

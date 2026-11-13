@@ -4,12 +4,13 @@ defmodule HighWireWeb.Components.Nav do
   this window's page history, then the crab mark (linking to the
   timeline) and the table (linking to the gameroom); at the top right
   beside the settings gear — the other identity-adjacent control — the
-  current identity's avatar (linking to the identity page, `/identity`);
-  and, pinned to the bottom, the current network badge, which links to
-  the network page (`/network`) — the general place to manage dialing
-  and the network profile. Pages add their own content to the rail
-  through the default slot; pages that pass none get the same wide
-  frame, so the column never jumps between pages.
+  current identity's avatar (linking to the identity page, `/identity`).
+  Directly below that row, the current network badge links to the
+  network page (`/network`) — the general place to manage dialing and
+  the network profile. Pages add their own content to the rail below
+  the badge through the default slot. The header and badge stay put;
+  only the page's own content scrolls, so the way into the network page
+  is in reach whatever the rail holds.
 
   The avatar and its title show what followers see: the resolved alias
   and image from the `HighWire.SSB.Profile` read model, with the local
@@ -54,7 +55,7 @@ defmodule HighWireWeb.Components.Nav do
     assigns = assign(assigns, :identity, assigns.identity || Identities.active())
 
     ~H"""
-    <aside class="flex w-56 min-w-0 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-edge bg-panel">
+    <aside class="flex w-56 min-w-0 shrink-0 flex-col overflow-hidden border-r border-edge bg-panel">
       <div class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4">
         <div
           id="rail-history"
@@ -126,13 +127,13 @@ defmodule HighWireWeb.Components.Nav do
           </.link>
         </div>
       </div>
-      {render_slot(@inner_block)}
       <.link
+        id="rail-network"
         navigate="/network"
         title={"Network: #{Network.label(Network.current())}, #{@gossip.connected} live. Click to manage."}
         aria-label="Network"
         class={[
-          "mt-auto block border-t border-edge py-2 text-center text-[10px] font-medium uppercase",
+          "block shrink-0 border-b border-edge py-2 text-center text-[10px] font-medium uppercase",
           "tracking-wide transition hover:text-paper",
           Network.current() == :mainnet && "text-bad",
           Network.current() != :mainnet && "text-dim"
@@ -152,6 +153,9 @@ defmodule HighWireWeb.Components.Nav do
           </span>
         </span>
       </.link>
+      <div class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+        {render_slot(@inner_block)}
+      </div>
     </aside>
     """
   end
