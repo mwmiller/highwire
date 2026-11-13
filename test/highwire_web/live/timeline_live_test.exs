@@ -29,13 +29,16 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ ~s(title="Settings")
   end
 
-  test "the network chip is always in the header and links to the dialing page", %{conn: conn} do
+  test "the timeline header leaves network status to the rail", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/")
 
-    # engine disabled under test — the chip still renders, with
-    # status-appropriate copy instead of vanishing
-    assert html =~ "Offline"
-    assert html =~ ~s(href="/network")
+    [header] = Regex.run(~r/<header[^>]*>.*?<\/header>/s, html)
+
+    # The rail's network mark is the one way in. The reading header no
+    # longer carries a peer count that changes width under the tabs.
+    refute header =~ ~s(href="/network")
+    refute header =~ "Connections and dialing"
+    assert html =~ ~s(id="rail-network")
   end
 
   test "the header shows the search index status", %{conn: conn} do

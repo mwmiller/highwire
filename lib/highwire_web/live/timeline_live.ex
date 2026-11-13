@@ -87,13 +87,11 @@ defmodule HighWireWeb.TimelineLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    peers_timer =
-      if connected?(socket) do
-        Phoenix.PubSub.subscribe(HighWire.PubSub, Timeline.topic())
-        Timeline.set_activity(self(), true)
-        Process.send_after(self(), :index_tick, 4_000)
-        Process.send_after(self(), :peers_tick, 7_000)
-      end
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(HighWire.PubSub, Timeline.topic())
+      Timeline.set_activity(self(), true)
+      Process.send_after(self(), :index_tick, 4_000)
+    end
 
     {status, payload} = Timeline.snapshot()
 
@@ -102,7 +100,6 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(:page_title, "Timeline")
       |> assign(:status, status)
       |> assign_payload(payload)
-      |> assign(:peers, live_network(Timeline.network()))
       |> assign(q: "", expanded: MapSet.new(), view: :public)
       |> assign(contacts_expanded: false)
       |> assign(max_sidebar_contacts: Contacts.subset_size())
@@ -113,7 +110,6 @@ defmodule HighWireWeb.TimelineLive do
       |> assign(suggestions_pending: false)
       |> assign(mention_suggestions: [])
       |> assign(paged: %{}, page_inflight: MapSet.new(), page_retries: %{})
-      |> assign(active: true, peers_timer: peers_timer)
       # Arrival shimmer: rows the next wave brings that this store
       # never saw. seen_keys is the top-window baseline — it only
       # moves when a real feed payload lands, so status-only
@@ -171,18 +167,6 @@ defmodule HighWireWeb.TimelineLive do
   # ranking's answer, and this ends the hold when no answer came at all.
   def handle_info(:suggestions_hold_over, socket) do
     {:noreply, assign(socket, :suggestions_pending, false)}
-  end
-
-  def handle_info(:peers_tick, socket) do
-    if socket.assigns.peers_timer, do: Process.cancel_timer(socket.assigns.peers_timer)
-    socket = assign(socket, :peers_timer, nil)
-
-    if socket.assigns.active and connected?(socket) do
-      Timeline.set_activity(self(), true)
-      {:noreply, socket |> assign(:peers, live_network(Timeline.network())) |> schedule_peers()}
-    else
-      {:noreply, socket}
-    end
   end
 
   # The index reports through its own ETS table, so this is a lookup
@@ -538,20 +522,12 @@ defmodule HighWireWeb.TimelineLive do
 
   def handle_event("tab-active", _params, socket) do
     Timeline.set_activity(self(), true)
-
-    if socket.assigns.active do
-      {:noreply, socket}
-    else
-      send(self(), :peers_tick)
-      {:noreply, assign(socket, :active, true)}
-    end
+    {:noreply, socket}
   end
 
   def handle_event("tab-inactive", _params, socket) do
     Timeline.set_activity(self(), false)
-    if socket.assigns.peers_timer, do: Process.cancel_timer(socket.assigns.peers_timer)
-
-    {:noreply, socket |> assign(:active, false) |> assign(peers_timer: nil)}
+    {:noreply, socket}
   end
 
   # The press is answered by the button taking the hold, and the
@@ -593,10 +569,6 @@ defmodule HighWireWeb.TimelineLive do
     follows = Map.get(socket.assigns, :all_contacts, [])
 
     Mentions.candidates(q, follows ++ Map.keys(profiles), &Ident.display_name(&1, profiles))
-  end
-
-  defp schedule_peers(socket) do
-    assign(socket, :peers_timer, Process.send_after(self(), :peers_tick, 7_000))
   end
 
   # Deliberately not stored or cancelled: one ETS lookup every 4s is
@@ -1294,18 +1266,6 @@ defmodule HighWireWeb.TimelineLive do
           >
             <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-dot-info"></span> active
           </span>
-          <.link
-            navigate="/network"
-            title="Network. Connections and dialing."
-            class={[
-              "flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs transition",
-              "hover:bg-raised",
-              peer_tone(@peers, @status)
-            ]}
-          >
-            <span class={["h-1.5 w-1.5 rounded-full", peer_dot(@peers, @status)]}></span>
-            {peer_label(@peers, @status)}
-          </.link>
         </header>
 
         <div id="feed-scroller" phx-hook="FeedScroll" class="flex-1 overflow-y-auto">
@@ -2083,47 +2043,6 @@ defmodule HighWireWeb.TimelineLive do
   end
 
   defp mention_match?(_row), do: false
-
-  # nil while the engine report is unavailable (old erlbutt / down) —
-  # the chip hides rather than claims anything.
-  # The header network chip is the timeline's always-visible way into
-  # /network: the live peer count when a report exists, a status-aware
-  # fallback otherwise. It never hides — a hidden chip is exactly when
-  # users need the dialing page most.
-  # A cache-seeded report is the peers we last knew, not the peers we are
-  # talking to now. The chip speaks for the engine's present state, so a
-  # seeded report is dropped here and the helpers below fall through to
-  # their status-aware (nil) branches rather than claiming a live count
-  # the engine never gave us.
-  defp live_network(%{"seeded" => true}), do: nil
-  defp live_network(network), do: network
-
-  defp peer_count(network) when is_map(network), do: length(network["connections"] || [])
-
-  defp peer_label(nil, :connecting), do: "Connecting…"
-  defp peer_label(nil, :disabled), do: "Offline"
-  defp peer_label(nil, _status), do: "Network"
-
-  defp peer_label(peers, _status) do
-    n = peer_count(peers)
-    "#{n} peer#{if n == 1, do: "", else: "s"}"
-  end
-
-  defp peer_dot(nil, :connecting), do: "bg-dot-info animate-pulse"
-  defp peer_dot(nil, :disabled), do: "bg-dot-bad"
-  defp peer_dot(nil, _status), do: "bg-dot"
-
-  defp peer_dot(peers, _status) do
-    if peer_count(peers) > 0, do: "bg-dot-ok", else: "bg-dot"
-  end
-
-  defp peer_tone(nil, :connecting), do: "text-info"
-  defp peer_tone(nil, :disabled), do: "text-bad"
-  defp peer_tone(nil, _status), do: "text-dim"
-
-  defp peer_tone(peers, _status) do
-    if peer_count(peers) > 0, do: "text-ok", else: "text-dim"
-  end
 
   # -- search index status light -----------------------------------------
   # SearchIndex.status/0 (an ETS read) as a one-dot answer to "can I
