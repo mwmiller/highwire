@@ -254,23 +254,25 @@ defmodule HighWire.Chess.Legacy do
   end
 
   defp moved_color(%{content: content}) do
-    side =
-      case content["fen"] do
-        fen when is_binary(fen) ->
-          case String.split(fen, " ") do
-            [_placement, "b" | _] -> :white
-            [_placement, "w" | _] -> :black
-            _ -> nil
-          end
-
-        _ ->
-          nil
-      end
-
-    side || moved_color_from_ply(content["ply"])
+    case fen_turn(content["fen"]) do
+      :white -> :black
+      :black -> :white
+      nil -> moved_color_from_ply(content["ply"])
+    end
   end
 
   defp moved_color(_row), do: nil
+
+  # The side a position leaves to move, when it says so.
+  defp fen_turn(fen) when is_binary(fen) do
+    case String.split(fen, " ") do
+      [_placement, "w" | _] -> :white
+      [_placement, "b" | _] -> :black
+      _ -> nil
+    end
+  end
+
+  defp fen_turn(_fen), do: nil
 
   # A move without a readable FEN still says which half-move it is: plies
   # count white's first move as 1.
@@ -284,15 +286,19 @@ defmodule HighWire.Chess.Legacy do
   # that can still be waiting for an opponent.
   defp sides(invite, accept, moves, white, black) do
     challenger =
-      (invite && invite.author) ||
-        cond do
-          accept -> other(accept.author, white, black)
-          moves != [] -> white
-          true -> nil
-        end
+      cond do
+        invite -> invite.author
+        accept -> other(accept.author, white, black)
+        moves != [] -> white
+        true -> nil
+      end
 
     accepter =
-      (accept && accept.author) || if(moves == [], do: nil, else: other(challenger, white, black))
+      cond do
+        accept -> accept.author
+        moves == [] -> nil
+        true -> other(challenger, white, black)
+      end
 
     {challenger, accepter}
   end
@@ -315,20 +321,21 @@ defmodule HighWire.Chess.Legacy do
   defp line(rows, root_key) do
     played = Enum.reject(rows, &(type(&1) in ["chess_invite", "chess_invite_accept"]))
 
-    if numbered?(played) do
+    if one_move_per_ply?(played) or Enum.all?(played, &is_nil(&1.content["branch"])) do
       Enum.sort_by(played, &(&1.content["ply"] || 0))
     else
       walk_back(latest(leaf(played)), Map.new(played, &{&1.key, &1}), root_key, [])
     end
   end
 
-  defp numbered?(played) do
-    plies =
-      for %{content: %{"type" => "chess_move", "ply" => ply}} <- played,
-          is_integer(ply),
-          do: ply
+  # Rows that carry no link at all (a hand-built game, or an early version
+  # of the format) were always ordered by ply. The links are only worth
+  # walking when a game repeats a ply — a restart under the same root — and
+  # every move has to have a ply of its own before the ply is trusted alone.
+  defp one_move_per_ply?(played) do
+    plies = for %{content: %{"type" => "chess_move"}} = row <- played, do: row.content["ply"]
 
-    length(plies) == length(Enum.uniq(plies))
+    Enum.all?(plies, &is_integer/1) and length(plies) == length(Enum.uniq(plies))
   end
 
   # A leaf is a message nothing else follows.
