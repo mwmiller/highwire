@@ -22,7 +22,7 @@ defmodule HighWireWeb.Components.NavTest do
   end
 
   describe "network link" do
-    test "the header carries the way into the network page" do
+    test "the utility corner carries the way into the network page" do
       html = render_component(&Nav.rail/1, [])
 
       assert html =~ ~s(id="rail-network")
@@ -30,10 +30,15 @@ defmodule HighWireWeb.Components.NavTest do
       assert html =~ ~s(aria-label="Network")
 
       {header, _} = :binary.match(html, ~s(id="rail-header"))
+      {utilities, _} = :binary.match(html, ~s(id="rail-utilities"))
       {network, _} = :binary.match(html, ~s(id="rail-network"))
+      {settings, _} = :binary.match(html, ~s(aria-label="Settings"))
       {content, _} = :binary.match(html, ~s(id="rail-content"))
 
-      assert header < network and network < content
+      # It belongs with the identity and settings controls, not with the
+      # two destinations built from the logs.
+      assert header < utilities and utilities < network and network < settings
+      assert network < content
     end
   end
 
@@ -47,13 +52,12 @@ defmodule HighWireWeb.Components.NavTest do
       assert html =~ ~s(aria-label="Back")
       assert html =~ ~s(aria-label="Forward")
 
-      # Both sit on the top line, ahead of the three page links.
+      # Both sit on the top line, ahead of the two log-backed page links.
       {back, _} = :binary.match(html, ~s(data-history="back"))
       {forward, _} = :binary.match(html, ~s(data-history="forward"))
       {crab, _} = :binary.match(html, ~s(aria-label="Timeline"))
       {table, _} = :binary.match(html, ~s(aria-label="Gameroom"))
-      {network, _} = :binary.match(html, ~s(aria-label="Network"))
-      assert back < forward and forward < crab and crab < table and table < network
+      assert back < forward and forward < crab and crab < table
     end
   end
 end

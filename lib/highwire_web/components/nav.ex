@@ -2,14 +2,15 @@ defmodule HighWireWeb.Components.Nav do
   @moduledoc """
   The shared left rail: the top row opens with back and forward through
   this window's page history, then the crab mark (linking to the
-  timeline), the table (linking to the gameroom) and the constellation
-  (linking to the network page, `/network` — the general place to
-  manage dialing and the network profile); at the top right beside the
-  settings gear — the other identity-adjacent control — the current
-  identity's avatar (linking to the identity page, `/identity`). Pages
-  add their own content to the rail through the default slot, below
-  the fixed header. Only the page's own content scrolls, so the way
-  into the network page is in reach whatever the rail holds.
+  timeline) and the table (linking to the gameroom) — the two
+  destinations built from the SSB logs. In the utility corner, beside
+  the current identity's avatar (linking to the identity page,
+  `/identity`) and the settings gear, a smaller constellation mark
+  opens the network page (`/network`): dialing and the network profile
+  are local service controls, not another log to read. Pages add their
+  own content to the rail through the default slot, below the fixed
+  header. Only the page's own content scrolls, so the way into the
+  network page is in reach whatever the rail holds.
 
   The avatar and its title show what followers see: the resolved alias
   and image from the `HighWire.SSB.Profile` read model, with the local
@@ -84,7 +85,10 @@ defmodule HighWireWeb.Components.Nav do
             <.chevron direction={:forward} />
           </button>
         </div>
-        <div class="flex items-center overflow-hidden rounded-md border border-edge">
+        <div
+          id="rail-pages"
+          class="flex items-center overflow-hidden rounded-md border border-edge"
+        >
           <.link
             id="rail-timeline"
             navigate="/"
@@ -103,31 +107,8 @@ defmodule HighWireWeb.Components.Nav do
           >
             <.table />
           </.link>
-          <span class="h-4 w-px shrink-0 bg-edge" aria-hidden="true"></span>
-          <.link
-            id="rail-network"
-            navigate="/network"
-            title={"Network: #{Network.label(Network.current())}, #{@gossip.connected} live. Click to manage."}
-            aria-label="Network"
-            class={[
-              "flex h-6 items-center px-2 transition hover:bg-raised hover:text-paper",
-              Network.current() == :mainnet && "text-bad",
-              Network.current() != :mainnet && "text-dim"
-            ]}
-          >
-            <span class="relative flex h-4 w-4 items-center justify-center">
-              <.network_mark />
-              <span
-                key={@gossip.pulse}
-                class={[
-                  "absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full",
-                  (@gossip.connected > 0 && "gossip-dot") || "bg-dot"
-                ]}
-              />
-            </span>
-          </.link>
         </div>
-        <div class="flex items-center gap-3">
+        <div id="rail-utilities" class="flex items-center gap-3">
           <.link
             :if={@identity}
             navigate="/identity"
@@ -141,6 +122,28 @@ defmodule HighWireWeb.Components.Nav do
               image={identity_image(@identity)}
               rev={Profile.rev()}
             />
+          </.link>
+          <.link
+            id="rail-network"
+            navigate="/network"
+            title={"Network: #{Network.label(Network.current())}, #{@gossip.connected} live. Click to manage."}
+            aria-label="Network"
+            class={[
+              "flex h-6 w-6 items-center justify-center rounded transition hover:bg-raised hover:text-paper",
+              Network.current() == :mainnet && "text-bad",
+              Network.current() != :mainnet && "text-dim"
+            ]}
+          >
+            <span class="relative flex h-3.5 w-3.5 items-center justify-center">
+              <.network_mark />
+              <span
+                key={@gossip.pulse}
+                class={[
+                  "absolute -right-0.5 -top-0.5 h-1 w-1 rounded-full",
+                  (@gossip.connected > 0 && "gossip-dot") || "bg-dot"
+                ]}
+              />
+            </span>
           </.link>
           <.link
             navigate="/settings"
@@ -219,7 +222,7 @@ defmodule HighWireWeb.Components.Nav do
   defp network_mark(assigns) do
     ~H"""
     <svg
-      class="h-4 w-4"
+      class="h-3.5 w-3.5"
       viewBox="0 0 24 24"
       aria-hidden="true"
       fill="none"
