@@ -323,13 +323,93 @@ defmodule HighWire.Chess.LegacyTest do
       assert game.accepter == @white
     end
 
-    test "the moves name the sides even when the ply numbers do not" do
-      after_e4_by_black = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e3 0 1"
+    test "a move's position names the side that moved, whatever the ply says" do
+      after_e5 = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"
 
-      game = Legacy.fold([move(4, "e2", "e4", "e4", after_e4_by_black, @black, 3)])
+      game = Legacy.fold([move(4, "e7", "e5", "e5", after_e5, @black, 3)])
 
       assert game.black == @black
       assert game.white == nil
+    end
+
+    test "a game this node holds only the tail of still names both sides" do
+      after_e5 = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"
+
+      game =
+        Legacy.fold([
+          move(12, "e2", "e4", "e4", @after_e4, @white, 3),
+          move(13, "e7", "e5", "e5", after_e5, @black, 4)
+        ])
+
+      assert {game.white, game.black} == {@white, @black}
+      assert game.challenger == @white
+      assert game.accepter == @black
+      assert game.mover == @white
+      assert game.phase == :playing
+      assert Enum.map(game.history, & &1.ply) == [12, 13]
+    end
+
+    test "two lines under one root are read through their links" do
+      after_d4 = "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq d3 0 1"
+      after_d5 = "rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR w KQkq d6 0 2"
+
+      first =
+        row(
+          "%line-a.sha256",
+          @white,
+          %{
+            "type" => "chess_move",
+            "root" => @invite_key,
+            "ply" => 1,
+            "orig" => "e2",
+            "dest" => "e4",
+            "pgnMove" => "e4",
+            "fen" => @after_e4,
+            "branch" => @invite_key
+          },
+          3
+        )
+
+      restart =
+        row(
+          "%line-b.sha256",
+          @white,
+          %{
+            "type" => "chess_move",
+            "root" => @invite_key,
+            "ply" => 1,
+            "orig" => "d2",
+            "dest" => "d4",
+            "pgnMove" => "d4",
+            "fen" => after_d4,
+            "branch" => @invite_key
+          },
+          4
+        )
+
+      reply =
+        row(
+          "%line-b2.sha256",
+          @black,
+          %{
+            "type" => "chess_move",
+            "root" => @invite_key,
+            "ply" => 2,
+            "orig" => "d7",
+            "dest" => "d5",
+            "pgnMove" => "d5",
+            "fen" => after_d5,
+            "branch" => "%line-b.sha256"
+          },
+          5
+        )
+
+      game = Legacy.fold([invite(), accept(), first, restart, reply])
+
+      assert Enum.map(game.history, & &1.uci) == ["d2d4", "d7d5"]
+      assert Enum.map(game.history, & &1.ply) == [1, 2]
+      assert game.turn_count == 2
+      assert game.mover == @white
     end
   end
 end
