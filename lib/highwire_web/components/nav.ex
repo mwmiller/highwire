@@ -2,15 +2,14 @@ defmodule HighWireWeb.Components.Nav do
   @moduledoc """
   The shared left rail: the top row opens with back and forward through
   this window's page history, then the crab mark (linking to the
-  timeline) and the table (linking to the gameroom); at the top right
-  beside the settings gear — the other identity-adjacent control — the
-  current identity's avatar (linking to the identity page, `/identity`).
-  Directly below that row, the current network badge links to the
-  network page (`/network`) — the general place to manage dialing and
-  the network profile. Pages add their own content to the rail below
-  the badge through the default slot. The header and badge stay put;
-  only the page's own content scrolls, so the way into the network page
-  is in reach whatever the rail holds.
+  timeline), the table (linking to the gameroom) and the constellation
+  (linking to the network page, `/network` — the general place to
+  manage dialing and the network profile); at the top right beside the
+  settings gear — the other identity-adjacent control — the current
+  identity's avatar (linking to the identity page, `/identity`). Pages
+  add their own content to the rail through the default slot, below
+  the fixed header. Only the page's own content scrolls, so the way
+  into the network page is in reach whatever the rail holds.
 
   The avatar and its title show what followers see: the resolved alias
   and image from the `HighWire.SSB.Profile` read model, with the local
@@ -55,8 +54,11 @@ defmodule HighWireWeb.Components.Nav do
     assigns = assign(assigns, :identity, assigns.identity || Identities.active())
 
     ~H"""
-    <aside class="flex w-56 min-w-0 shrink-0 flex-col overflow-hidden border-r border-edge bg-panel">
-      <div class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4">
+    <aside class="flex w-64 min-w-0 shrink-0 flex-col overflow-hidden border-r border-edge bg-panel">
+      <div
+        id="rail-header"
+        class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4"
+      >
         <div
           id="rail-history"
           phx-hook="HistoryNav"
@@ -101,6 +103,29 @@ defmodule HighWireWeb.Components.Nav do
           >
             <.table />
           </.link>
+          <span class="h-4 w-px shrink-0 bg-edge" aria-hidden="true"></span>
+          <.link
+            id="rail-network"
+            navigate="/network"
+            title={"Network: #{Network.label(Network.current())}, #{@gossip.connected} live. Click to manage."}
+            aria-label="Network"
+            class={[
+              "flex h-6 items-center px-2 transition hover:bg-raised hover:text-paper",
+              Network.current() == :mainnet && "text-bad",
+              Network.current() != :mainnet && "text-dim"
+            ]}
+          >
+            <span class="relative flex h-4 w-4 items-center justify-center">
+              <.network_mark />
+              <span
+                key={@gossip.pulse}
+                class={[
+                  "absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full",
+                  (@gossip.connected > 0 && "gossip-dot") || "bg-dot"
+                ]}
+              />
+            </span>
+          </.link>
         </div>
         <div class="flex items-center gap-3">
           <.link
@@ -127,33 +152,7 @@ defmodule HighWireWeb.Components.Nav do
           </.link>
         </div>
       </div>
-      <.link
-        id="rail-network"
-        navigate="/network"
-        title={"Network: #{Network.label(Network.current())}, #{@gossip.connected} live. Click to manage."}
-        aria-label="Network"
-        class={[
-          "block shrink-0 border-b border-edge py-2 text-center text-[10px] font-medium uppercase",
-          "tracking-wide transition hover:text-paper",
-          Network.current() == :mainnet && "text-bad",
-          Network.current() != :mainnet && "text-dim"
-        ]}
-      >
-        <span class="flex items-center justify-center gap-1.5">
-          <span
-            key={@gossip.pulse}
-            class={[
-              "inline-block h-1.5 w-1.5 rounded-full",
-              (@gossip.connected > 0 && "gossip-dot") || "bg-dot"
-            ]}
-          />
-          {Network.label(Network.current())}
-          <span :if={@gossip.connected > 0} class="font-normal">
-            · {@gossip.connected}
-          </span>
-        </span>
-      </.link>
-      <div class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+      <div id="rail-content" class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {render_slot(@inner_block)}
       </div>
     </aside>
@@ -213,6 +212,32 @@ defmodule HighWireWeb.Components.Nav do
   defp identity_image(%{"id" => _id, "image" => image}) when is_binary(image), do: image
   defp identity_image(%{"id" => id}), do: Profile.image(id)
   defp identity_image(_identity), do: nil
+
+  # A hub with three peers: the network page's sky reduced to a mark. It
+  # sits in the same box as the newspaper and table beside it, so the row
+  # keeps one line whichever page the reader is on.
+  defp network_mark(assigns) do
+    ~H"""
+    <svg
+      class="h-4 w-4"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <circle cx="12" cy="12" r="2.2" />
+      <circle cx="12" cy="4" r="1.6" />
+      <circle cx="5" cy="18.5" r="1.6" />
+      <circle cx="19" cy="18.5" r="1.6" />
+      <path d="M12 6v3.6" />
+      <path d="M10.2 13.5 6.2 17.2" />
+      <path d="M13.8 13.5l4 3.7" />
+    </svg>
+    """
+  end
 
   # A newspaper and a table: the same move the rest of the rail makes in
   # words — the timeline is what this node has read, the room is the tables

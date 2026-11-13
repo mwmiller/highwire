@@ -5,29 +5,35 @@ defmodule HighWireWeb.Components.NavTest do
 
   alias HighWireWeb.Components.Nav
 
-  describe "the gossip badge" do
-    test "the rail badge counts live connections behind a live dot" do
+  describe "the network mark" do
+    test "the header icon counts live connections behind a live dot" do
       html = render_component(&Nav.rail/1, gossip: %{connected: 3, pulse: 2})
 
       assert html =~ "gossip-dot"
-      assert html =~ "· 3"
+      assert html =~ "3 live"
     end
 
-    test "a quiet rail shows the idle dot and no count" do
+    test "a quiet rail shows the idle dot and no live peers" do
       html = render_component(&Nav.rail/1, [])
 
       refute html =~ "gossip-dot"
-      refute html =~ "· "
+      assert html =~ "0 live"
     end
   end
 
   describe "network link" do
-    test "the rail always carries the way into the network page" do
+    test "the header carries the way into the network page" do
       html = render_component(&Nav.rail/1, [])
 
       assert html =~ ~s(id="rail-network")
       assert html =~ ~s(href="/network")
       assert html =~ ~s(aria-label="Network")
+
+      {header, _} = :binary.match(html, ~s(id="rail-header"))
+      {network, _} = :binary.match(html, ~s(id="rail-network"))
+      {content, _} = :binary.match(html, ~s(id="rail-content"))
+
+      assert header < network and network < content
     end
   end
 
@@ -41,11 +47,13 @@ defmodule HighWireWeb.Components.NavTest do
       assert html =~ ~s(aria-label="Back")
       assert html =~ ~s(aria-label="Forward")
 
-      # Both sit on the top line, ahead of the two page links.
+      # Both sit on the top line, ahead of the three page links.
       {back, _} = :binary.match(html, ~s(data-history="back"))
       {forward, _} = :binary.match(html, ~s(data-history="forward"))
       {crab, _} = :binary.match(html, ~s(aria-label="Timeline"))
-      assert back < forward and forward < crab
+      {table, _} = :binary.match(html, ~s(aria-label="Gameroom"))
+      {network, _} = :binary.match(html, ~s(aria-label="Network"))
+      assert back < forward and forward < crab and crab < table and table < network
     end
   end
 end

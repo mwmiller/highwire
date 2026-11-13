@@ -1054,13 +1054,13 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert pos(html, id_b) < pos(html, id_a)
   end
 
-  test "the rail badge counts gossip connections", %{conn: conn} do
+  test "the rail network mark counts gossip connections", %{conn: conn} do
     {:ok, view, html} = live(conn, "/")
-    refute html =~ "· 3"
+    refute html =~ "3 live"
 
     send(view.pid, {HighWire.Timeline, :gossip, %{connected: 3}})
 
-    assert render(view) =~ "· 3"
+    assert render(view) =~ "3 live"
   end
 
   test "network activity lights the header indicator and then retires", %{conn: conn} do
