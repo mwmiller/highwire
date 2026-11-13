@@ -94,7 +94,8 @@ defmodule HighWire.Chess.Legacy do
 
     moves = Enum.filter(line, &(type(&1) == "chess_move"))
     ending = line |> Enum.filter(&(type(&1) == "chess_game_end")) |> List.last()
-    {white, black} = players(invite, accept)
+    {white, black} = players(invite, accept, moves)
+    {challenger, accepter} = sides(invite, accept, moves, white, black)
 
     {_last, position, ply} = head(moves, ending)
 
@@ -105,8 +106,8 @@ defmodule HighWire.Chess.Legacy do
       kind: :chess,
       writable?: false,
       format: :legacy,
-      challenger: invite && invite.author,
-      accepter: accept && accept.author,
+      challenger: challenger,
+      accepter: accepter,
       white: white,
       black: black,
       position: position,
@@ -114,7 +115,7 @@ defmodule HighWire.Chess.Legacy do
       turn: position.turn,
       mover: mover(ply, position, white, black),
       turn_count: ply,
-      phase: phase(accept, ending),
+      phase: phase(accept, ending, moves),
       status: status(ending),
       winner: winner,
       verdict: verdict(ending, position),
@@ -233,32 +234,101 @@ defmodule HighWire.Chess.Legacy do
   defp latest([]), do: nil
   defp latest(rows), do: Enum.max_by(rows, &(&1.ts || 0))
 
-  defp players(nil, _accept), do: {nil, nil}
+  defp players(invite, accept, moves) do
+    {white, black} = invited_players(invite, accept)
+    {white || move_author(moves, :white), black || move_author(moves, :black)}
+  end
 
-  defp players(%{author: author, content: content}, accept) do
+  defp invited_players(nil, _accept), do: {nil, nil}
+
+  defp invited_players(%{author: author, content: content}, accept) do
     opponent = (accept && accept.author) || content["inviting"]
     if content["myColor"] == "black", do: {opponent, author}, else: {author, opponent}
   end
 
-  defp phase(nil, _), do: :opening
-  defp phase(_accept, %{}), do: :finished
-  defp phase(_accept, nil), do: :playing
+  # When the invite or accept never reached this node, the moves name the
+  # players the same way the list on the page does: the FEN a move carries
+  # leaves the other side to play, so its author is the side that moved.
+  defp move_author(moves, color) do
+    Enum.find_value(moves, fn row -> if moved_color(row) == color, do: row.author end)
+  end
+
+  defp moved_color(%{content: content}) do
+    side =
+      case content["fen"] do
+        fen when is_binary(fen) ->
+          case String.split(fen, " ") do
+            [_placement, "b" | _] -> :white
+            [_placement, "w" | _] -> :black
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    side || moved_color_from_ply(content["ply"])
+  end
+
+  defp moved_color(_row), do: nil
+
+  # A move without a readable FEN still says which half-move it is: plies
+  # count white's first move as 1.
+  defp moved_color_from_ply(ply) when is_integer(ply) and rem(ply, 2) == 1, do: :white
+  defp moved_color_from_ply(ply) when is_integer(ply), do: :black
+  defp moved_color_from_ply(_ply), do: nil
+
+  # The invite names the challenger; failing that, the accept names the
+  # other seat, and a game with moves but neither row opened with white.
+  # Nothing is claimed for a game with no moves, which is the only shape
+  # that can still be waiting for an opponent.
+  defp sides(invite, accept, moves, white, black) do
+    challenger =
+      (invite && invite.author) ||
+        cond do
+          accept -> other(accept.author, white, black)
+          moves != [] -> white
+          true -> nil
+        end
+
+    accepter =
+      (accept && accept.author) || if(moves == [], do: nil, else: other(challenger, white, black))
+
+    {challenger, accepter}
+  end
+
+  # Waiting means nobody has moved; anyone who has moved took a seat.
+  defp phase(_accept, %{}, _moves), do: :finished
+  defp phase(nil, nil, []), do: :opening
+  defp phase(_accept, nil, _moves), do: :playing
 
   defp status(%{content: %{"status" => "aborted"}}), do: :withdrawn
   defp status(%{}), do: :finished
   defp status(nil), do: :playing
 
-  # The chain of messages ending at the newest leaf, oldest first. Rows
-  # that carry no `branch` (a hand-built test, or an early version of the
-  # format) fall back to ply order, which is what they were ordered by.
+  # The game, oldest first. A move's ply is the game's own order and does
+  # not depend on its reply link: a chat between two moves, or a message
+  # this node never received, leaves a link pointing at nothing while the
+  # plies still count up, and reading the links alone would cut the game
+  # off there. The links pick a line only when one root carries more than
+  # one and two messages claim the same ply.
   defp line(rows, root_key) do
     played = Enum.reject(rows, &(type(&1) in ["chess_invite", "chess_invite_accept"]))
 
-    if Enum.all?(played, &is_nil(&1.content["branch"])) do
+    if numbered?(played) do
       Enum.sort_by(played, &(&1.content["ply"] || 0))
     else
       walk_back(latest(leaf(played)), Map.new(played, &{&1.key, &1}), root_key, [])
     end
+  end
+
+  defp numbered?(played) do
+    plies =
+      for %{content: %{"type" => "chess_move", "ply" => ply}} <- played,
+          is_integer(ply),
+          do: ply
+
+    length(plies) == length(Enum.uniq(plies))
   end
 
   # A leaf is a message nothing else follows.

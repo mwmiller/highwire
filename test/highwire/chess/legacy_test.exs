@@ -243,12 +243,93 @@ defmodule HighWire.Chess.LegacyTest do
       assert game.verdict == {:checkmate, :black}
     end
 
-    test "a game with no invite still folds, unnamed" do
+    test "a game with no invite still names the player who moved" do
       game = Legacy.fold([move(1, "e2", "e4", "e4", @after_e4, @white, 3)])
 
-      assert game.white == nil
+      assert game.white == @white
+      assert game.black == nil
+      assert game.challenger == @white
+      assert game.phase == :playing
       assert game.turn_count == 1
       assert game.game_id != nil
+    end
+
+    test "a game with no invite or accept still names both sides and whose move it is" do
+      two = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"
+
+      game =
+        Legacy.fold([
+          move(2, "e7", "e5", "e5", two, @black, 4),
+          move(1, "e2", "e4", "e4", @after_e4, @white, 3)
+        ])
+
+      assert {game.white, game.black} == {@white, @black}
+      assert game.challenger == @white
+      assert game.accepter == @black
+      assert game.mover == @white
+      assert game.phase == :playing
+      assert game.status == :playing
+    end
+
+    test "a missing reply link does not cut off the moves that follow it" do
+      two = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"
+      three = "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2"
+
+      # This move answers a message the node never stored: a chat between
+      # the moves, or a delivery it missed.
+      third =
+        row(
+          "%move3.sha256",
+          @white,
+          %{
+            "type" => "chess_move",
+            "root" => @invite_key,
+            "ply" => 3,
+            "orig" => "g1",
+            "dest" => "f3",
+            "pgnMove" => "Nf3",
+            "fen" => three,
+            "branch" => "%never-arrived.sha256"
+          },
+          5
+        )
+
+      game =
+        Legacy.fold([
+          invite(),
+          accept(),
+          move(1, "e2", "e4", "e4", @after_e4, @white, 3),
+          move(2, "e7", "e5", "e5", two, @black, 4),
+          third
+        ])
+
+      assert Enum.map(game.history, & &1.ply) == [1, 2, 3]
+      assert game.turn_count == 3
+      assert game.mover == @black
+    end
+
+    test "an accept without the invite puts the challenger on the other side" do
+      two = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"
+
+      game =
+        Legacy.fold([
+          accept(@white),
+          move(1, "e7", "e5", "e5", @after_e4, @black, 3),
+          move(2, "e2", "e4", "e4", two, @white, 4)
+        ])
+
+      assert {game.white, game.black} == {@black, @white}
+      assert game.challenger == @black
+      assert game.accepter == @white
+    end
+
+    test "the moves name the sides even when the ply numbers do not" do
+      after_e4_by_black = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e3 0 1"
+
+      game = Legacy.fold([move(4, "e2", "e4", "e4", after_e4_by_black, @black, 3)])
+
+      assert game.black == @black
+      assert game.white == nil
     end
   end
 end
