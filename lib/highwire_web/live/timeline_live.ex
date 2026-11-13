@@ -116,8 +116,6 @@ defmodule HighWireWeb.TimelineLive do
       # broadcasts can't fake a wave.
       |> assign(arrived: MapSet.new(), arrived_timer: nil)
       |> assign(seen_keys: top_keys(Map.get(payload, :feed, [])))
-      |> assign(:transfer, Timeline.transfer_status())
-      |> assign(transfer_timer: nil)
       |> assign(:search_hits, [])
       |> assign(:search_q_kicked, "")
       |> assign(:search_state, :idle)
@@ -125,7 +123,7 @@ defmodule HighWireWeb.TimelineLive do
       |> maybe_load_page()
       |> merge_paged()
 
-    {:ok, arm_transfer(socket)}
+    {:ok, socket}
   end
 
   @impl true
@@ -149,18 +147,6 @@ defmodule HighWireWeb.TimelineLive do
 
   def handle_info(:arrived_clear, socket) do
     {:noreply, assign(socket, arrived: MapSet.new(), arrived_timer: nil)}
-  end
-
-  # Network activity: Timeline pushes the window as it bumps, so the
-  # header's indicator rides the real 2.5s window instead of a poll
-  # that would be late more often than not.
-  def handle_info({Timeline, :transfer, status}, socket) do
-    {:noreply, socket |> assign(:transfer, status) |> arm_transfer()}
-  end
-
-  def handle_info(:transfer_clear, socket) do
-    {:noreply,
-     assign(socket, transfer: %{socket.assigns.transfer | active?: false}, transfer_timer: nil)}
   end
 
   # The other end of the "Show another set" hold: a payload carries the
@@ -970,20 +956,6 @@ defmodule HighWireWeb.TimelineLive do
     assign(socket, :arrived_timer, Process.send_after(self(), :arrived_clear, 1_800))
   end
 
-  # The activity window is 2.5s (Timeline's transfer_status). A bump
-  # turns the indicator on; this timer turns it back off, re-armed on
-  # every bump so a burst reads as one continuous glow.
-  defp arm_transfer(socket) do
-    if socket.assigns.transfer_timer, do: Process.cancel_timer(socket.assigns.transfer_timer)
-
-    timer =
-      if socket.assigns.transfer.active? do
-        Process.send_after(self(), :transfer_clear, 2_500)
-      end
-
-    assign(socket, :transfer_timer, timer)
-  end
-
   defp annotate_likes(rows, like_counts) when is_map(like_counts) do
     Enum.map(rows, fn row ->
       key = row_uid(row)
@@ -1258,14 +1230,6 @@ defmodule HighWireWeb.TimelineLive do
             </.link>
             <.feed_tab :for={{v, label} <- @right_views} v={v} label={label} current={@view} />
           </nav>
-          <span
-            :if={@transfer.active?}
-            id="transfer-activity"
-            title="Recent network activity"
-            class="flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs text-info"
-          >
-            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-dot-info"></span> active
-          </span>
         </header>
 
         <div id="feed-scroller" phx-hook="FeedScroll" class="flex-1 overflow-y-auto">

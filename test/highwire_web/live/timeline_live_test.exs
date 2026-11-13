@@ -38,6 +38,8 @@ defmodule HighWireWeb.TimelineLiveTest do
     # longer carries a peer count that changes width under the tabs.
     refute header =~ ~s(href="/network")
     refute header =~ "Connections and dialing"
+    refute header =~ "transfer-activity"
+    refute header =~ "Recent network activity"
     assert html =~ ~s(id="rail-network")
   end
 
@@ -1066,20 +1068,13 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert render(view) =~ "3 live"
   end
 
-  test "network activity lights the header indicator and then retires", %{conn: conn} do
+  test "network activity never enters the header", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
 
-    # Timeline is one shared process, so pin the window rather than
-    # assuming a fresh one — any earlier test may have just bumped it.
-    quiet = %{last_net_at: 1, last_gossip_at: nil, active?: false}
-    send(view.pid, {HighWire.Timeline, :transfer, quiet})
-    refute render(view) =~ ~s(id="transfer-activity")
+    send(view.pid, {HighWire.Timeline, :transfer, %{active?: true}})
 
-    send(view.pid, {HighWire.Timeline, :transfer, %{quiet | active?: true}})
-    assert render(view) =~ ~s(id="transfer-activity")
-
-    send(view.pid, :transfer_clear)
-    refute render(view) =~ ~s(id="transfer-activity")
+    refute render(view) =~ "transfer-activity"
+    refute render(view) =~ "Recent network activity"
   end
 
   test "search reaches replies, not just rendered roots", %{conn: conn} do
