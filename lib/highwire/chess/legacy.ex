@@ -20,6 +20,11 @@ defmodule HighWire.Chess.Legacy do
   would be a second opinion nobody asked for. That also keeps the fold cheap
   for a store holding tens of thousands of moves.
 
+  The seats come from the invite and the accept. A game whose invite never
+  reached this node still names both players from its moves — each move
+  says which side made it — and a game with moves is in play even when the
+  messages that opened it are missing.
+
   Nothing here is playable. A game in this format is somebody else's to
   finish, so every snapshot says `writable?: false` and the pages leave it
   alone.
@@ -248,8 +253,8 @@ defmodule HighWire.Chess.Legacy do
   end
 
   # When the invite or accept never reached this node, the moves name the
-  # players the same way the list on the page does: the FEN a move carries
-  # leaves the other side to play, so its author is the side that moved.
+  # players: the FEN a move carries leaves the other side to play, so its
+  # author is the side that moved.
   defp move_author(moves, color) do
     Enum.find_value(moves, fn row -> if moved_color(row) == color, do: row.author end)
   end
