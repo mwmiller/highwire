@@ -94,156 +94,166 @@ defmodule HighWire.SSB.EngineTest do
     Map.merge(ctx, %{keys: keys, self_id: keys.id})
   end
 
-  test "the engine boots to readiness on the dev network", ctx do
-    assert Sidecar.status() == :ready
-    assert Sidecar.port() == ctx.port
-    assert Network.current() == :dev
-    assert Sidecar.net_id() == Network.id(:dev)
-    assert File.exists?(secret_path(ctx.home))
+  describe "booting" do
+    test "the engine boots to readiness on the dev network", ctx do
+      assert Sidecar.status() == :ready
+      assert Sidecar.port() == ctx.port
+      assert Network.current() == :dev
+      assert Sidecar.net_id() == Network.id(:dev)
+      assert File.exists?(secret_path(ctx.home))
 
-    # The pidfile names the engine we own, so shutdown can stop it.
-    port = ctx.port
-    assert %{"os_pid" => os_pid, "port" => ^port} = read_pidfile(ctx.home)
-    assert os_alive?(os_pid)
+      # The pidfile names the engine we own, so shutdown can stop it.
+      port = ctx.port
+      assert %{"os_pid" => os_pid, "port" => ^port} = read_pidfile(ctx.home)
+      assert os_alive?(os_pid)
+    end
+
+    test "the boot adopts the engine-minted identity into the registry", ctx do
+      assert Identities.active_id() == ctx.self_id
+      assert Identities.active()["id"] == ctx.self_id
+    end
   end
 
-  test "the boot adopts the engine-minted identity into the registry", ctx do
-    assert Identities.active_id() == ctx.self_id
-    assert Identities.active()["id"] == ctx.self_id
+  describe "the wire" do
+    test "owner auth, publish, unbox and stream round-trip", ctx do
+      client = engine_client(ctx, ctx.keys)
+
+      assert {:ok, %{"id" => id}} = Client.call(client, ["whoami"], [], 5_000)
+      assert id == ctx.self_id
+
+      text = "engine suite post #{System.unique_integer([:positive])}"
+
+      assert {:ok, %{"key" => key}} =
+               Client.call(client, ["publish"], [Timeline.post_content(text)], 10_000)
+
+      assert String.starts_with?(key, "%")
+
+      # The unbox path: get must return the real message, not the engine's
+      # error-map leak (%{"name" => "Error"}) the client now rejects.
+      assert {:ok, msg} =
+               Client.call(client, ["get"], [%{"id" => key, "private" => true}], 5_000)
+
+      refute match?(%{"name" => "Error"}, msg)
+      assert msg["author"] == ctx.self_id
+      assert get_in(msg, ["content", "text"]) == text
+
+      # The own-feed stream the timeline's per-feed window rests on.
+      assert {:ok, ref} =
+               Client.stream(
+                 client,
+                 ["createHistoryStream"],
+                 [%{"id" => ctx.self_id, "limit" => 10}],
+                 self()
+               )
+
+      assert {:done, items} = await_stream(ref)
+      assert Enum.any?(items, &(&1["key"] == key))
+    end
+
+    test "the patchwork roots view the paged tabs read indexes new posts", ctx do
+      client = engine_client(ctx, ctx.keys)
+
+      text = "roots view post #{System.unique_integer([:positive])}"
+
+      assert {:ok, %{"key" => key}} =
+               Client.call(client, ["publish"], [Timeline.post_content(text)], 10_000)
+
+      # Silkpurse views index asynchronously — poll the view, don't sleep.
+      assert :ok = await_view_key(client, "publicFeed", key, 15_000)
+    end
   end
 
-  test "owner auth, publish, unbox and stream round-trip", ctx do
-    client = engine_client(ctx, ctx.keys)
+  describe "identity switching" do
+    test "switching identity stops the engine, rekeys, and restarts", ctx do
+      {:ok, other} = Identities.create("engine suite two")
 
-    assert {:ok, %{"id" => id}} = Client.call(client, ["whoami"], [], 5_000)
-    assert id == ctx.self_id
+      assert :ok = Sidecar.switch_identity(other)
+      await_ready!()
+      assert Identities.active_id() == other
 
-    text = "engine suite post #{System.unique_integer([:positive])}"
+      # The secret now mirrors the switched-to identity; a client built
+      # from it authenticates as the feed the engine runs.
+      other_keys = Keys.load!(secret_path(ctx.home))
+      assert other_keys.id == other
+      assert whoami_id(engine_client(ctx, other_keys)) == other
 
-    assert {:ok, %{"key" => key}} =
-             Client.call(client, ["publish"], [Timeline.post_content(text)], 10_000)
+      assert :ok = Sidecar.switch_identity(ctx.self_id)
+      await_ready!()
+      assert Identities.active_id() == ctx.self_id
 
-    assert String.starts_with?(key, "%")
-
-    # The unbox path: get must return the real message, not the engine's
-    # error-map leak (%{"name" => "Error"}) the client now rejects.
-    assert {:ok, msg} =
-             Client.call(client, ["get"], [%{"id" => key, "private" => true}], 5_000)
-
-    refute match?(%{"name" => "Error"}, msg)
-    assert msg["author"] == ctx.self_id
-    assert get_in(msg, ["content", "text"]) == text
-
-    # The own-feed stream the timeline's per-feed window rests on.
-    assert {:ok, ref} =
-             Client.stream(
-               client,
-               ["createHistoryStream"],
-               [%{"id" => ctx.self_id, "limit" => 10}],
-               self()
-             )
-
-    assert {:done, items} = await_stream(ref)
-    assert Enum.any?(items, &(&1["key"] == key))
+      own_keys = Keys.load!(secret_path(ctx.home))
+      assert own_keys.id == ctx.self_id
+      assert whoami_id(engine_client(ctx, own_keys)) == ctx.self_id
+    end
   end
 
-  test "the patchwork roots view the paged tabs read indexes new posts", ctx do
-    client = engine_client(ctx, ctx.keys)
+  describe "recovery" do
+    test "a crashed sidecar's leftover engine is reattached, not duplicated", ctx do
+      engine = engine_pid!(ctx.home)
+      sidecar = Process.whereis(Sidecar)
 
-    text = "roots view post #{System.unique_integer([:positive])}"
+      # Kill, so terminate/2 never runs: the engine and the pidfile
+      # survive, exactly what a crashed boot leaves behind.
+      Process.exit(sidecar, :kill)
+      assert wait_until(5_000, fn -> Process.whereis(Sidecar) == nil end) == :ok
+      assert os_alive?(engine)
 
-    assert {:ok, %{"key" => key}} =
-             Client.call(client, ["publish"], [Timeline.post_content(text)], 10_000)
+      _pid = start_sidecar!()
+      await_ready!()
 
-    # Silkpurse views index asynchronously — poll the view, don't sleep.
-    assert :ok = await_view_key(client, "publicFeed", key, 15_000)
+      # Same engine, same store: the probe attached instead of stacking a
+      # second writer beside the leftover.
+      assert engine_pid!(ctx.home) == engine
+      assert whoami_id(engine_client(ctx, ctx.keys)) == ctx.keys.id
+
+      # That engine is not our OS child, so no exit_status arrives here.
+      # The sidecar's own check must notice it died and replace it rather
+      # than keep reporting :ready at a dead port.
+      System.cmd("kill", ["-KILL", to_string(engine)], stderr_to_stdout: true)
+
+      assert wait_until(20_000, fn -> Sidecar.status() != :ready end) == :ok
+      await_ready!()
+
+      replacement = engine_pid!(ctx.home)
+      refute replacement == engine
+      assert os_alive?(replacement)
+      assert Sidecar.port() == ctx.port
+      assert whoami_id(engine_client(ctx, ctx.keys)) == ctx.keys.id
+    end
   end
 
-  test "switching identity stops the engine, rekeys, and restarts", ctx do
-    {:ok, other} = Identities.create("engine suite two")
+  describe "distribution" do
+    test "a spawned engine is reachable over distribution; builtins refuse erpc", _ctx do
+      node = Sidecar.engine_node()
 
-    assert :ok = Sidecar.switch_identity(other)
-    await_ready!()
-    assert Identities.active_id() == other
+      assert is_atom(node) and not is_nil(node),
+             "the sidecar named no engine node — distribution did not start " <>
+               "(the sidecar logs 'distribution not started' with the reason)"
 
-    # The secret now mirrors the switched-to identity; a client built
-    # from it authenticates as the feed the engine runs.
-    other_keys = Keys.load!(secret_path(ctx.home))
-    assert other_keys.id == other
-    assert whoami_id(engine_client(ctx, other_keys)) == other
+      # The one distribution connection every erpc call rides — no Secret
+      # Handshake, nothing started per request.
+      assert Node.connect(node) == true
+      assert node in Node.list()
 
-    assert :ok = Sidecar.switch_identity(ctx.self_id)
-    await_ready!()
-    assert Identities.active_id() == ctx.self_id
+      # A plugin method answers as it does over the wire, decoded to the
+      # same terms Jason would have produced.
+      assert {:ok, %{"enabled" => enabled}} =
+               Erpc.call(["admin", "dialer", "status"], [], 5_000)
 
-    own_keys = Keys.load!(secret_path(ctx.home))
-    assert own_keys.id == ctx.self_id
-    assert whoami_id(engine_client(ctx, own_keys)) == ctx.self_id
-  end
+      assert is_boolean(enabled)
 
-  test "a crashed sidecar's leftover engine is reattached, not duplicated", ctx do
-    engine = engine_pid!(ctx.home)
-    sidecar = Process.whereis(Sidecar)
+      # Builtins are not on the erpc surface — their dispatch lives inside
+      # the engine's muxrpc machinery — and say so distinctly from a
+      # method that does not exist at all. Neither answer costs a
+      # connection.
+      assert {:error, :builtin} = Erpc.call(["whoami"], [], 5_000)
+      assert {:error, :unknown_method} = Erpc.call(["no", "such", "method"], [], 5_000)
 
-    # Kill, so terminate/2 never runs: the engine and the pidfile
-    # survive, exactly what a crashed boot leaves behind.
-    Process.exit(sidecar, :kill)
-    assert wait_until(5_000, fn -> Process.whereis(Sidecar) == nil end) == :ok
-    assert os_alive?(engine)
-
-    _pid = start_sidecar!()
-    await_ready!()
-
-    # Same engine, same store: the probe attached instead of stacking a
-    # second writer beside the leftover.
-    assert engine_pid!(ctx.home) == engine
-    assert whoami_id(engine_client(ctx, ctx.keys)) == ctx.keys.id
-
-    # That engine is not our OS child, so no exit_status arrives here.
-    # The sidecar's own check must notice it died and replace it rather
-    # than keep reporting :ready at a dead port.
-    System.cmd("kill", ["-KILL", to_string(engine)], stderr_to_stdout: true)
-
-    assert wait_until(20_000, fn -> Sidecar.status() != :ready end) == :ok
-    await_ready!()
-
-    replacement = engine_pid!(ctx.home)
-    refute replacement == engine
-    assert os_alive?(replacement)
-    assert Sidecar.port() == ctx.port
-    assert whoami_id(engine_client(ctx, ctx.keys)) == ctx.keys.id
-  end
-
-  test "a spawned engine is reachable over distribution; builtins refuse erpc", _ctx do
-    node = Sidecar.engine_node()
-
-    assert is_atom(node) and not is_nil(node),
-           "the sidecar named no engine node — distribution did not start " <>
-             "(the sidecar logs 'distribution not started' with the reason)"
-
-    # The one distribution connection every erpc call rides — no Secret
-    # Handshake, nothing started per request.
-    assert Node.connect(node) == true
-    assert node in Node.list()
-
-    # A plugin method answers as it does over the wire, decoded to the
-    # same terms Jason would have produced.
-    assert {:ok, %{"enabled" => enabled}} =
-             Erpc.call(["admin", "dialer", "status"], [], 5_000)
-
-    assert is_boolean(enabled)
-
-    # Builtins are not on the erpc surface — their dispatch lives inside
-    # the engine's muxrpc machinery — and say so distinctly from a
-    # method that does not exist at all. Neither answer costs a
-    # connection.
-    assert {:error, :builtin} = Erpc.call(["whoami"], [], 5_000)
-    assert {:error, :unknown_method} = Erpc.call(["no", "such", "method"], [], 5_000)
-
-    # And the wire carries the same question the erpc path just did:
-    # Admin's fallback is the whole dance, not a stub, so whichever
-    # transport answered, the Network page reads the same map.
-    assert {:ok, %{"enabled" => ^enabled}} = Admin.dialer_status(5_000)
+      # And the wire carries the same question the erpc path just did:
+      # Admin's fallback is the whole dance, not a stub, so whichever
+      # transport answered, the Network page reads the same map.
+      assert {:ok, %{"enabled" => ^enabled}} = Admin.dialer_status(5_000)
+    end
   end
 
   # -- helpers ------------------------------------------------------------

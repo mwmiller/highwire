@@ -6,6 +6,10 @@ defmodule HighWire.Backgammon.FoldTest do
   defp hex(bin), do: Base.encode16(bin, case: :lower)
   defp short_spec, do: %{"length" => 8}
 
+  defp fold(game, entries, accept_reveal) do
+    Fold.fold_game(game, %{entries: entries, accept_reveal: accept_reveal, spec: short_spec()})
+  end
+
   defp next_reveals(chain, remaining), do: Chain.reveal_pair(chain, remaining)
 
   defp new_roll(player, round, reveals, r_cur, r_next) do
@@ -100,97 +104,100 @@ defmodule HighWire.Backgammon.FoldTest do
     }
   end
 
-  test "folds a legal two-turn game into position, history and mover" do
-    %{game: game, accept_reveal: accept_reveal, entries: entries, pos2: pos2, play2: play2} =
-      two_turn_game()
+  describe "folding play" do
+    test "folds a legal two-turn game into position, history and mover" do
+      %{game: game, accept_reveal: accept_reveal, entries: entries, pos2: pos2, play2: play2} =
+        two_turn_game()
 
-    folded =
-      Fold.fold_game(game, %{entries: entries, accept_reveal: accept_reveal, spec: short_spec()})
+      folded = fold(game, entries, accept_reveal)
 
-    assert folded.error == :none
-    assert folded.phase == :playing
-    assert folded.turn_count == 2
-    assert folded.mover == game.challenger
-    assert folded.opener.starter == game.challenger
-    assert folded.position == Engine.mirror(Engine.apply(pos2, play2))
+      assert folded.error == :none
+      assert folded.phase == :playing
+      assert folded.turn_count == 2
+      assert folded.mover == game.challenger
+      assert folded.opener.starter == game.challenger
+      assert folded.position == Engine.mirror(Engine.apply(pos2, play2))
 
-    assert [first, second] = folded.history
-    assert first.player == game.challenger
-    assert first.turn == 1
-    assert second.player == game.accepter
-    assert second.turn == 2
-    assert length(first.frames) == length(Notation.parse(first.moves)) + 1
+      assert [first, second] = folded.history
+      assert first.player == game.challenger
+      assert first.turn == 1
+      assert second.player == game.accepter
+      assert second.turn == 2
+      assert length(first.frames) == length(Notation.parse(first.moves)) + 1
+    end
   end
 
-  test "the reveal counters step down two per entry" do
-    %{game: game, accept_reveal: accept_reveal, entries: entries} = two_turn_game()
+  describe "reveals and authorship" do
+    test "the reveal counters step down two per entry" do
+      %{game: game, accept_reveal: accept_reveal, entries: entries} = two_turn_game()
 
-    folded =
-      Fold.fold_game(game, %{entries: entries, accept_reveal: accept_reveal, spec: short_spec()})
+      folded = fold(game, entries, accept_reveal)
 
-    assert folded.remaining[game.challenger] == 8 - 4
-    assert folded.remaining[game.accepter] == 7 - 4
+      assert folded.remaining[game.challenger] == 8 - 4
+      assert folded.remaining[game.accepter] == 7 - 4
+    end
+
+    test "a forged reveal stops the fold with a chain violation" do
+      %{game: game, accept_reveal: accept_reveal, entries: entries} = two_turn_game()
+
+      forged =
+        Map.update!(entries, game.challenger, fn [roll, turn] ->
+          [roll, %{turn | "r_cur" => hex(:crypto.strong_rand_bytes(32))}]
+        end)
+
+      folded = fold(game, forged, accept_reveal)
+
+      assert folded.error =~ "chain violation"
+      assert folded.turn_count == 0
+    end
+
+    test "an entry claiming the wrong author stops the fold" do
+      %{game: game, accept_reveal: accept_reveal, entries: entries} = two_turn_game()
+
+      # Turn 2 is the accepter's; the challenger tries to play it again, and
+      # the accepter's real turn 2 is dropped so authorship is the only
+      # thing wrong with the entry.
+      twice = %{
+        "type" => "turn",
+        "player" => game.challenger,
+        "turn" => 2,
+        "roll" => "3-1",
+        "moves" => "13/10 13/12",
+        "reveals" => 5,
+        "r_cur" => nil,
+        "r_next" => nil
+      }
+
+      impostor =
+        entries
+        |> Map.update!(game.challenger, &(&1 ++ [twice]))
+        |> Map.update!(game.accepter, fn [roll, _turn] -> [roll] end)
+
+      folded = fold(game, impostor, accept_reveal)
+
+      assert folded.error =~ "turn 2 authored by"
+    end
   end
 
-  test "a forged reveal stops the fold with a chain violation" do
-    %{game: game, accept_reveal: accept_reveal, entries: entries} = two_turn_game()
+  describe "the opening" do
+    test "a game with no entries folds to the opening position" do
+      %{game: game} = two_turn_game()
 
-    forged =
-      Map.update!(entries, game.challenger, fn [roll, turn] ->
-        [roll, %{turn | "r_cur" => hex(:crypto.strong_rand_bytes(32))}]
-      end)
+      folded = Fold.fold_game(game, %{entries: %{}, spec: short_spec()})
 
-    folded =
-      Fold.fold_game(game, %{entries: forged, accept_reveal: accept_reveal, spec: short_spec()})
-
-    assert folded.error =~ "chain violation"
-    assert folded.turn_count == 0
+      assert folded.error == :none
+      assert folded.phase == :opening
+      assert folded.turn_count == 0
+      assert folded.mover == game.challenger
+      assert folded.position == Engine.initial()
+    end
   end
 
-  test "an entry claiming the wrong author stops the fold" do
-    %{game: game, accept_reveal: accept_reveal, entries: entries} = two_turn_game()
+  describe "bad input" do
+    test "a malformed game id is reported, not raised" do
+      folded = Fold.fold_game(%{game_id: "nope"}, %{entries: %{}})
 
-    # The accepter cannot move on turn 1: the opening decided the challenger
-    # starts, and the entry says otherwise.
-    impostor =
-      Map.update!(entries, game.accepter, fn [roll | rest] ->
-        [
-          roll,
-          %{
-            "type" => "turn",
-            "player" => game.accepter,
-            "turn" => 1,
-            "roll" => "3-1",
-            "moves" => "13/10 13/12",
-            "reveals" => 5,
-            "r_cur" => nil,
-            "r_next" => nil
-          }
-          | rest
-        ]
-      end)
-
-    folded =
-      Fold.fold_game(game, %{entries: impostor, accept_reveal: accept_reveal, spec: short_spec()})
-
-    assert folded.error != :none
-  end
-
-  test "a game with no entries folds to the opening position" do
-    %{game: game} = two_turn_game()
-
-    folded = Fold.fold_game(game, %{entries: %{}, spec: short_spec()})
-
-    assert folded.error == :none
-    assert folded.phase == :opening
-    assert folded.turn_count == 0
-    assert folded.mover == game.challenger
-    assert folded.position == Engine.initial()
-  end
-
-  test "a malformed game id is reported, not raised" do
-    folded = Fold.fold_game(%{game_id: "nope"}, %{entries: %{}})
-
-    assert folded.error == "unreadable game id"
+      assert folded.error == "unreadable game id"
+    end
   end
 end

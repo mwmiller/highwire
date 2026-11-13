@@ -40,100 +40,108 @@ defmodule HighWire.Backgammon.StoreTest do
     }
   end
 
-  test "a challenge alone opens a game and waits for an accepter" do
-    %{game_id: id, challenger: challenger, challenge: challenge} = opening()
+  describe "opening a game" do
+    test "a challenge alone opens a game and waits for an accepter" do
+      %{game_id: id, challenger: challenger, challenge: challenge} = opening()
 
-    assert {:ok, ^id} = Store.ingest(challenge)
+      assert {:ok, ^id} = Store.ingest(challenge)
 
-    game = Store.get(id)
-    assert game.challenger == challenger
-    assert game.accepter == nil
-    assert game.position != nil
-    # Rows without both players are not games yet.
-    assert Store.games() == []
+      game = Store.get(id)
+      assert game.challenger == challenger
+      assert game.accepter == nil
+      assert game.position != nil
+      # Rows without both players are not games yet.
+      assert Store.games() == []
+    end
+
+    test "an accept completes the pairing" do
+      %{
+        game_id: id,
+        challenger: challenger,
+        accepter: accepter,
+        challenge: challenge,
+        accept: accept
+      } =
+        opening()
+
+      Store.ingest(challenge)
+      assert {:ok, ^id} = Store.ingest(accept)
+
+      game = Store.get(id)
+      assert game.challenger == challenger
+      assert game.accepter == accepter
+      assert game.phase == :opening
+      assert game.status == :opening
+      assert game.mover == challenger
+      assert game.error == :none
+      assert [^id] = Enum.map(Store.games(), & &1.game_id)
+    end
+
+    test "delivery order does not matter" do
+      %{game_id: id, challenge: challenge, accept: accept} = opening()
+
+      Store.ingest(accept)
+      Store.ingest(challenge)
+
+      game = Store.get(id)
+      assert game.challenger != nil
+      assert game.accepter != nil
+      assert game.error == :none
+    end
   end
 
-  test "an accept completes the pairing" do
-    %{
-      game_id: id,
-      challenger: challenger,
-      accepter: accepter,
-      challenge: challenge,
-      accept: accept
-    } =
-      opening()
+  describe "filing messages" do
+    test "a re-delivered message is filed once" do
+      %{game_id: id, challenge: challenge} = opening()
 
-    Store.ingest(challenge)
-    assert {:ok, ^id} = Store.ingest(accept)
+      assert {:ok, ^id} = Store.ingest(challenge)
+      assert :seen = Store.ingest(challenge)
 
-    game = Store.get(id)
-    assert game.challenger == challenger
-    assert game.accepter == accepter
-    assert game.phase == :opening
-    assert game.status == :opening
-    assert game.mover == challenger
-    assert game.error == :none
-    assert [^id] = Enum.map(Store.games(), & &1.game_id)
+      assert Store.get(id).entries == 0
+    end
+
+    test "messages outside the namespace are ignored" do
+      assert :ignored =
+               Store.ingest(envelope("@someone.ed25519", %{"type" => "post", "text" => "hi"}))
+    end
+
+    test "a game message without a usable id is ignored" do
+      content = %{"type" => "backgammon/turn", "game_id" => "not-an-id", "turn" => 1}
+      assert :ignored = Store.ingest(envelope("@someone.ed25519", content))
+    end
   end
 
-  test "delivery order does not matter" do
-    %{game_id: id, challenge: challenge, accept: accept} = opening()
+  describe "withdrawing" do
+    test "only the challenger can withdraw" do
+      %{
+        game_id: id,
+        challenger: challenger,
+        accepter: accepter,
+        challenge: challenge,
+        accept: accept
+      } =
+        opening()
 
-    Store.ingest(accept)
-    Store.ingest(challenge)
+      Store.ingest(challenge)
+      Store.ingest(accept)
 
-    game = Store.get(id)
-    assert game.challenger != nil
-    assert game.accepter != nil
-    assert game.error == :none
+      Store.ingest(envelope(accepter, Game.withdraw(id, "%challenge.sha256")))
+      refute Store.get(id).withdrawn?
+
+      Store.ingest(envelope(challenger, Game.withdraw(id, "%challenge.sha256")))
+      assert Store.get(id).withdrawn?
+      assert Store.get(id).status == :withdrawn
+    end
   end
 
-  test "a re-delivered message is filed once" do
-    %{game_id: id, challenge: challenge} = opening()
+  describe "directed challenges" do
+    test "a directed challenge keeps its addressee" do
+      %{game_id: id, challenge: challenge} = opening()
+      content = Map.put(challenge["value"]["content"], "to", "@friend.ed25519")
+      challenge = put_in(challenge, ["value", "content"], content)
 
-    assert {:ok, ^id} = Store.ingest(challenge)
-    assert :seen = Store.ingest(challenge)
-
-    assert Store.get(id).entries == 0
-  end
-
-  test "messages outside the namespace are ignored" do
-    assert :ignored =
-             Store.ingest(envelope("@someone.ed25519", %{"type" => "post", "text" => "hi"}))
-  end
-
-  test "a game message without a usable id is ignored" do
-    content = %{"type" => "backgammon/turn", "game_id" => "not-an-id", "turn" => 1}
-    assert :ignored = Store.ingest(envelope("@someone.ed25519", content))
-  end
-
-  test "only the challenger can withdraw" do
-    %{
-      game_id: id,
-      challenger: challenger,
-      accepter: accepter,
-      challenge: challenge,
-      accept: accept
-    } =
-      opening()
-
-    Store.ingest(challenge)
-    Store.ingest(accept)
-
-    Store.ingest(envelope(accepter, Game.withdraw(id, "%challenge.sha256")))
-    refute Store.get(id).withdrawn?
-
-    Store.ingest(envelope(challenger, Game.withdraw(id, "%challenge.sha256")))
-    assert Store.get(id).withdrawn?
-    assert Store.get(id).status == :withdrawn
-  end
-
-  test "a directed challenge keeps its addressee" do
-    %{game_id: id, challenge: challenge} = opening()
-    content = Map.put(challenge["value"]["content"], "to", "@friend.ed25519")
-    challenge = put_in(challenge, ["value", "content"], content)
-
-    Store.ingest(challenge)
-    assert Store.get(id).directed_to == "@friend.ed25519"
+      Store.ingest(challenge)
+      assert Store.get(id).directed_to == "@friend.ed25519"
+    end
   end
 end
