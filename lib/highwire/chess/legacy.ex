@@ -217,10 +217,11 @@ defmodule HighWire.Chess.Legacy do
     if invite, do: invite.key, else: Enum.find_value(rows, & &1.content["root"])
   end
 
-  # The latest move, or the ending when only an ending arrived, the board it
-  # left, and the ply it was played at.
+  # The line is ordered, so its last move is the one that left the board on
+  # show. A timestamp is when a message was written, not where it belongs in
+  # the game: a move delivered late must not walk the board backwards.
   defp head(moves, ending) do
-    last = latest(moves) || ending
+    last = List.last(moves) || ending
     position = position(last && last.content["fen"])
     ply = (last && last.content["ply"]) || length(moves)
     {last, position, ply}

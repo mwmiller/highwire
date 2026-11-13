@@ -271,6 +271,23 @@ defmodule HighWire.Chess.LegacyTest do
       assert game.status == :playing
     end
 
+    test "a late-arriving earlier move does not walk the board backwards" do
+      after_e5 = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"
+
+      game =
+        Legacy.fold([
+          invite(),
+          accept(),
+          move(1, "e2", "e4", "e4", @after_e4, @white, 9),
+          move(2, "e7", "e5", "e5", after_e5, @black, 3)
+        ])
+
+      assert game.turn_count == 2
+      assert game.turn == :white
+      assert game.board["e5"] == {:pawn, :black}
+      assert game.mover == @white
+    end
+
     test "a missing reply link does not cut off the moves that follow it" do
       two = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"
       three = "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2"
