@@ -212,22 +212,26 @@ defmodule HighWire.SSB.SuggestTest do
 
       blocked = "@f1=.ed25519"
 
-      for _ <- 1..20 do
-        {rows1, rows2} =
-          Suggest.sets(contact_msgs, follows, @me, nil, blocked: MapSet.new([blocked]))
+      # Unshuffled, the draw is the ranking's id order: f1 would lead, and
+      # blocking it must leave f2..f6 rather than four rows. A shuffled
+      # draw would only notice a post-draw filter when f1 happened to be
+      # picked.
+      {rows1, rows2} =
+        Suggest.sets(contact_msgs, follows, @me, nil,
+          blocked: MapSet.new([blocked]),
+          shuffle: false
+        )
 
-        for rows <- [rows1, rows2] do
-          assert length(rows) == 5
-          refute blocked in Enum.map(rows, & &1["id"])
-        end
+      for rows <- [rows1, rows2] do
+        assert Enum.map(rows, & &1["id"]) == Enum.drop(candidates, 1)
       end
 
       # The same set taken from the pool the ranking actually builds: the
       # blocked candidate is gone before the draw, not after it.
       raw =
-        Suggest.rank(contact_msgs, follows, @me, MapSet.new(), blocked: [blocked], shuffle: false)
+        Suggest.rank(contact_msgs, follows, @me, nil, blocked: [blocked], shuffle: false)
 
-      refute blocked in Enum.map(raw, & &1["id"])
+      assert Enum.map(raw, & &1["id"]) == Enum.drop(candidates, 1)
     end
   end
 end

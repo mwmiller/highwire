@@ -158,33 +158,41 @@ defmodule HighWire.SuggesterTest do
       cache = tmp_cache_path()
       start(cache)
 
-      # Nine candidates behind one follower: the ranking draws five of
-      # nine, shuffled, so consecutive sets differ.
       candidates = candidates(9)
       contacts = endorsements(candidates)
-      Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, MapSet.new(), :test_suggester)
+      inputs = {contacts, [@me, @xxx], @me, nil, MapSet.new()}
 
-      assert wait_until(fn -> length(Suggester.get_suggestions(:test_suggester)) == 5 end)
-      first = Suggester.get_suggestions(:test_suggester)
+      # Pin the queue: a real draw would make the test wait for two random
+      # five-of-nine sets to differ, which they need not.
+      reserved = [%{"id" => "@reserved=.ed25519", "followers" => 1}]
+      first = [%{"id" => "@first=.ed25519", "followers" => 1}]
+
+      :sys.replace_state(:test_suggester, fn st ->
+        %{st | rows: first, ready: [reserved], ranked: inputs}
+      end)
 
       # Reads are pure — the reserved set does not rotate in on its own.
       assert Suggester.get_suggestions(:test_suggester) == first
 
-      # The first refresh swaps in the set the initial ranking held in
-      # reserve, without waiting on any task.
+      # The first refresh swaps the reserve in without waiting on the
+      # ranking it kicks behind it, and the refill does not disturb the
+      # set the reader is now looking at.
       assert :ok = Suggester.refresh(:test_suggester)
-      assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) != first end)
-      second = Suggester.get_suggestions(:test_suggester)
-      assert length(second) == 5
+      assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) == reserved end)
+      assert wait_until(fn -> :sys.get_state(:test_suggester).task_ref == nil end)
+      assert Suggester.get_suggestions(:test_suggester) == reserved
 
-      # The queue is dry now, so the next refresh is owed a set from the
-      # background ranking it kicks; it lands the same way.
+      # The queue is dry now, so the next refresh starts a ranking and
+      # serves its first set; the second joins the reserve.
+      :sys.replace_state(:test_suggester, fn st -> %{st | rows: first, ready: []} end)
       assert :ok = Suggester.refresh(:test_suggester)
-      assert wait_until(fn -> Suggester.get_suggestions(:test_suggester) != second end)
-      third = Suggester.get_suggestions(:test_suggester)
 
-      assert Enum.uniq_by(third, & &1["id"]) |> length() == 5
-      assert Enum.all?(third, &(&1["id"] in candidates))
+      assert wait_until(fn -> length(Suggester.get_suggestions(:test_suggester)) == 5 end)
+
+      served = Suggester.get_suggestions(:test_suggester)
+      assert Enum.uniq_by(served, & &1["id"]) |> length() == 5
+      assert Enum.all?(served, &(&1["id"] in candidates))
+      assert length(:sys.get_state(:test_suggester).ready) == 1
     end
 
     test "the prefetched reserve does not grow without bound" do
@@ -227,11 +235,18 @@ defmodule HighWire.SuggesterTest do
       # instead of the rail coming up a row short.
       candidates = candidates(6)
       contacts = endorsements(candidates)
+      blocked = hd(candidates)
 
       Suggester.cast_inputs(contacts, [@me, @xxx], @me, nil, MapSet.new(), :test_suggester)
       assert wait_until(fn -> length(Suggester.get_suggestions(:test_suggester)) == 5 end)
 
-      blocked = hd(candidates)
+      # Pin the pre-block rail to a set that holds the blocked feed: the
+      # draw may or may not have shown it, and the wait below must not
+      # pass before the re-rank lands.
+      pinned = Enum.map(Enum.take(candidates, 5), &%{"id" => &1, "followers" => 1})
+      :sys.replace_state(:test_suggester, fn st -> %{st | rows: pinned} end)
+      assert blocked in Enum.map(pinned, & &1["id"])
+
       # A block also retracts the follow, so the blocked feed leaves the
       # follow list as well as joining the block set.
       Suggester.cast_inputs(
@@ -243,13 +258,12 @@ defmodule HighWire.SuggesterTest do
         :test_suggester
       )
 
-      # Wait on the block actually taking effect, not merely on the count:
-      # the pre-block set is already five rows, so a length check would pass
-      # before the re-rank lands.
       assert wait_until(fn ->
                ids = Enum.map(Suggester.get_suggestions(:test_suggester), & &1["id"])
                length(ids) == 5 and blocked not in ids
              end)
+
+      assert Enum.uniq_by(Suggester.get_suggestions(:test_suggester), & &1["id"]) |> length() == 5
     end
 
     test "a ranking that dies while a refresh is owed is retried, not dropped" do

@@ -44,19 +44,10 @@ defmodule HighWire.Backgammon.FoldTest do
   defp two_turn_game do
     len = short_spec()["length"]
 
-    {chall, accept} =
-      Enum.reduce_while(Stream.repeatedly(fn -> :next end), nil, fn _, _ ->
-        chall = Chain.generate(:crypto.strong_rand_bytes(32), short_spec())
-        accept = Chain.generate(:crypto.strong_rand_bytes(32), short_spec())
-
-        {c0, c0_next} = next_reveals(chall, len)
-        {a0, _} = next_reveals(accept, len - 1)
-
-        dc = Chain.dice(c0, List.last(accept), 1) |> hd()
-        da = Chain.dice(a0, c0_next, 1) |> hd()
-
-        if dc > da, do: {:halt, {chall, accept}}, else: {:cont, nil}
-      end)
+    # Fixed chains whose opener rolls 3 against 2: a fresh random draw
+    # would both retry until it found one and change the fixture each run.
+    chall = Chain.generate(<<3::256>>, short_spec())
+    accept = Chain.generate(<<21::256>>, short_spec())
 
     accept_reveal = List.last(accept)
     challenger = "@challenger.ed25519"
