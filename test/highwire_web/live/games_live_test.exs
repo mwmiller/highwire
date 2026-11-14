@@ -343,11 +343,12 @@ defmodule HighWireWeb.GamesLiveTest do
       assert html =~ "in play"
       assert html =~ "1."
       assert html =~ "e5"
-      # The board draws pieces, both sides, from the folded squares: one filled
-      # silhouette whose colour says which side it belongs to.
-      assert html =~ ~s(data-colour="white")
-      assert html =~ ~s(data-colour="black")
-      assert html =~ "♟"
+      # The board draws pieces, both sides, from the folded squares: one
+      # filled silhouette whose colour says which side it belongs to. The
+      # cburnett SVG set renders each side as its own drawing — white pieces
+      # are light-filled with a black outline, black pieces are dark silhouettes.
+      assert html =~ "/assets/chess/wP.svg"
+      assert html =~ "/assets/chess/bP.svg"
     end
 
     test "a backgammon game opens on its history", %{conn: conn} do
