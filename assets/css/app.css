@@ -311,9 +311,11 @@
     justify-content: center;
     line-height: 1;
   }
-  /* The font's glyphs are not drawn to a common size, so each piece carries a
-     scale and a shift of its own, measured once by the PieceInk hook. Until
-     it runs, a piece is 84% of its square on the font's own terms. */
+  /* The cburnett SVGs are not centred in their 45x45 viewBox (the pawns, in
+     particular, sit low), so each piece is sized as a share of its square and
+     nudged vertically to sit on the baseline a real piece would sit on.
+     Until the browser has laid the image out, the piece is 84% of its square
+     tall. */
   .chess-piece {
     /* Out of the flow: the SVG viewBox is 45x45 and the piece ink is not
        centred in that box (the cburnett pawns, in particular, sit low), so
