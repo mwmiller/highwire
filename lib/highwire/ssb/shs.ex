@@ -75,14 +75,14 @@ defmodule HighWire.SSB.SHS do
       <<nonce::binary-size(24), _::binary-size(8)>> = mac
       {eph_pk, nonce}
     else
-      raise "network id mismatch (hello did not verify)"
+      raise "SHS handshake failed"
     end
   end
 
   defp open!(box, nonce, key) do
     case :enacl.secretbox_open(box, nonce, key) do
       {:ok, plain} -> plain
-      {:error, reason} -> raise "SHS auth rejected: #{inspect(reason)}"
+      {:error, _reason} -> raise "SHS handshake failed"
     end
   end
 

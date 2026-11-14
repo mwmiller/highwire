@@ -35,6 +35,14 @@ defmodule HighWire.SSB.BoxStream do
     {enc_header <> body, incr(incr(nonce))}
   end
 
+  @doc """
+  The only shape a caller can rely on: {:frame, payload, new_nonce,
+  rest}, {:end, new_nonce}, or :partial. Anything that is not a
+  well-formed box frame — tampered, truncated, or not a box at all —
+  raises in open!, which is the right failure mode for a transport
+  layer: the caller (the Client pump) treats a raise as a dead socket
+  and fails everyone on it.
+  """
   @spec unbox(binary(), nonce(), binary()) ::
           {:frame, binary(), nonce(), binary()} | {:end, nonce()} | :partial
   def unbox(buf, _nonce, _key) when byte_size(buf) < 34, do: :partial
@@ -58,6 +66,14 @@ defmodule HighWire.SSB.BoxStream do
     end
   end
 
+  @doc """
+  Advance the 192-bit box-stream nonce by one — the counter wraps at
+  2^192. A wrap is astronomically far off (each data frame consumes two
+  increments, so 2^191 frames before wrap), but if it ever happened the
+  connection is the safety net: the next open! would fail to authenticate
+  and tear the socket down rather than decrypt wrongly. Making the wrap
+  land cleanly in both sides' counters is not something to engineer for.
+  """
   @spec incr(nonce()) :: nonce()
   def incr(nonce) do
     <<n::big-integer-size(192)>> = nonce
