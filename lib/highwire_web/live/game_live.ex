@@ -17,7 +17,7 @@ defmodule HighWireWeb.GameLive do
   alias HighWire.Chess.Legacy
   alias HighWire.Games.Catalog
   alias HighWire.SSB.{Identities, Profile}
-  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Shell}
+  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Shell}
 
   # How long one ply of playback stays on the board: fast enough to read a
   # game, slow enough to see the move land.
@@ -761,8 +761,6 @@ defmodule HighWireWeb.GameLive do
     ~H"""
     <Shell.app>
       <:rail>
-        <Nav.rail_label>Games</Nav.rail_label>
-        <Nav.rail_link navigate={~p"/games"}>Gameroom</Nav.rail_link>
       </:rail>
 
       <main class="flex-1 overflow-y-auto">
@@ -786,8 +784,6 @@ defmodule HighWireWeb.GameLive do
     ~H"""
     <Shell.app>
       <:rail>
-        <Nav.rail_label>Games</Nav.rail_label>
-        <Nav.rail_link navigate={~p"/games"}>Gameroom</Nav.rail_link>
       </:rail>
 
       <main class="flex-1 overflow-y-auto">
@@ -934,8 +930,6 @@ defmodule HighWireWeb.GameLive do
     ~H"""
     <Shell.app>
       <:rail>
-        <Nav.rail_label>Games</Nav.rail_label>
-        <Nav.rail_link navigate={~p"/games"}>Gameroom</Nav.rail_link>
       </:rail>
 
       <main class="flex-1 overflow-y-auto">
