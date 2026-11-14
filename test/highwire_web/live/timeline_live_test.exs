@@ -1116,6 +1116,24 @@ defmodule HighWireWeb.TimelineLiveTest do
     refute html =~ "the main topic"
   end
 
+  test "a query in the URL reseeds the search on a fresh mount", %{conn: conn} do
+    {:ok, view, html} = live(conn, "/?q=needle")
+
+    # Opening the URL directly is the same state the browser restores after
+    # a post unmounts the timeline. The box and the index query both come
+    # back, rather than the reader landing on an unfiltered feed.
+    assert html =~ ~s(value="needle")
+    assert kicked_query(view) == "needle"
+  end
+
+  test "a search keeps its query in the URL without adding a history step", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    render_change(view, "search", %{"q" => "needle"})
+
+    assert_patch(view, "/?q=needle")
+  end
+
   test "a search says it is searching until the index answers", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
     notify(view, feed_payload([]))

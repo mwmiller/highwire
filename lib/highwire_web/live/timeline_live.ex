@@ -126,6 +126,25 @@ defmodule HighWireWeb.TimelineLive do
     {:ok, socket}
   end
 
+  # The query is page state, so it rides in the URL. A post opens as its own
+  # LiveView and unmounts this one; without the parameter, coming back would
+  # mount an unfiltered feed. Search replaces the current history entry — a
+  # query is a refinement of this page, not a step of its own — while tab
+  # changes and post opens keep their normal history behaviour.
+  @impl true
+  def handle_params(params, _uri, socket) do
+    q = Map.get(params, "q", "")
+
+    socket =
+      if connected?(socket) do
+        apply_query(socket, q)
+      else
+        assign(socket, q: normalize_query(q))
+      end
+
+    {:noreply, socket}
+  end
+
   @impl true
   def handle_info({Timeline, :updated, payload}, socket) do
     socket = assign(socket, :status, :ok)
@@ -341,24 +360,8 @@ defmodule HighWireWeb.TimelineLive do
 
   @impl true
   def handle_event("search", %{"q" => q}, socket) do
-    qtrim = q |> to_string() |> String.trim()
-    qd = String.downcase(qtrim)
-    socket = assign(socket, q: qd)
-
-    cond do
-      qd == "" ->
-        {:noreply, assign(socket, search_hits: [], search_q_kicked: "", search_state: :idle)}
-
-      socket.assigns.search_state == :pending or qd == socket.assigns.search_q_kicked ->
-        # One query at a time: while an answer is out it holds the kick,
-        # and what was typed over it in the meantime is asked for when it
-        # lands — an answer for a superseded query asks forward itself.
-        # Re-asking the query that was just asked has nothing to add.
-        {:noreply, socket}
-
-      true ->
-        {:noreply, kick_search(socket, qtrim, qd)}
-    end
+    socket = apply_query(socket, q)
+    {:noreply, push_patch(socket, to: search_path(q), replace: true)}
   end
 
   # Composer drafts debounce into the assign; publish trims, validates
@@ -514,6 +517,36 @@ defmodule HighWireWeb.TimelineLive do
   def handle_event("tab-inactive", _params, socket) do
     Timeline.set_activity(self(), false)
     {:noreply, socket}
+  end
+
+  defp apply_query(socket, q) do
+    qtrim = q |> to_string() |> String.trim()
+    qd = String.downcase(qtrim)
+    socket = assign(socket, q: qd)
+
+    cond do
+      qd == "" ->
+        assign(socket, search_hits: [], search_q_kicked: "", search_state: :idle)
+
+      socket.assigns.search_state == :pending or qd == socket.assigns.search_q_kicked ->
+        # One query at a time: while an answer is out it holds the kick,
+        # and what was typed over it in the meantime is asked for when it
+        # lands — an answer for a superseded query asks forward itself.
+        # Re-asking the query that was just asked has nothing to add.
+        socket
+
+      true ->
+        kick_search(socket, qtrim, qd)
+    end
+  end
+
+  defp normalize_query(q), do: q |> to_string() |> String.trim() |> String.downcase()
+
+  defp search_path(q) do
+    case q |> to_string() |> String.trim() do
+      "" -> "/"
+      q -> "/?" <> URI.encode_query(%{q: q})
+    end
   end
 
   # The press is answered by the button taking the hold, and the
