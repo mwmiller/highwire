@@ -422,37 +422,7 @@ defmodule HighWire.SearchIndex do
 
   @impl true
   def handle_info(:connect, %{enabled?: true} = state) do
-    state = stop_client(state)
-
-    # The sidecar answers with its port before the engine it spawned can
-    # take a request. Dialling into that window is refused at the socket,
-    # and an engine that is listening but not up answers "method not
-    # found" — neither is a failure worth logging once per two seconds.
-    if Sidecar.status() == :ready do
-      case start_client() do
-        nil ->
-          Logger.warning("[search_index] could not start SSB client; retrying in 2s")
-          put_status(:connecting)
-          Process.send_after(self(), :connect, 2_000)
-          {:noreply, state}
-
-        client ->
-          case open_backlog(client, resume_gt(state.cursor)) do
-            nil ->
-              Logger.warning("[search_index] could not open backlog stream; retrying in 2s")
-              put_status(:connecting)
-              Process.send_after(self(), :connect, 2_000)
-              {:noreply, stop_client(%{state | client: client})}
-
-            ref ->
-              {:noreply, begin_stream(%{state | client: client}, ref, :backlog)}
-          end
-      end
-    else
-      put_status(:connecting)
-      Process.send_after(self(), :connect, 2_000)
-      {:noreply, state}
-    end
+    {:noreply, state |> stop_client() |> connect()}
   end
 
   def handle_info(:connect, %{enabled?: false} = state) do
@@ -585,5 +555,46 @@ defmodule HighWire.SearchIndex do
     :ok
   rescue
     _ -> :ok
+  end
+
+  # The sidecar answers with its port before the engine it spawned can
+  # take a request. Dialling into that window is refused at the socket,
+  # and an engine that is listening but not up answers "method not
+  # found" — neither is a failure worth logging once per two seconds.
+  defp connect(state) do
+    if Sidecar.status() == :ready do
+      connect_ready(state)
+    else
+      retry_connect(state)
+    end
+  end
+
+  defp connect_ready(state) do
+    case start_client() do
+      nil ->
+        Logger.warning("[search_index] could not start SSB client; retrying in 2s")
+        retry_connect(state)
+
+      client ->
+        state = %{state | client: client}
+        open_backlog_or_retry(state)
+    end
+  end
+
+  defp open_backlog_or_retry(state) do
+    case open_backlog(state.client, resume_gt(state.cursor)) do
+      nil ->
+        Logger.warning("[search_index] could not open backlog stream; retrying in 2s")
+        state |> stop_client() |> retry_connect()
+
+      ref ->
+        begin_stream(state, ref, :backlog)
+    end
+  end
+
+  defp retry_connect(state) do
+    put_status(:connecting)
+    Process.send_after(self(), :connect, 2_000)
+    state
   end
 end

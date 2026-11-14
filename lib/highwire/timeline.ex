@@ -64,7 +64,7 @@ defmodule HighWire.Timeline do
   alias HighWire.Blob
   alias HighWire.Chess
   alias HighWire.Contacts
-  alias HighWire.SSB.{Client, Keys, MessageIndex, PrivateBox, Profile, Sidecar}
+  alias HighWire.SSB.{Client, Keys, MessageIndex, PrivateBox, Profile, Relations, Sidecar}
   alias HighWire.Suggester
   alias HighWireWeb.MessageText
 
@@ -842,7 +842,7 @@ defmodule HighWire.Timeline do
     # Whom each feed follows and blocks: the contact pass leaves its
     # graph here, so a profile can answer for the feed it is about
     # rather than only for the reader.
-    _ = HighWire.SSB.Relations.create()
+    _ = Relations.create()
 
     state = %{
       status: :connecting,
@@ -3558,7 +3558,7 @@ defmodule HighWire.Timeline do
     # The pass reads every contact message in the store, so the newest
     # state of each follow or block is folded here once — this is the
     # graph a profile shows for the feed it is about.
-    Enum.each(fresh, &HighWire.SSB.Relations.fold/1)
+    Enum.each(fresh, &Relations.fold/1)
 
     state = %{
       state

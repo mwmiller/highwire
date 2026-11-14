@@ -9,6 +9,7 @@ defmodule HighWire.TimelineTest do
   # quiet, so: never async.
   use ExUnit.Case, async: false
 
+  alias HighWire.Chess.Game
   alias HighWire.SSB.Client
   alias HighWire.SSB.Profile
   alias HighWire.Timeline
@@ -1338,7 +1339,7 @@ defmodule HighWire.TimelineTest do
 
       # Every name this node publishes is asked for by name, so a game played
       # here reaches the room the same way a network game does.
-      assert Enum.map(HighWire.Chess.Game.names(), &("chess/" <> &1)) ==
+      assert Enum.map(Game.names(), &("chess/" <> &1)) ==
                ~w(chess/challenge chess/accept chess/move chess/resign chess/withdraw)
 
       # the shared connection carries only the per-feed windows

@@ -3,6 +3,8 @@ defmodule HighWireWeb.ProfileLiveTest do
 
   import Phoenix.LiveViewTest
 
+  alias HighWire.SSB.Profile
+
   @id "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
 
   describe "loading the page" do
@@ -493,8 +495,8 @@ defmodule HighWireWeb.ProfileLiveTest do
 
       # The pill resolves through the same read model the timeline and the
       # rail use, so a feed the store can name shows that name by its face.
-      HighWire.SSB.Profile.create()
-      HighWire.SSB.Profile.put_about(followed, %{"name" => "Followed Feed"}, :own)
+      Profile.create()
+      Profile.put_about(followed, %{"name" => "Followed Feed"}, :own)
 
       {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(id))
 
@@ -521,9 +523,9 @@ defmodule HighWireWeb.ProfileLiveTest do
       zed = "@zzz-sort=.ed25519"
       amy = "@aaa-sort=.ed25519"
 
-      HighWire.SSB.Profile.create()
-      HighWire.SSB.Profile.put_about(zed, %{"name" => "Zed"}, :own)
-      HighWire.SSB.Profile.put_about(amy, %{"name" => "Amy"}, :own)
+      Profile.create()
+      Profile.put_about(zed, %{"name" => "Zed"}, :own)
+      Profile.put_about(amy, %{"name" => "Amy"}, :own)
 
       {:ok, view, _html} = live(conn, "/profile?id=" <> URI.encode_www_form(target))
 
