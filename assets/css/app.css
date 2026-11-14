@@ -330,22 +330,20 @@
   }
   .chess-piece[data-colour="black"] {
     color: var(--piece-black);
-    /* The same glyph on both sides, so the edge is the only thing that
-       keeps a piece readable on a square of the same tone, and the only
-       thing that separates the two pawn rows. The stroke is the opposite
-       colour to the fill on both sides, so the treatment is comparable
-       either way. Thick enough that it reads at pawn scale — the two rows
-       should not look identical. */
-    -webkit-text-stroke-width: 0.12em;
+    /* Dark pieces use the dark Unicode family and get a light contour, so
+       the two rows read as opposite pieces, not two copies of the same row.
+       The edge is the same treatment the white side gets — a thin opposite-
+       colour contour — so both sides stay comparable. */
+    -webkit-text-stroke-width: 0.08em;
     -webkit-text-stroke-color: var(--piece-black-edge);
   }
   .chess-piece[data-colour="white"] {
     color: var(--piece-white);
-    /* The counterpart to the black piece's light edge: a dark edge on the
-       light fill, same width, same idea. Both sides get the same treatment
-       in the opposite colour so the two pawn rows read as opposite
-       constructions rather than the same row. */
-    -webkit-text-stroke-width: 0.12em;
+    /* White pieces use the light Unicode family and get a dark contour, the
+       same edge idea the black side gets in the opposite colour. Both rows
+       get the same treatment; the two families give each row its own
+       silhouette. */
+    -webkit-text-stroke-width: 0.08em;
     -webkit-text-stroke-color: var(--piece-white-edge);
   }
 }

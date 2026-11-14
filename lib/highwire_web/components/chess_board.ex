@@ -6,11 +6,12 @@ defmodule HighWireWeb.Components.ChessBoard do
   the rank and file names rather than of the map: empty squares are the ones
   the map does not have, and a board drawn from its keys would lose them.
 
-  Pieces are text, not images — the same glyph every platform has — so the
+  Pieces are text, not images — the same glyphs every platform has — so the
   gameroom needs no sprite sheet and a spectator reads the position at any
-  zoom. Both sides are the same filled silhouette, coloured differently, at
-  a share of the square's width: the glyph is the same shape either way, and
-  the colour says which side it belongs to.
+  zoom. Each side is drawn from its own Unicode family (white pieces from the
+  light family, black pieces from the dark family), and both sides get the
+  same edge treatment: a thin contour in the opposite colour, so the two
+  rows read as opposite pieces rather than two copies of the same row.
   """
 
   use Phoenix.Component
@@ -18,10 +19,12 @@ defmodule HighWireWeb.Components.ChessBoard do
   @files ~w(a b c d e f g h)
   @ranks ~w(8 7 6 5 4 3 2 1)
 
-  # One codepoint set for both sides. A chess piece is the same shape
-  # whichever side it belongs to; the colour is the only difference, so the
-  # board uses one family of glyphs and lets the CSS say white or black.
-  @glyphs %{king: "♚", queen: "♛", rook: "♜", bishop: "♝", knight: "♞", pawn: "♟"}
+  # Two codepoint sets, one per side. The light family (♔♕♖♗♘♙) and the
+  # dark family (♚♛♜♝♞♟) are drawn slightly differently in most fonts — the
+  # light one is lighter and a touch thinner, the dark one heavier — so the
+  # two rows read as different pieces rather than the same shape in two tones.
+  @glyphs_w %{king: "♔", queen: "♕", rook: "♖", bishop: "♗", knight: "♘", pawn: "♙"}
+  @glyphs_b %{king: "♚", queen: "♛", rook: "♜", bishop: "♝", knight: "♞", pawn: "♟"}
 
   attr :id, :string, default: nil, doc: "names the board so the piece hook can find it"
   attr :board, :map, required: true, doc: "the fold's board: square => {type, colour}"
@@ -112,7 +115,8 @@ defmodule HighWireWeb.Components.ChessBoard do
 
   defp stoi(<<c>>), do: c
 
-  defp glyph({type, _colour}), do: Map.get(@glyphs, type, "")
+  defp glyph({type, :white}), do: Map.get(@glyphs_w, type, "")
+  defp glyph({type, :black}), do: Map.get(@glyphs_b, type, "")
   defp colour({_type, colour}), do: to_string(colour)
   defp type({type, _colour}), do: to_string(type)
 end
