@@ -28,6 +28,16 @@ defmodule HighWire.SSB.Muxrpc do
   @typedoc "The largest body `encode/2` will frame."
   @type max_body :: 4_294_967_295
 
+  @doc """
+  The wire terminator for a stream: a 9-byte zero frame (`<<0::72>>`).
+  It is the one frame whose body is not read — the engine sees the zero
+  header, drops the connection's stream state, and replies with its own
+  rpc_end. `encode/2` can produce the same 9 bytes by framing an empty
+  body with the end flag, but callers that mean "end the stream" should
+  use this directly, because an `end: 1` frame carrying a non-empty body
+  is a normal final frame whose body the engine reads (a sink's error
+  channel, a source's last item) — not a terminator.
+  """
   @spec rpc_end() :: binary()
   def rpc_end, do: @rpc_end
 

@@ -15,6 +15,19 @@ defmodule HighWire.SSB.Client do
   Authenticating with the account's own keypair makes the sidecar treat
   this connection as `owner` class (publish, createUserStream, …);
   a fresh ephemeral keypair is `anyone` class.
+
+  Scope: this client only ever opens outbound requests and only ever
+  answers replies to those requests. Server-initiated messages — EBT
+  pushes, `wants` answers, any other frame the engine sends that this
+  client did not ask for — arrive with a positive req number and are
+  dropped silently by `route/3`. That is the intended scope: the engine
+  is the SSB node that replicates and serves, and this client is the
+  app's control plane for the requests the app itself makes (publish,
+  get, the per-feed and per-view streams the timeline and profile pages
+  read). If the client were ever pointed at a remote peer, that peer's
+  EBT/wants would be dropped on the floor, which is the correct behavior
+  for a control-plane client that never asked for them — not a bug to
+  fix, a scope to keep.
   """
 
   use GenServer, restart: :temporary
@@ -335,15 +348,13 @@ defmodule HighWire.SSB.Client do
 
   defp fail_all(state, reason) do
     Enum.each(state.calls, fn
-      {req, {:call, from}} ->
-        _ = req
+      {_, {:call, from}} ->
         GenServer.reply(from, {:error, reason})
 
       {req, {:stream, sub}} ->
         send(sub, {__MODULE__, req, {:error, reason}})
 
-      {req, {:sink, from}} ->
-        _ = req
+      {_, {:sink, from}} ->
         GenServer.reply(from, {:error, reason})
     end)
 

@@ -371,8 +371,12 @@ defmodule HighWire.SSB.Import do
       # The old store's secret is the whole identity: keep it as tight
       # as the engine keeps its own.
       case File.chmod(local_secret(), 0o600) do
-        :ok -> :ok
-        {:error, _} -> :ok
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("import: could not chmod #{inspect(local_secret())} to 0600: #{inspect(reason)}")
+          :ok
       end
     end
   end
