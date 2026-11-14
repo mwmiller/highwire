@@ -1368,9 +1368,14 @@ defmodule HighWire.SSB.Sidecar do
   defp pidfile_path, do: Path.join(HighWire.home_dir(), "sidecar.json")
 
   defp write_pidfile(port, os_pid) do
-    File.write!(pidfile_path(), Jason.encode!(%{"port" => port, "os_pid" => os_pid}))
-  rescue
-    _ -> :ok
+    case File.write(pidfile_path(), Jason.encode!(%{"port" => port, "os_pid" => os_pid})) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("sidecar: could not write pidfile #{inspect(pidfile_path())}: #{inspect(reason)}")
+        :ok
+    end
   end
 
   defp read_pidfile do

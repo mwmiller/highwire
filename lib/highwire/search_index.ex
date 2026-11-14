@@ -515,7 +515,21 @@ defmodule HighWire.SearchIndex do
   # forever, so step strictly past the wall. (A single millisecond
   # holding more than a page of posts — far beyond anything this store
   # has — would lose its overflow here; the strict read is the only way
-  # forward.)
+  # forward. A bulk import stamps thousands of messages with the same
+  # received instant, so a large import can hit this: the overflow is
+  # dropped from the search index, and the gap shows up as posts that
+  # search does not find. Log it so a large import's missing results are
+  # not a silent surprise.)
+  def next_backlog_step(%{cursor: cursor, page_count: pc} = state)
+      when pc > 0 and state.page_start_cursor == cursor do
+    Logger.warning(
+      "[search_index] backlog page delivered #{pc} rows without advancing the cursor " <>
+        "— a wall of same-timestamp posts; overflow beyond the page is not indexed"
+    )
+
+    {:page, cursor}
+  end
+
   def next_backlog_step(%{cursor: cursor}), do: {:page, cursor}
 
   # Opening a stream is the one signal we have for where the crawl
