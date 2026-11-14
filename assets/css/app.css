@@ -331,9 +331,18 @@
   .chess-piece[data-colour="black"] {
     color: var(--piece-black);
     /* The same glyph on both sides, so the edge is the only thing that
-       keeps a dark piece readable on a dark square. */
+       keeps a piece readable on a square of the same tone. The stroke is
+       the opposite colour to the fill on both sides, so the treatment is
+       comparable either way. */
     -webkit-text-stroke-width: 0.03em;
     -webkit-text-stroke-color: var(--piece-black-edge);
+  }
+  .chess-piece[data-colour="white"] {
+    /* A thin dark edge is the counterpart to the black piece's light edge:
+       it only really matters on a dark square, but applying it to both
+       keeps the two sides symmetric. */
+    -webkit-text-stroke-width: 0.03em;
+    -webkit-text-stroke-color: var(--piece-white-edge);
   }
 }
 
