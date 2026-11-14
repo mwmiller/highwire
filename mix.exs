@@ -127,7 +127,14 @@ defmodule HighWire.MixProject do
         "compile --force --warnings-as-errors",
         "test"
       ],
-      "assets.deploy": ["tailwind default --minify", "esbuild default --minify", "phx.digest"]
+      "assets.deploy": [
+        "tailwind default --minify",
+        "esbuild default --minify",
+        "cmd cp -r assets/chess priv/static/assets/chess 2>/dev/null || true",
+        "phx.digest"
+      ],
+      "assets.copy_pieces": "cmd mkdir -p priv/static/assets/chess && cp -r assets/chess/*.svg priv/static/assets/chess/",
+      setup: ["deps.get", "engine.build", "assets.copy_pieces"]
     ]
   end
 end
