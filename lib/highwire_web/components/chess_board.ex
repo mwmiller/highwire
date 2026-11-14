@@ -6,25 +6,17 @@ defmodule HighWireWeb.Components.ChessBoard do
   the rank and file names rather than of the map: empty squares are the ones
   the map does not have, and a board drawn from its keys would lose them.
 
-  Pieces are text, not images — the same glyphs every platform has — so the
-  gameroom needs no sprite sheet and a spectator reads the position at any
-  zoom. Each side is drawn from its own Unicode family (white pieces from the
-  light family, black pieces from the dark family), and both sides get the
-  same edge treatment: a thin contour in the opposite colour, so the two
-  rows read as opposite pieces rather than two copies of the same row.
+  Pieces are the Lichess cburnett SVGs — a small per-side set (white and
+  black each get their own drawings), served as static assets. Each side's
+  pieces are their own silhouettes, so the two rows read as different pieces
+  at a glance, and the white pieces carry a black outline that holds on dark
+  squares the same way a real set does.
   """
 
   use Phoenix.Component
 
   @files ~w(a b c d e f g h)
   @ranks ~w(8 7 6 5 4 3 2 1)
-
-  # Two codepoint sets, one per side. The light family (♔♕♖♗♘♙) and the
-  # dark family (♚♛♜♝♞♟) are drawn slightly differently in most fonts — the
-  # light one is lighter and a touch thinner, the dark one heavier — so the
-  # two rows read as different pieces rather than the same shape in two tones.
-  @glyphs_w %{king: "♔", queen: "♕", rook: "♖", bishop: "♗", knight: "♘", pawn: "♙"}
-  @glyphs_b %{king: "♚", queen: "♛", rook: "♜", bishop: "♝", knight: "♞", pawn: "♟"}
 
   attr :id, :string, default: nil, doc: "names the board so the piece hook can find it"
   attr :board, :map, required: true, doc: "the fold's board: square => {type, colour}"
@@ -48,7 +40,7 @@ defmodule HighWireWeb.Components.ChessBoard do
     assigns = assign(assigns, :squares, squares)
 
     ~H"""
-    <div id={@id} phx-hook={@id && "PieceInk"} class="rounded border border-edge bg-panel p-1.5">
+    <div id={@id} class="rounded border border-edge bg-panel p-1.5">
       <div class="grid grid-cols-8">
         <.square
           :for={{square, piece, light?} <- @squares}
@@ -95,9 +87,16 @@ defmodule HighWireWeb.Components.ChessBoard do
            game shows where the piece came from. --%>
       <span :if={@last} class="absolute inset-0 bg-accent/20" />
 
-      <span :if={@piece} class="chess-piece" data-colour={colour(@piece)} data-type={type(@piece)}>
-        {glyph(@piece)}
-      </span>
+      <%!-- A piece renders as its cburnett SVG, sized as a share of the
+           square and vertically centred. The white set carries its own black
+           outline, so a white piece holds on a dark square the way a real
+           white piece does. --%>
+      <.piece
+        :if={@piece}
+        type={type(@piece)}
+        colour={colour(@piece)}
+        compact={@compact}
+      />
 
       <%!-- A reachable square says so under the piece as well as on an
            empty one, so a capture reads as a move and not as a colour. --%>
@@ -113,10 +112,31 @@ defmodule HighWireWeb.Components.ChessBoard do
     """
   end
 
+  attr :type, :string, required: true
+  attr :colour, :string, required: true
+  attr :compact, :boolean, default: false
+
+  def piece(assigns) do
+    ~H"""
+    <img
+      src={"/assets/chess/" <> (if(assigns.colour == "white", do: "w", else: "b")) <> piece_letter(assigns.type) <> ".svg"}
+      class={"chess-piece" <> (if(assigns.compact, do: " chess-piece--compact", else: ""))}
+      alt=""
+      draggable="false"
+    />
+    """
+  end
+
+  defp piece_letter("king"), do: "K"
+  defp piece_letter("queen"), do: "Q"
+  defp piece_letter("rook"), do: "R"
+  defp piece_letter("bishop"), do: "B"
+  defp piece_letter("knight"), do: "N"
+  defp piece_letter("pawn"), do: "P"
+  defp piece_letter(other), do: other
+
   defp stoi(<<c>>), do: c
 
-  defp glyph({type, :white}), do: Map.get(@glyphs_w, type, "")
-  defp glyph({type, :black}), do: Map.get(@glyphs_b, type, "")
   defp colour({_type, colour}), do: to_string(colour)
   defp type({type, _colour}), do: to_string(type)
 end

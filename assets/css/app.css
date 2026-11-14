@@ -315,36 +315,30 @@
      scale and a shift of its own, measured once by the PieceInk hook. Until
      it runs, a piece is 84% of its square on the font's own terms. */
   .chess-piece {
-    /* Out of the flow: a glyph's line box can be taller than the square, and
-       a square that grows to fit its tallest piece is no longer a square. */
+    /* Out of the flow: the SVG viewBox is 45x45 and the piece ink is not
+       centred in that box (the cburnett pawns, in particular, sit low), so
+       each piece is sized as a share of its square and nudged vertically to
+       sit on the baseline a real piece would sit on. Until the browser has
+       laid the image out, the piece is 84% of its square tall. */
     position: absolute;
     inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: calc(84cqi * var(--piece-scale, 1));
+    height: calc(84cqi * var(--piece-scale, 1));
+    width: auto;
+    object-fit: contain;
     transform: translateY(var(--piece-shift, 0em));
-    line-height: 0.82;
-    color: var(--piece-white);
     user-select: none;
+    pointer-events: none;
   }
-  .chess-piece[data-colour="black"] {
-    color: var(--piece-black);
-    /* Dark pieces use the dark Unicode family and get a light contour, so
-       the two rows read as opposite pieces, not two copies of the same row.
-       The edge is the same treatment the white side gets — a thin opposite-
-       colour contour — so both sides stay comparable. */
-    -webkit-text-stroke-width: 0.08em;
-    -webkit-text-stroke-color: var(--piece-black-edge);
-  }
-  .chess-piece[data-colour="white"] {
-    color: var(--piece-white);
-    /* White pieces use the light Unicode family and get a dark contour, the
-       same edge idea the black side gets in the opposite colour. Both rows
-       get the same treatment; the two families give each row its own
-       silhouette. */
-    -webkit-text-stroke-width: 0.08em;
-    -webkit-text-stroke-color: var(--piece-white-edge);
+
+  /* The cburnett whites are white with a black outline; the blacks are black
+     with a black outline. Both hold on either square because each carries its
+     own contour, which is the whole point of using a real set instead of a
+     glyph with a CSS stroke. */
+  .chess-piece--compact {
+    height: calc(74cqi * var(--piece-scale, 1));
   }
 }
 
