@@ -23,14 +23,13 @@ defmodule HighWireWeb.Components.ChessBoard do
   @files ~w(a b c d e f g h)
   @ranks ~w(8 7 6 5 4 3 2 1)
 
-  @glyphs %{
-    king: "♚",
-    queen: "♛",
-    rook: "♜",
-    bishop: "♝",
-    knight: "♞",
-    pawn: "♟"
-  }
+  # Two codepoint sets so a piece is identifiable by shape before its
+  # colour lands: the "white" family (♔♕♖♗♘♙) is filled light in most
+  # fonts, the "black" family (♚♛♜♝♞♟) is filled dark, and the CSS
+  # then only has to read the glyph's own ink rather than paint an
+  # outline over a silhouette that fits neither side.
+  @glyphs_w %{king: "♔", queen: "♕", rook: "♖", bishop: "♗", knight: "♘", pawn: "♙"}
+  @glyphs_b %{king: "♚", queen: "♛", rook: "♜", bishop: "♝", knight: "♞", pawn: "♟"}
 
   attr :id, :string, default: nil, doc: "names the board so the piece hook can find it"
   attr :board, :map, required: true, doc: "the fold's board: square => {type, colour}"
@@ -121,7 +120,8 @@ defmodule HighWireWeb.Components.ChessBoard do
 
   defp stoi(<<c>>), do: c
 
-  defp glyph({type, _colour}), do: Map.get(@glyphs, type, "")
+  defp glyph({type, :white}), do: Map.get(@glyphs_w, type, "")
+  defp glyph({type, :black}), do: Map.get(@glyphs_b, type, "")
   defp colour({_type, colour}), do: to_string(colour)
   defp type({type, _colour}), do: to_string(type)
 end

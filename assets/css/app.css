@@ -325,14 +325,16 @@
     font-size: calc(84cqi * var(--piece-scale, 1));
     transform: translateY(var(--piece-shift, 0em));
     line-height: 0.82;
-    -webkit-text-stroke-width: 0.02em;
-    -webkit-text-stroke-color: var(--piece-white-edge);
     color: var(--piece-white);
     user-select: none;
   }
   .chess-piece[data-colour="black"] {
-    -webkit-text-stroke-color: var(--piece-black-edge);
     color: var(--piece-black);
+    /* A thin light edge is the only thing that keeps a dark glyph readable
+       on a dark square; the white family glyphs carry their own fill, so
+       they do not need one. */
+    -webkit-text-stroke-width: 0.03em;
+    -webkit-text-stroke-color: var(--piece-black-edge);
   }
 }
 
