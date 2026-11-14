@@ -26,9 +26,9 @@ defmodule HighWire.MixProject do
         steps: [:assemble, &HighWire.Release.bundle_libsodium/1, &Burrito.wrap/1],
         burrito: [
           targets: [
-            macos: [os: :darwin, cpu: :aarch64],
-            linux: [os: :linux, cpu: :x86_64] ++ linux_erts(),
-            linux_arm: [os: :linux, cpu: :aarch64] ++ linux_erts(),
+            macos: [os: :darwin, cpu: :aarch64] ++ custom_erts(),
+            linux: [os: :linux, cpu: :x86_64] ++ custom_erts(),
+            linux_arm: [os: :linux, cpu: :aarch64] ++ custom_erts(),
             windows: [os: :windows, cpu: :x86_64]
           ]
         ]
@@ -43,12 +43,13 @@ defmodule HighWire.MixProject do
   # fail to load crypto and hang on "Connecting…". The Tauri shell is
   # itself glibc-linked (it needs webkit2gtk/GTK), so the musl runtime
   # buys no portability here; a glibc backend matches the NIF and the
-  # shell. When CI points HIGHWIRE_CUSTOM_ERTS at a tarball of the
-  # host's own OTP, we hand that to Burrito as `custom_erts` so it wraps
-  # the same glibc runtime `mix release` embedded instead of swapping in
-  # musl. Absent the variable (e.g. local dev) we leave the targets
-  # alone.
-  defp linux_erts do
+  # shell. Beam Machine also lags OTP patch releases, so its macOS
+  # precompiled archive can be missing for the version we build with.
+  # When CI points HIGHWIRE_CUSTOM_ERTS at a tarball of the host's own
+  # OTP, we hand that to Burrito for both Unix targets as `custom_erts`,
+  # so it wraps the exact runtime `mix release` embedded. Absent the
+  # variable (e.g. local dev) we leave the targets alone.
+  defp custom_erts do
     case System.get_env("HIGHWIRE_CUSTOM_ERTS") do
       nil -> []
       "" -> []

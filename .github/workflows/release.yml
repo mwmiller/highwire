@@ -312,13 +312,14 @@ jobs:
       # Burrito expects (a single otp-*/ top dir, per its README) and hand
       # it to the linux/linux_arm targets as :custom_erts. macOS and
       # Windows keep their precompiled targets; they load their NIFs fine.
-      - name: Package host OTP as custom ERTS (Linux)
-        if: runner.os == 'Linux'
+      - name: Package host OTP as custom ERTS (Unix)
+        if: runner.os != 'Windows'
         run: |
           OTP_ROOT=$(erl -noshell -eval 'io:format("~s",[code:root_dir()]),halt().')
           OTP_VSN=$(erl -noshell -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt().')
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
           ARCH=$(uname -m)
-          WRAP="otp-${OTP_VSN}-linux-${ARCH}"
+          WRAP="otp-${OTP_VSN}-${OS}-${ARCH}"
           STAGE="$RUNNER_TEMP/erts-stage"
           rm -rf "$STAGE" && mkdir -p "$STAGE/$WRAP"
           # The tarball must contain the erts-*/ bin + lib trees CopyERTS
@@ -349,7 +350,9 @@ jobs:
           # for a glibc backend (MUSL_RUNTIME_PATH is empty), so an empty
           # placeholder satisfies the embed without shipping a musl loader.
           # macOS/Windows never analyze the function, so they need no file.
-          : > deps/burrito/src/musl-runtime.so
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            : > deps/burrito/src/musl-runtime.so
+          fi
 
       - run: mix release highwire
 
