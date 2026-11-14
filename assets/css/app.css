@@ -50,10 +50,10 @@
      square, with an edge in the opposite colour to hold the silhouette. */
   --board-light: #cdc5b6;
   --board-dark: #9a9081;
-  --piece-white: #fdfaf3;
-  --piece-white-edge: rgba(52, 45, 37, 0.62);
-  --piece-black: #332f29;
-  --piece-black-edge: rgba(253, 250, 243, 0.45);
+  --piece-white: #fffff0;
+  --piece-white-edge: rgba(20, 16, 10, 1);
+  --piece-black: #1a1712;
+  --piece-black-edge: rgba(255, 252, 240, 1);
 
   /* Markdown bodies (.md-body). */
   --md-strong: #ffffff;
@@ -95,10 +95,10 @@
 
   --board-light: #f1ece2;
   --board-dark: #bcb1a0;
-  --piece-white: #fffdf8;
-  --piece-white-edge: rgba(59, 51, 42, 0.55);
-  --piece-black: #3a352e;
-  --piece-black-edge: rgba(255, 253, 248, 0.5);
+  --piece-white: #fffff0;
+  --piece-white-edge: rgba(20, 16, 10, 1);
+  --piece-black: #1a1712;
+  --piece-black-edge: rgba(255, 252, 240, 1);
 
   --md-strong: #09090b;
   --md-code-bg: #f4f4f5;
@@ -331,17 +331,21 @@
   .chess-piece[data-colour="black"] {
     color: var(--piece-black);
     /* The same glyph on both sides, so the edge is the only thing that
-       keeps a piece readable on a square of the same tone. The stroke is
-       the opposite colour to the fill on both sides, so the treatment is
-       comparable either way. */
-    -webkit-text-stroke-width: 0.03em;
+       keeps a piece readable on a square of the same tone, and the only
+       thing that separates the two pawn rows. The stroke is the opposite
+       colour to the fill on both sides, so the treatment is comparable
+       either way. Thick enough that it reads at pawn scale — the two rows
+       should not look identical. */
+    -webkit-text-stroke-width: 0.12em;
     -webkit-text-stroke-color: var(--piece-black-edge);
   }
   .chess-piece[data-colour="white"] {
-    /* A thin dark edge is the counterpart to the black piece's light edge:
-       it only really matters on a dark square, but applying it to both
-       keeps the two sides symmetric. */
-    -webkit-text-stroke-width: 0.03em;
+    color: var(--piece-white);
+    /* The counterpart to the black piece's light edge: a dark edge on the
+       light fill, same width, same idea. Both sides get the same treatment
+       in the opposite colour so the two pawn rows read as opposite
+       constructions rather than the same row. */
+    -webkit-text-stroke-width: 0.12em;
     -webkit-text-stroke-color: var(--piece-white-edge);
   }
 }
