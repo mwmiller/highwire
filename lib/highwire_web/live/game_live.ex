@@ -555,11 +555,6 @@ defmodule HighWireWeb.GameLive do
     end
   end
 
-  # Where this node's log picks the game up, when it does not start at one.
-  defp fragment(%{history: []}), do: nil
-  defp fragment(%{history: [%{ply: 1} | _]}), do: nil
-  defp fragment(%{history: [first | _]}), do: first.ply
-
   # The id shape is the same for both games, so the kind is what the store
   # finds rather than what the URL claims.
   defp load(game_id) do
@@ -911,35 +906,6 @@ defmodule HighWireWeb.GameLive do
 
               <p :if={@pairs == []} class="text-xs italic text-faint">
                 No moves played yet.
-              </p>
-
-              <p :if={@at != nil} class="text-[11px] leading-relaxed text-faint">
-                Showing the position after move {@at} of {length(@line) - 1}. The board is
-                read-only while you look back.
-              </p>
-
-              <%!-- A game whose chain this node holds only part of cannot be
-                   stepped through, and saying so is better than buttons that
-                   would do nothing. --%>
-              <p :if={fragment(@game)} class="text-[11px] leading-relaxed text-faint">
-                This node's log picks this game up at move {div(fragment(@game) + 1, 2)}, so the
-                positions before that are not in it. Every move since is listed below.
-              </p>
-
-              <%!-- The same courtesy for a game this node has from the start
-                   but cannot walk all the way through: the moves it can show
-                   are worth stepping through, and the break is worth naming
-                   rather than leaving as a transport that stops early for no
-                   stated reason. --%>
-              <p :if={@line_stop} class="text-[11px] leading-relaxed text-faint">
-                <span :if={length(@line) > 1}>
-                  The log stops verifying at move {@line_stop.ply}, so the line runs as far as
-                  move {length(@line) - 1}.
-                </span>
-                <span :if={length(@line) <= 1}>
-                  This game's first move does not verify here, so there is no line to walk. Its
-                  moves are still listed below.
-                </span>
               </p>
 
               <ol
