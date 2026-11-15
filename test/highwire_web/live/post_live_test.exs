@@ -294,7 +294,7 @@ defmodule HighWireWeb.PostLiveTest do
       # the route takes — because raw ids carry "/" and "=" and belong in
       # neither a DOM id nor a path segment.
       assert html =~ ~s(id=") <> dom_id("%anchors=.sha256") <> ~s(")
-      assert html =~ ~s(id=") <> dom_id("%anchor-reply=.sha256") <> ~s(")
+      assert html =~ ~s(id=") <> dom_id("%anchor-reply=.sha256", :reply) <> ~s(")
     end
   end
 
@@ -380,9 +380,9 @@ defmodule HighWireWeb.PostLiveTest do
       # The hook that brings a message into view rides that message and no
       # other, so the browser scrolls to the one the reader clicked — not
       # to the head of the thread it belongs to.
-      assert html =~ ~r/id="#{dom_id("%land-reply-one=.sha256")}"[^>]*phx-hook="LandOn"/
-      refute html =~ ~r/id="#{dom_id("%land-reply-two=.sha256")}"[^>]*phx-hook/
-      refute html =~ ~r/id="#{dom_id("%land-on=.sha256")}"[^>]*phx-hook/
+      assert html =~ ~r/id="#{dom_id("%land-reply-one=.sha256", :reply)}"[^>]*phx-hook="LandOn"/
+      refute html =~ ~r/id="#{dom_id("%land-reply-two=.sha256", :reply)}"[^>]*phx-hook/
+      refute html =~ ~r/id="#{dom_id("%land-on=.sha256", :root)}"[^>]*phx-hook/
     end
 
     test "the thread marks the message it ends with", %{conn: conn} do
@@ -404,9 +404,9 @@ defmodule HighWireWeb.PostLiveTest do
       # Exactly one message carries the mark — the last reply — and the
       # landing takes it as the end of the thread: the scroll stops there
       # and never shows what follows the thread.
-      assert html =~ ~r/id="#{dom_id("%thread-end-two=.sha256")}"[^>]*data-thread-end/
-      refute html =~ ~r/id="#{dom_id("%thread-end-one=.sha256")}"[^>]*data-thread-end/
-      refute html =~ ~r/id="#{dom_id("%thread-end=.sha256")}"[^>]*data-thread-end/
+      assert html =~ ~r/id="#{dom_id("%thread-end-two=.sha256", :reply)}"[^>]*data-thread-end/
+      refute html =~ ~r/id="#{dom_id("%thread-end-one=.sha256", :reply)}"[^>]*data-thread-end/
+      refute html =~ ~r/id="#{dom_id("%thread-end=.sha256", :root)}"[^>]*data-thread-end/
       assert length(:binary.matches(html, "data-thread-end")) == 1
     end
 
@@ -419,7 +419,7 @@ defmodule HighWireWeb.PostLiveTest do
 
       html = render(view)
 
-      assert html =~ ~r/id="#{dom_id("%root-end=.sha256")}"[^>]*data-thread-end/
+      assert html =~ ~r/id="#{dom_id("%root-end=.sha256", :root)}"[^>]*data-thread-end/
       assert length(:binary.matches(html, "data-thread-end")) == 1
     end
 
@@ -480,5 +480,8 @@ defmodule HighWireWeb.PostLiveTest do
     }
   end
 
-  defp dom_id(key), do: "msg-" <> Base.url_encode64(key, padding: false)
+  defp dom_id(key, which \\ :root), do: (case which do
+    :root -> "msg-root-"
+    :reply -> "msg-reply-"
+  end) <> Base.url_encode64(key, padding: false)
 end

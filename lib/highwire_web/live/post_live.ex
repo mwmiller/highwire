@@ -198,10 +198,20 @@ defmodule HighWireWeb.PostLive do
   # encoding the route takes — message ids carry "/" and "=", neither of
   # which belongs in an id, and a url-safe base64 string survives being
   # used as a selector.
-  defp message_dom_id(key) when is_binary(key),
-    do: "msg-" <> Base.url_encode64(key, padding: false)
+  #
+  # The root and every reply would otherwise share a single selector form
+  # ("msg-<key>"), so a thread whose root is also listed among its replies
+  # would render the same id twice. Prefix them so each id is globally
+  # unique: the root is "msg-root-<key>", each reply is
+  # "msg-reply-<key>". The JS that scrolls a message into view on arrival
+  # reads both forms.
+  defp message_dom_id(key, :root) when is_binary(key),
+    do: "msg-root-" <> Base.url_encode64(key, padding: false)
 
-  defp message_dom_id(_key), do: nil
+  defp message_dom_id(key, :reply) when is_binary(key),
+    do: "msg-reply-" <> Base.url_encode64(key, padding: false)
+
+  defp message_dom_id(_key, _which), do: nil
 
   # Whatever this thread renders that no payload ever shipped a profile
   # for goes back to the Timeline as an ensure — the same contract the
@@ -502,8 +512,8 @@ defmodule HighWireWeb.PostLive do
           </div>
 
           <div :if={@root}>
-            <article
-              id={message_dom_id(@root["key"])}
+                          <article
+              id={message_dom_id(@root["key"], :root)}
               phx-hook={focus_hook(@root["key"], @focus_key)}
               data-thread-end={@root["key"] == @thread_end_key}
               class="border-b border-edge pb-6"
@@ -605,7 +615,7 @@ defmodule HighWireWeb.PostLive do
 
             <div
               :for={reply <- @replies}
-              id={message_dom_id(reply["key"])}
+              id={message_dom_id(reply["key"], :reply)}
               phx-hook={focus_hook(reply["key"], @focus_key)}
               data-thread-end={reply["key"] == @thread_end_key}
               class="flex gap-3 border-b border-edge-soft py-4"

@@ -544,7 +544,20 @@ function landOnMessage(id) {
     focusTimers.push(
       setTimeout(() => {
         const el = document.getElementById(id)
-        if (!el) return
+        if (!el) {
+          const replyEl = document.getElementById("msg-reply-" + id.replace(/^msg-/, ""))
+          if (replyEl) {
+            const box = replyEl.getBoundingClientRect()
+            if (pass > 0 && box.top < window.innerHeight && box.bottom > 0) return
+
+            landScroll(replyEl, pass > 0 && smooth)
+
+            if (focusMark || pass > 0) return
+            replyEl.classList.add("msg-focus")
+            focusMark = {el: replyEl, timer: setTimeout(clearFocusMark, 2600)}
+          }
+          return
+        }
 
         const box = el.getBoundingClientRect()
         if (pass > 0 && box.top < window.innerHeight && box.bottom > 0) return
