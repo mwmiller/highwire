@@ -1015,6 +1015,24 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert notify(view, feed_payload([bob, alice])) =~ "gossip-arrived"
   end
 
+  test "post rows expose a focusable open-post link", %{conn: conn} do
+    alice = "@alice:.ed25519"
+    now = 1_700_000_000_000
+    msg = ssb_msg("%keyboard-open.sha256", alice, now, %{"type" => "post", "text" => "open me"})
+
+    {:ok, view, _html} = live(conn, "/")
+
+    html =
+      notify(
+        view,
+        feed_payload([msg]) |> Map.put(:profiles, %{alice => %{name: "Alice", image: nil}})
+      )
+
+    assert html =~ ~s(role="link")
+    assert html =~ ~s(tabindex="0")
+    assert html =~ ~s(aria-label="Open post by Alice")
+  end
+
   test "rows are named after their message, not their position", %{conn: conn} do
     now = 1_700_000_000_000
     token = fn key -> Base.url_encode64(key, padding: false) end
@@ -1359,6 +1377,9 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ ~s(phx-hook="OpenPost")
     assert html =~ ~s(id="#{hit_id}")
     assert html =~ ~s(aria-label="Alice")
+    assert html =~ ~s(role="link")
+    assert html =~ ~s(tabindex="0")
+    assert html =~ ~s(aria-label="Open post by Alice")
     assert count(html, href) == 2
   end
 

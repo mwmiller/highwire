@@ -980,6 +980,9 @@ defmodule HighWireWeb.TimelineLive do
   defp hit_hook(key) when is_binary(key), do: "OpenPost"
   defp hit_hook(_key), do: nil
 
+  defp open_post_label(""), do: "Open post"
+  defp open_post_label(name), do: "Open post by " <> name
+
   defp hit_dom_id(key) when is_binary(key),
     do: "hit-" <> Base.url_encode64(key, padding: false)
 
@@ -1283,6 +1286,8 @@ defmodule HighWireWeb.TimelineLive do
               id="search-index-status"
               data-status={index_status_key(@index_status)}
               title={index_status_title(@index_status)}
+              role="status"
+              aria-label={index_status_title(@index_status)}
               class={["flex shrink-0 items-center", index_status_tone(@index_status)]}
             >
               <span class={[
@@ -1442,17 +1447,19 @@ defmodule HighWireWeb.TimelineLive do
             </p>
             <p
               :if={@status == :ok and @q != "" and @search_state == :pending}
+              role="status"
               class="px-4 py-3 text-sm text-info"
             >
               Searching…
             </p>
             <p
               :if={@status == :ok and @q != "" and @search_state == :stalled}
+              role="status"
               class="px-4 py-3 text-sm text-warn"
             >
               Some results may be missing.
             </p>
-            <p :if={@empty_search?} class="px-4 py-3 text-sm text-dim">
+            <p :if={@empty_search?} role="status" class="px-4 py-3 text-sm text-dim">
               {search_empty_message(@index_status, @q)}
             </p>
             <p
@@ -1470,7 +1477,10 @@ defmodule HighWireWeb.TimelineLive do
 
             <%= if @q != "" and @search_hits != [] do %>
               <section id="search-results" class="border-b border-edge">
-                <p class="px-4 pb-1 pt-3 text-[11px] uppercase tracking-wider text-faint">
+                <p
+                  role="status"
+                  class="px-4 pb-1 pt-3 text-[11px] uppercase tracking-wider text-faint"
+                >
                   {match_count(@search_hits)} {if length(@search_hits) == 1,
                     do: "match",
                     else: "matches"}
@@ -1480,7 +1490,10 @@ defmodule HighWireWeb.TimelineLive do
                   id={hit_dom_id(h.key)}
                   phx-hook={hit_hook(h.key)}
                   data-key={h.key}
-                  class="flex cursor-pointer gap-3 border-b border-edge-soft px-4 py-3 transition last:border-b-0 hover:bg-raised"
+                  role="link"
+                  tabindex="0"
+                  aria-label={open_post_label(Ident.display_name(h.author, @profiles))}
+                  class="flex cursor-pointer gap-3 border-b border-edge-soft px-4 py-3 transition last:border-b-0 hover:bg-raised focus-visible:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset"
                 >
                   <div :if={is_binary(h.author)} class="shrink-0">
                     <Avatar.face
@@ -1644,11 +1657,14 @@ defmodule HighWireWeb.TimelineLive do
     <article
       id={dom_id("post-", @row)}
       class={[
-        "flex cursor-pointer gap-3 px-4 py-3 hover:bg-panel",
+        "flex cursor-pointer gap-3 px-4 py-3 hover:bg-panel focus-visible:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset",
         MapSet.member?(@arrived, row_uid(@row)) && "gossip-arrived"
       ]}
       phx-hook="OpenPost"
       data-key={@row.msg["key"]}
+      role="link"
+      tabindex="0"
+      aria-label={open_post_label(Ident.display_name(@author, @ctx))}
     >
       <div class="w-10 shrink-0">
         <Avatar.face
