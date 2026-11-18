@@ -130,11 +130,9 @@ defmodule HighWire.MixProject do
       "assets.deploy": [
         "tailwind default --minify",
         "esbuild default --minify",
-        "cmd cp -r assets/chess priv/static/assets/chess 2>/dev/null || true",
+        "assets.copy_pieces",
         "phx.digest"
       ],
-      "assets.copy_pieces":
-        "cmd mkdir -p priv/static/assets/chess && cp -r assets/chess/*.svg priv/static/assets/chess/",
       setup: ["deps.get", "engine.build", "assets.copy_pieces"]
     ]
   end
