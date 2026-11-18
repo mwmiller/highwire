@@ -494,16 +494,6 @@ let TabActivity = {
 // they stay quiet once the message is already on screen.
 const FOCUS_PASSES = [0, 250, 800, 1600]
 
-let focusTimers = []
-let focusMark = null
-
-function clearFocusMark() {
-  if (!focusMark) return
-  clearTimeout(focusMark.timer)
-  focusMark.el.classList.remove("msg-focus")
-  focusMark = null
-}
-
 // The arrival travels inside the thread's own scroller, never the
 // window, and goes no further than the end of the thread. Centering a
 // message near the end would otherwise pull the viewport past the
@@ -533,51 +523,91 @@ function landScroll(el, smooth) {
   if (top !== scroller.scrollTop) scroller.scrollTo({top, behavior})
 }
 
+// Brings the message identified by `id` into view. Scoped to one hook
+// instance so a new message mounting does not restart or steal the
+// timers of a message that is already landing.
 function landOnMessage(id) {
-  focusTimers.forEach(clearTimeout)
-  focusTimers = []
-  clearFocusMark()
+  const timers = []
+  let mark = null
 
-  const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  const clear = () => {
+    timers.forEach(clearTimeout)
+    timers.length = 0
+    if (mark) {
+      mark.el.classList.remove("msg-focus")
+      mark = null
+    }
+  }
 
-  FOCUS_PASSES.forEach((delay, pass) => {
-    focusTimers.push(
-      setTimeout(() => {
-        const el = document.getElementById(id)
-        if (!el) {
-          const replyEl = document.getElementById("msg-reply-" + id.replace(/^msg-/, ""))
-          if (replyEl) {
-            const box = replyEl.getBoundingClientRect()
-            if (pass > 0 && box.top < window.innerHeight && box.bottom > 0) return
+  const cancelled = {current: false}
 
-            landScroll(replyEl, pass > 0 && smooth)
+  const tryScroll = () => {
+    if (cancelled.current) return
 
-            if (focusMark || pass > 0) return
-            replyEl.classList.add("msg-focus")
-            focusMark = {el: replyEl, timer: setTimeout(clearFocusMark, 2600)}
-          }
-          return
+    const el = document.getElementById(id)
+    if (!el) {
+      const replyEl = document.getElementById("msg-reply-" + id.replace(/^msg-/, ""))
+      if (replyEl) {
+        const box = replyEl.getBoundingClientRect()
+        if (box.top < window.innerHeight && box.bottom > 0) {
+          landScroll(replyEl, false)
         }
+      }
+      return
+    }
 
-        const box = el.getBoundingClientRect()
-        if (pass > 0 && box.top < window.innerHeight && box.bottom > 0) return
+    const box = el.getBoundingClientRect()
+    if (box.top < window.innerHeight && box.bottom > 0) {
+      landScroll(el, false)
+      return
+    }
 
-        landScroll(el, pass > 0 && smooth)
+    landScroll(el, true)
+  }
 
-        if (focusMark || pass > 0) return
-        el.classList.add("msg-focus")
-        focusMark = {el, timer: setTimeout(clearFocusMark, 2600)}
-      }, delay)
-    )
+  // First pass is immediate; later passes re-try only if the first did
+  // not already land the message on screen.
+  FOCUS_PASSES.forEach((delay, pass) => {
+    timers.push(setTimeout(() => {
+      if (cancelled.current) return
+      tryScroll()
+    }, delay))
   })
+
+  // Once the message is actually on screen, stop retrying and mark it.
+  const onceOnScreen = () => {
+    const el = document.getElementById(id)
+    if (!el) return
+    const box = el.getBoundingClientRect()
+    if (box.top < window.innerHeight && box.bottom > 0) {
+      clear()
+      el.classList.add("msg-focus")
+      mark = {el, timer: setTimeout(clear, 2600)}
+    }
+  }
+
+  onceOnScreen()
+  timers.push(setTimeout(onceOnScreen, 100))
+  timers.push(setTimeout(onceOnScreen, 400))
+
+  return () => {
+    cancelled.current = true
+    clear()
+  }
 }
 
 // The one control this page adds of its own: the message named in the
 // path, brought into view the moment it is in the document.
 const LandOn = {
   mounted() {
-    landOnMessage(this.el.id)
+    this.land = landOnMessage(this.el.id)
   },
+  destroyed() {
+    if (this.land) {
+      this.land()
+      this.land = null
+    }
+  }
 }
 
 // The constellation's selected peer: when the server-side selection
