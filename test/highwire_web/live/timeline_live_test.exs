@@ -1134,6 +1134,47 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert_patch(view, "/?q=needle")
   end
 
+  test "a feed tab in the URL reseeds the selected tab", %{conn: conn} do
+    {:ok, view, html} = live(conn, "/?view=mentions")
+
+    assert :sys.get_state(view.pid).socket.assigns.view == :mentions
+    assert html =~ ~r/<button[^>]*aria-current="true"[^>]*>\s*Mentions\s*<\/button>/
+  end
+
+  test "a search keeps the selected tab in the URL", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/?view=mentions")
+
+    render_change(view, "search", %{"q" => "needle"})
+
+    assert_patch(view, "/?view=mentions&q=needle")
+  end
+
+  test "switching tabs leaves search and records the tab", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    render_change(view, "search", %{"q" => "needle"})
+    assert_patch(view, "/?q=needle")
+
+    html = render_click(view, "view", %{"v" => "mentions"})
+    assert_push_event(view, "clear-search", %{})
+    assert_patch(view, "/?view=mentions")
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert assigns.view == :mentions
+    assert assigns.q == ""
+    refute html =~ ~s(id="search-results")
+  end
+
+  test "no tab looks selected while search spans every tab", %{conn: conn} do
+    {:ok, view, html} = live(conn, "/")
+
+    assert html =~ ~r/<button[^>]*aria-current="true"[^>]*>\s*Public\s*<\/button>/
+
+    html = render_change(view, "search", %{"q" => "needle"})
+
+    refute html =~ ~s(aria-current="true")
+  end
+
   test "a search says it is searching until the index answers", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
     notify(view, feed_payload([]))

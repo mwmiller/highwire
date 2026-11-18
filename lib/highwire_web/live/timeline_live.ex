@@ -126,20 +126,25 @@ defmodule HighWireWeb.TimelineLive do
     {:ok, socket}
   end
 
-  # The query is page state, so it rides in the URL. A post opens as its own
-  # LiveView and unmounts this one; without the parameter, coming back would
-  # mount an unfiltered feed. Search replaces the current history entry — a
-  # query is a refinement of this page, not a step of its own — while tab
-  # changes and post opens keep their normal history behaviour.
+  # The query and feed tab are page state, so both ride in the URL. A post
+  # opens as its own LiveView and unmounts this one; without them, coming
+  # back would mount an unfiltered Public feed. Search and tab changes
+  # replace the current history entry — both are refinements of this page,
+  # not steps of their own — while post opens keep normal history behaviour.
   @impl true
   def handle_params(params, _uri, socket) do
     q = Map.get(params, "q", "")
+    view = view_from_param(Map.get(params, "view"))
 
     socket =
       if connected?(socket) do
-        apply_query(socket, q)
+        socket
+        |> assign(:view, view)
+        |> apply_query(q)
+        |> maybe_load_page()
+        |> merge_paged()
       else
-        assign(socket, q: normalize_query(q))
+        assign(socket, q: normalize_query(q), view: view)
       end
 
     {:noreply, socket}
@@ -361,7 +366,7 @@ defmodule HighWireWeb.TimelineLive do
   @impl true
   def handle_event("search", %{"q" => q}, socket) do
     socket = apply_query(socket, q)
-    {:noreply, push_patch(socket, to: search_path(q), replace: true)}
+    {:noreply, push_patch(socket, to: timeline_path(socket.assigns.view, q), replace: true)}
   end
 
   # Composer drafts debounce into the assign; publish trims, validates
@@ -437,13 +442,27 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
+  # A tab is page state, so it rides in the URL with the query. Switching
+  # tabs leaves search: the index spans the whole store, so keeping the
+  # active tab selected under global results would imply a filter that is
+  # not there. The patch replaces rather than adds a history step, matching
+  # how tabs moved before they were addressable.
   def handle_event("view", %{"v" => v}, socket) do
-    view =
-      Enum.find_value(@views, :public, fn {key, _label} ->
-        if Atom.to_string(key) == v, do: key
-      end)
+    view = view_from_param(v)
 
-    {:noreply, socket |> assign(:view, view) |> maybe_load_page() |> merge_paged()}
+    socket =
+      socket
+      |> assign(:view, view)
+      |> apply_query("")
+      |> maybe_load_page()
+      |> merge_paged()
+
+    # The search box can hold text that has not reached the server yet, and
+    # a focused input keeps its DOM value through a server patch. Clear it
+    # here so a tab switch always leaves the search behind.
+    socket = push_event(socket, "clear-search", %{})
+
+    {:noreply, push_patch(socket, to: timeline_path(view, ""), replace: true)}
   end
 
   def handle_event("expand", %{"key" => key}, socket) do
@@ -519,6 +538,12 @@ defmodule HighWireWeb.TimelineLive do
     {:noreply, socket}
   end
 
+  defp view_from_param(v) do
+    Enum.find_value(@views, :public, fn {key, _label} ->
+      if Atom.to_string(key) == v, do: key
+    end)
+  end
+
   defp apply_query(socket, q) do
     qtrim = q |> to_string() |> String.trim()
     qd = String.downcase(qtrim)
@@ -542,10 +567,14 @@ defmodule HighWireWeb.TimelineLive do
 
   defp normalize_query(q), do: q |> to_string() |> String.trim() |> String.downcase()
 
-  defp search_path(q) do
-    case q |> to_string() |> String.trim() do
-      "" -> "/"
-      q -> "/?" <> URI.encode_query(%{q: q})
+  defp timeline_path(view, q) do
+    q = q |> to_string() |> String.trim()
+    params = if view == :public, do: [], else: [view: Atom.to_string(view)]
+    params = if q == "", do: params, else: params ++ [q: q]
+
+    case params do
+      [] -> "/"
+      params -> "/?" <> URI.encode_query(params)
     end
   end
 
@@ -1217,7 +1246,14 @@ defmodule HighWireWeb.TimelineLive do
       <div class="flex min-w-0 flex-1 flex-col">
         <header class="flex h-11 shrink-0 items-center gap-2 border-b border-edge bg-panel px-4">
           <nav class="flex shrink-0 items-center gap-1" aria-label="Feeds">
-            <.feed_tab :for={{v, label} <- @left_views} v={v} label={label} current={@view} />
+            <%!-- A global search spans every tab, so no tab looks selected
+            while one is active. Clicking one leaves search and selects it. --%>
+            <.feed_tab
+              :for={{v, label} <- @left_views}
+              v={v}
+              label={label}
+              current={if @q == "", do: @view, else: nil}
+            />
           </nav>
           <%!-- The search takes whatever width the row can spare and
           caps at 18rem, so narrow windows shrink the box instead of
@@ -1232,11 +1268,14 @@ defmodule HighWireWeb.TimelineLive do
               role="search"
             >
               <input
+                id="feed-search-input"
                 type="search"
                 name="q"
                 value={@q}
                 phx-debounce="600"
+                phx-hook="FeedSearch"
                 placeholder="Search"
+                aria-label="Search posts"
                 class="h-9 w-full rounded-full border border-gray-300 bg-white px-3 text-sm shadow-sm transition focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder-gray-400"
               />
             </form>
@@ -1261,7 +1300,12 @@ defmodule HighWireWeb.TimelineLive do
             >
               Profile
             </.link>
-            <.feed_tab :for={{v, label} <- @right_views} v={v} label={label} current={@view} />
+            <.feed_tab
+              :for={{v, label} <- @right_views}
+              v={v}
+              label={label}
+              current={if @q == "", do: @view, else: nil}
+            />
           </nav>
         </header>
 
@@ -1552,6 +1596,7 @@ defmodule HighWireWeb.TimelineLive do
       phx-click="view"
       phx-value-v={@v}
       data-pref-tab={if(@v == :participating, do: "participating")}
+      aria-current={if @current == @v, do: "true"}
       class={[
         "rounded px-2 py-1 text-xs transition",
         @current == @v and "bg-active font-medium text-paper",
