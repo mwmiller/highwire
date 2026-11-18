@@ -133,7 +133,8 @@ defmodule HighWire.MixProject do
         "cmd cp -r assets/chess priv/static/assets/chess 2>/dev/null || true",
         "phx.digest"
       ],
-      "assets.copy_pieces": "cmd mkdir -p priv/static/assets/chess && cp -r assets/chess/*.svg priv/static/assets/chess/",
+      "assets.copy_pieces":
+        "cmd mkdir -p priv/static/assets/chess && cp -r assets/chess/*.svg priv/static/assets/chess/",
       setup: ["deps.get", "engine.build", "assets.copy_pieces"]
     ]
   end

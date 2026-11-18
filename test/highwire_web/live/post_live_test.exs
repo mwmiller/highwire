@@ -480,8 +480,10 @@ defmodule HighWireWeb.PostLiveTest do
     }
   end
 
-  defp dom_id(key, which \\ :root), do: (case which do
-    :root -> "msg-root-"
-    :reply -> "msg-reply-"
-  end) <> Base.url_encode64(key, padding: false)
+  defp dom_id(key, which \\ :root),
+    do:
+      (case which do
+         :root -> "msg-root-"
+         :reply -> "msg-reply-"
+       end) <> Base.url_encode64(key, padding: false)
 end

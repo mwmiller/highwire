@@ -1373,7 +1373,10 @@ defmodule HighWire.SSB.Sidecar do
         :ok
 
       {:error, reason} ->
-        Logger.warning("sidecar: could not write pidfile #{inspect(pidfile_path())}: #{inspect(reason)}")
+        Logger.warning(
+          "sidecar: could not write pidfile #{inspect(pidfile_path())}: #{inspect(reason)}"
+        )
+
         :ok
     end
   end

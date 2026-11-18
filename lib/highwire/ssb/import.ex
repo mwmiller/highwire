@@ -375,7 +375,10 @@ defmodule HighWire.SSB.Import do
           :ok
 
         {:error, reason} ->
-          Logger.warning("import: could not chmod #{inspect(local_secret())} to 0600: #{inspect(reason)}")
+          Logger.warning(
+            "import: could not chmod #{inspect(local_secret())} to 0600: #{inspect(reason)}"
+          )
+
           :ok
       end
     end

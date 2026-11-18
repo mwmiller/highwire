@@ -760,8 +760,7 @@ defmodule HighWireWeb.GameLive do
   def render(%{game: nil} = assigns) do
     ~H"""
     <Shell.app>
-      <:rail>
-      </:rail>
+      <:rail></:rail>
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-10">
@@ -783,8 +782,7 @@ defmodule HighWireWeb.GameLive do
 
     ~H"""
     <Shell.app>
-      <:rail>
-      </:rail>
+      <:rail></:rail>
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-4xl px-6 py-6">
@@ -929,8 +927,7 @@ defmodule HighWireWeb.GameLive do
   def render(assigns) do
     ~H"""
     <Shell.app>
-      <:rail>
-      </:rail>
+      <:rail></:rail>
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-2xl px-6 py-6">
