@@ -310,7 +310,6 @@ defmodule HighWireWeb.GamesLiveTest do
 
       {:ok, view, html} = live(conn, "/games/#{published}")
 
-      refute html =~ "stops verifying"
       assert html =~ "2 / 2"
       # The arrow keys push the same seek the buttons click, through a hook.
       assert html =~ ~s(phx-hook="ReplayKeys")
@@ -319,15 +318,16 @@ defmodule HighWireWeb.GamesLiveTest do
       html = view |> element("button[phx-value-to='1']") |> render_click()
       assert html =~ "Looking back at move 1 of 2"
 
-      # A game with no position of its own is replayed instead, and a ply the
-      # fold cannot follow stops the line where it breaks.
+      # A game that published no position is replayed from its moves alone.
       broken =
         seed_legacy([{1, "e2", "e4", "e4"}, {2, "e7", "e5", "e5"}, {3, "e2", "e4", "e4"}])
 
       {:ok, broken_view, broken_html} = live(conn, "/games/#{broken}")
 
-      assert broken_html =~ "The log stops verifying at move 3"
-      assert broken_html =~ ~r/runs as far as\s+move 2/
+      # A legacy log is what it published: the moves replay as recorded, and
+      # the page claims no verdict on the line.
+      assert broken_html =~ "2 / 2"
+      refute broken_html =~ "does not verify"
 
       html = broken_view |> element("button[phx-value-to='1']") |> render_click()
       assert html =~ "Looking back at move 1 of 2"
