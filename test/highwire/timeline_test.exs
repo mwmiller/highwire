@@ -2507,6 +2507,47 @@ defmodule HighWire.TimelineTest do
       assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
     end
 
+    test "each reply carries its hop count from the root" do
+      # The chain the post viewer indents by: a root reply is 0, a fork
+      # answering a reply is 1, and a fork answering that fork is 2.
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      reply =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      fork =
+        msg("@c=.ed25519", "%f=.sha256", 3_000, %{
+          "type" => "post",
+          "text" => "second",
+          "root" => "%a=.sha256",
+          "branch" => ["%a=.sha256"],
+          "fork" => "%r=.sha256"
+        })
+
+      deep =
+        msg("@d=.ed25519", "%g=.sha256", 4_000, %{
+          "type" => "post",
+          "text" => "third",
+          "root" => "%f=.sha256",
+          "branch" => ["%f=.sha256"],
+          "fork" => "%r=.sha256"
+        })
+
+      st = %{client: nil, messages: %{messages: [root, reply, fork, deep]}}
+      {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
+
+      assert Enum.map(post.replies, &{&1["key"], &1.thread_depth}) == [
+               {"%a=.sha256", 0},
+               {"%f=.sha256", 1},
+               {"%g=.sha256", 2}
+             ]
+    end
+
     test "a get that answers with the engine's error map still resolves the thread" do
       # A missing message comes back {:ok, %{"message" => "message not
       # found", "name" => "Error", ...}} — an error map, not a message.

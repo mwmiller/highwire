@@ -516,6 +516,13 @@ defmodule HighWire.Timeline do
   to bring into view: an edit keys its own row, so the path can arrive
   naming a message the thread holds under another key. nil when the
   message is not in the local store.
+
+  The returned replies are threaded: each carries `:thread_depth` (the
+  number of reply hops between it and root — 0 for a root reply, 1 for
+  a reply to a root reply, and so on) so the post viewer can indent each
+  reply under the one it answers. Forks (reply-to-a-reply) are seated
+  among their siblings by `insert_fork/3`; the seat is preserved and
+  each fork's depth is counted from the chain it answers.
   """
   @spec post(binary()) :: %{root: map(), replies: [map()], focus: binary() | nil} | nil
   def post(key) when is_binary(key) do
@@ -1866,7 +1873,10 @@ defmodule HighWire.Timeline do
         _ -> window_replies(window, root_key)
       end
 
-    attach_forks(replies, window, root_key)
+    seated = attach_forks(replies, window, root_key)
+    by_key = Map.new(window ++ seated, &{&1["key"], &1})
+
+    Enum.map(seated, &Map.put(&1, :thread_depth, hops_to_root(&1, by_key, root_key, 0)))
   end
 
   # A reply-to-a-reply is a FORK: patchwork pins content.root to the
@@ -1967,6 +1977,19 @@ defmodule HighWire.Timeline do
     after
       8_000 -> Enum.reverse(acc)
     end
+  end
+
+  # Hops from a message up to the thread root: 0 for a reply to the root,
+  # one per fork answering another reply. A parent the window never carried
+  # ends the count where the chain is known, so a gap indents less, not oddly.
+  defp hops_to_root(m, by_key, root_key, hops) do
+    root = content(m)["root"]
+
+    parent =
+      if is_binary(root) and root != root_key and root != m["key"],
+        do: Map.get(by_key, root)
+
+    if post?(parent), do: hops_to_root(parent, by_key, root_key, hops + 1), else: hops
   end
 
   # get unboxes private content in place (value only, private: true) —

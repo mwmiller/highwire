@@ -528,3 +528,10 @@ body.zoom-open { overflow: hidden; }
   box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent),
     inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
 }
+
+/* A reply answers a message: its hop count from the root travels as
+   --reply-depth, and the reply steps in that many widths. A reply to the root
+   itself is flush. */
+.reply-indent {
+  padding-left: calc(var(--reply-depth, 0) * 1.25rem);
+}
