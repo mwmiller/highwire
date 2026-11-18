@@ -23,7 +23,7 @@ config :highwire, HighWireWeb.Endpoint,
   live_view: [signing_salt: "7c42r28o"]
 
 config :tailwind,
-  version: "3.4.17",
+  version: "3.4.19",
   default: [
     args: ~w(
     --config=tailwind.config.js
@@ -35,7 +35,7 @@ config :tailwind,
 
 # Configure esbuild (the version is required).
 config :esbuild,
-  version: "0.25.9",
+  version: "0.28.2",
   default: [
     args: ~w(js/app.js --bundle --target=es2016 --outdir=../priv/static/assets),
     cd: Path.expand("../assets", __DIR__),
