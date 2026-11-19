@@ -66,9 +66,8 @@ defmodule HighWireWeb.Hooks do
   defp handle_gossip(_msg, socket), do: {:cont, socket}
 
   defp connected_count do
-    case Timeline.network() do
-      %{"connections" => connections} when is_list(connections) -> length(connections)
-      _ -> 0
-    end
+    # The count the last network poll left behind, not a fresh report:
+    # a mount must not wait on the timeline's in-flight work.
+    Timeline.connection_count()
   end
 end

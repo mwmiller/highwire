@@ -302,6 +302,25 @@ defmodule HighWire.Timeline do
   end
 
   @doc """
+  The connected-peer count from the last network poll, read without
+  asking this process.
+
+  Every page mount puts this in the rail's badge. Asking for the whole
+  network report there made each page wait behind a poll — seconds of
+  RPC — for a single number, so the badge reads what the poll left
+  behind and the gossip event corrects it when peers move.
+  """
+  @spec connection_count() :: non_neg_integer()
+  def connection_count, do: :persistent_term.get({__MODULE__, :connection_count}, 0)
+
+  @doc false
+  def cache_connections(%{"connections" => connections}) when is_list(connections) do
+    :persistent_term.put({__MODULE__, :connection_count}, length(connections))
+  end
+
+  def cache_connections(_), do: :ok
+
+  @doc """
   How recently the engine reported network activity — the timestamps of
   the last network and gossip events and `active?` when the network one
   is still inside the 2.5s window the header's indicator rides.
@@ -2524,6 +2543,7 @@ defmodule HighWire.Timeline do
     previous = connections_of(old_net)
     now = System.monotonic_time(:millisecond)
     new_net = fetch_network(Map.get(state, :client), Map.get(state, :peer_meta, %{}))
+    cache_connections(new_net)
     state = Map.put(state, :network, new_net)
     connections = connections_of(state.network)
 
