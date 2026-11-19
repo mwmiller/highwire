@@ -43,7 +43,7 @@ defmodule HighWireWeb.Components.NavTest do
   end
 
   describe "page history" do
-    test "the rail opens with back and forward through the page history" do
+    test "the rail trails with back and forward through the page history" do
       html = render_component(&Nav.rail/1, [])
 
       assert html =~ ~s(phx-hook="HistoryNav")
@@ -52,12 +52,14 @@ defmodule HighWireWeb.Components.NavTest do
       assert html =~ ~s(aria-label="Back")
       assert html =~ ~s(aria-label="Forward")
 
-      # Both sit on the top line, ahead of the two log-backed page links.
+      # Both sit on the top line, after the log-backed destinations and
+      # the identity controls: history is chrome, not a place to go.
       {back, _} = :binary.match(html, ~s(data-history="back"))
       {forward, _} = :binary.match(html, ~s(data-history="forward"))
       {crab, _} = :binary.match(html, ~s(aria-label="Timeline"))
       {table, _} = :binary.match(html, ~s(aria-label="Gameroom"))
-      assert back < forward and forward < crab and crab < table
+      {settings, _} = :binary.match(html, ~s(aria-label="Settings"))
+      assert crab < table and table < settings and settings < back and back < forward
     end
   end
 end

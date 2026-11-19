@@ -2,8 +2,9 @@ defmodule HighWireWeb.Components.Nav do
   @moduledoc """
   The shared left rail: the top row opens with back and forward through
   this window's page history, then the crab mark (linking to the
-  timeline) and the table (linking to the gameroom) — the two
-  destinations built from the SSB logs. In the utility corner, beside
+  timeline), the table (linking to the gameroom) and the picture
+  (linking to the blobs) — the destinations built from the SSB logs. In
+  the utility corner, beside
   the current identity's avatar (linking to the identity page,
   `/identity`) and the settings gear, a smaller constellation mark
   opens the network page (`/network`): dialing and the network profile
@@ -58,33 +59,8 @@ defmodule HighWireWeb.Components.Nav do
     <aside class="flex w-64 min-w-0 shrink-0 flex-col overflow-hidden border-r border-edge bg-panel">
       <div
         id="rail-header"
-        class="flex h-11 shrink-0 w-full items-center justify-between border-b border-edge px-4"
+        class="flex h-11 w-full shrink-0 items-center justify-between gap-2 border-b border-edge px-2"
       >
-        <div
-          id="rail-history"
-          phx-hook="HistoryNav"
-          class="flex items-center overflow-hidden rounded-md border border-edge"
-        >
-          <button
-            type="button"
-            data-history="back"
-            title="Back"
-            aria-label="Back"
-            class="flex h-6 w-6 items-center justify-center text-dim transition hover:bg-raised hover:text-paper disabled:cursor-default disabled:text-faint disabled:hover:bg-transparent"
-          >
-            <.chevron direction={:back} />
-          </button>
-          <span class="h-4 w-px shrink-0 bg-edge" aria-hidden="true"></span>
-          <button
-            type="button"
-            data-history="forward"
-            title="Forward"
-            aria-label="Forward"
-            class="flex h-6 w-6 items-center justify-center text-dim transition hover:bg-raised hover:text-paper disabled:cursor-default disabled:text-faint disabled:hover:bg-transparent"
-          >
-            <.chevron direction={:forward} />
-          </button>
-        </div>
         <div
           id="rail-pages"
           class="flex items-center overflow-hidden rounded-md border border-edge"
@@ -107,8 +83,18 @@ defmodule HighWireWeb.Components.Nav do
           >
             <.table />
           </.link>
+          <span class="h-4 w-px shrink-0 bg-edge" aria-hidden="true"></span>
+          <.link
+            id="rail-blobs"
+            navigate="/blobs"
+            title="Blobs"
+            aria-label="Blobs"
+            class="flex h-6 items-center px-2 text-dim transition hover:bg-raised hover:text-paper"
+          >
+            <.pictures />
+          </.link>
         </div>
-        <div id="rail-utilities" class="flex items-center gap-3">
+        <div id="rail-utilities" class="flex items-center gap-2">
           <.link
             :if={@identity}
             navigate="/identity"
@@ -153,6 +139,31 @@ defmodule HighWireWeb.Components.Nav do
           >
             <.gear />
           </.link>
+        </div>
+        <div
+          id="rail-history"
+          phx-hook="HistoryNav"
+          class="flex items-center overflow-hidden rounded-md border border-edge"
+        >
+          <button
+            type="button"
+            data-history="back"
+            title="Back"
+            aria-label="Back"
+            class="flex h-6 w-6 items-center justify-center text-dim transition hover:bg-raised hover:text-paper disabled:cursor-default disabled:text-faint disabled:hover:bg-transparent"
+          >
+            <.chevron direction={:back} />
+          </button>
+          <span class="h-4 w-px shrink-0 bg-edge" aria-hidden="true"></span>
+          <button
+            type="button"
+            data-history="forward"
+            title="Forward"
+            aria-label="Forward"
+            class="flex h-6 w-6 items-center justify-center text-dim transition hover:bg-raised hover:text-paper disabled:cursor-default disabled:text-faint disabled:hover:bg-transparent"
+          >
+            <.chevron direction={:forward} />
+          </button>
         </div>
       </div>
       <div id="rail-content" class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
@@ -311,6 +322,25 @@ defmodule HighWireWeb.Components.Nav do
       <path d="M7 16.5v-3" />
       <path d="M17 16.5v-3" />
       <circle cx="12" cy="9.5" r="1" fill="currentColor" stroke="none" />
+    </svg>
+    """
+  end
+
+  defp pictures(assigns) do
+    ~H"""
+    <svg
+      class="h-4 w-4"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <rect x="3.5" y="5" width="17" height="14" rx="2" />
+      <circle cx="9" cy="10" r="1.4" />
+      <path d="M4.5 17.5 9.5 13l3.5 3 3-2.5 3.5 3.5" />
     </svg>
     """
   end
