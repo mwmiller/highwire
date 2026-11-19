@@ -90,6 +90,12 @@ defmodule HighWire.Markdown do
 
   defp flat_walk(nodes, ctx), do: Enum.flat_map(nodes, &List.wrap(walk(&1, ctx)))
 
+  # Whether a link is only carrying a picture to that picture's own bytes.
+  defp picture_link?(url, children) do
+    Enum.any?(children, &match?(%Image{}, &1)) and
+      match?({:ok, _hex}, Blob.ref_to_hex(url))
+  end
+
   # Never descend into code: its literal is not markdown.
   defp walk(%Code{} = node, _ctx), do: node
   defp walk(%CodeBlock{} = node, _ctx), do: node
@@ -102,15 +108,25 @@ defmodule HighWire.Markdown do
 
   defp walk(%Text{} = node, _ctx), do: node
 
+  # A picture wrapped in a link to a blob — the `[![](…)](…)` most SSB
+  # clients write — is not a second destination. The picture belongs to
+  # the post it rides in, so the anchor goes and a click on it reaches
+  # the post instead of the bytes.
   defp walk(%Link{url: url, nodes: children} = node, ctx) do
     child_ctx = %{ctx | in_link: true}
 
-    case resolve_href(url) do
-      {:ok, href, _external?} ->
-        %{node | url: href, nodes: flat_walk(children, child_ctx)}
+    cond do
+      picture_link?(url, children) ->
+        flat_walk(children, ctx)
 
-      :error ->
-        flat_walk(children, child_ctx)
+      true ->
+        case resolve_href(url) do
+          {:ok, href, _external?} ->
+            %{node | url: href, nodes: flat_walk(children, child_ctx)}
+
+          :error ->
+            flat_walk(children, child_ctx)
+        end
     end
   end
 

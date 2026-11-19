@@ -23,6 +23,7 @@ defmodule HighWire.Application do
         [
           HighWire.Suggester,
           HighWire.SearchIndex,
+          HighWire.BlobIndex,
           HighWire.SSB.MessageIndex,
           HighWire.Games.Catalog,
           HighWire.Backgammon.Store,

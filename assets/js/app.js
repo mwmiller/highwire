@@ -357,7 +357,7 @@ let OpenPost = {
 }
 
 // Downsized markdown images open over the page on click. `.md-body img` is
-// capped at 16rem tall and the reading column, so most photos arrive shrunk;
+// capped at 16rem tall and the reading column, so most pictures arrive shrunk;
 // one already at its natural size is left alone. Delegated from the document
 // in the capture phase: markdown surfaces are everywhere (timeline, thread,
 // profile), live navigation rebuilds them, and the capture phase runs before
@@ -408,6 +408,8 @@ window.addEventListener("resize", () => {
 
 let zoomed = null
 
+// Escape closes the picture and nothing else: the app's own Escape (clearing
+// search, walking back from a post) stands aside while it is up.
 function onZoomKey(e) {
   if (e.key !== "Escape") return
   e.preventDefault()
@@ -450,6 +452,10 @@ function openZoom(img) {
 document.addEventListener("click", (e) => {
   const img = e.target instanceof Element ? e.target.closest(".md-body img") : null
   if (!img || zoomed || !shrunk(img)) return
+
+  // A picture in a post row belongs to the post: the click falls through to
+  // the row, which opens the post, rather than opening the picture itself.
+  if (img.closest('[phx-hook="OpenPost"]')) return
 
   // A link around the image is the author's own target — a bigger blob, a
   // page — so the link keeps the click; only a link back to the image itself
@@ -1225,6 +1231,10 @@ document.addEventListener("keydown", e => {
   }
 
   if (e.key === "Escape") {
+    // A picture opened over the page owns the key: closing it is the whole
+    // answer, and it must not also walk back to the timeline.
+    if (document.getElementById("image-zoom")) return
+
     const input = feedSearchInput()
     if (input && document.activeElement === input) {
       input.value = ""

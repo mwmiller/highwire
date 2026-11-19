@@ -32,6 +32,7 @@ defmodule HighWireWeb.Router do
       live("/settings", SettingsLive)
       live("/diagnostics", DiagnosticsLive)
       live("/post/:key", PostLive)
+      live("/blobs", BlobsLive)
     end
 
     live("/import", ImportLive)

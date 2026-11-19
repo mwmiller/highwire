@@ -93,9 +93,25 @@ defmodule HighWire.MarkdownTest do
       refute html =~ "<img"
     end
 
+    test "a picture linked to its own bytes keeps the picture, not the link" do
+      hex = put_blob("selflink", <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "bytes">>)
+      ref = blob_ref("selflink")
+      html = Markdown.to_html("[![](#{ref})](#{ref})", blob_rev: 3)
+
+      assert html =~ ~s(src="/blob/#{hex}?v=3")
+      refute html =~ "<a "
+    end
+
+    test "a text link to a blob still opens the blob" do
+      ref = blob_ref("thefile")
+
+      assert Markdown.to_html("[the file](#{ref})") =~
+               ~s(<a href="/blob/#{hex("thefile")}">the file</a>)
+    end
+
     test "a picture stays a picture" do
-      hex = put_blob("photo", <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "bytes">>)
-      html = Markdown.to_html("![a photo](#{blob_ref("photo")})", blob_rev: 1)
+      hex = put_blob("picture", <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "bytes">>)
+      html = Markdown.to_html("![a picture](#{blob_ref("picture")})", blob_rev: 1)
 
       assert html =~ ~s(src="/blob/#{hex}?v=1")
       refute html =~ "<audio"

@@ -56,6 +56,15 @@ defmodule HighWire.Blob do
     "&" <> Base.encode64(:crypto.hash(:sha256, bytes)) <> ".sha256"
   end
 
+  @doc """
+  The SSB reference for a digest written as hex — the store names the
+  digest, not the bytes, so nothing has to be hashed here.
+  """
+  @spec ref_from_hex(binary()) :: binary()
+  def ref_from_hex(hex) when is_binary(hex) do
+    "&" <> Base.encode64(Base.decode16!(hex, case: :lower)) <> ".sha256"
+  end
+
   @doc "The engine's blob store root."
   def store_root do
     Application.get_env(
@@ -99,6 +108,34 @@ defmodule HighWire.Blob do
   end
 
   @doc """
+  Where the bytes behind `ref` sit on disk, when they are already here.
+
+  The cache is asked first — that is where an attached picture lands —
+  and the content-addressed store answers for anything the sidecar
+  pulled. `{:error, :enoent}` covers both a ref that is not a ref and
+  bytes that have not arrived: the caller knows which blob it asked
+  for, so it can say which one is missing.
+  """
+  @spec file(binary()) :: {:ok, Path.t()} | {:error, :enoent}
+  def file(ref) when is_binary(ref) do
+    case ref_to_hex(ref) do
+      {:ok, hex} ->
+        cached = Path.join(cache_root(), hex)
+
+        cond do
+          File.regular?(cached) -> {:ok, cached}
+          store_file?(hex) -> {:ok, store_path(hex)}
+          true -> {:error, :enoent}
+        end
+
+      :error ->
+        {:error, :enoent}
+    end
+  end
+
+  def file(_ref), do: {:error, :enoent}
+
+  @doc """
   What kind of media a blob holds, from its first bytes.
 
   A blob carries no name and no extension: the bytes are the only thing
@@ -132,6 +169,14 @@ defmodule HighWire.Blob do
       {:error, _} -> {:error, :unreadable}
     end
   end
+
+  @doc """
+  What kind of media the file at `path` holds, from its first bytes —
+  the same answer `media_type/1` gives for a ref, for a caller that
+  already has the path.
+  """
+  @spec file_kind(Path.t()) :: :image | :audio | :video | :file
+  def file_kind(path), do: kind(content_type(path))
 
   @doc false
   def store_file?(hex) do

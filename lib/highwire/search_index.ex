@@ -184,6 +184,34 @@ defmodule HighWire.SearchIndex do
 
   defp indexable(_), do: nil
 
+  @doc """
+  Fold every indexed post into `acc`, as `{key, author, text, ts}`.
+
+  The fold runs in the caller's process over the whole table, so a
+  caller that can wait (a LiveView task) does; an index that never
+  opened answers the starting accumulator instead of raising.
+  """
+  @spec fold_posts(acc, ({binary(), binary() | nil, binary() | nil, integer()}, acc -> acc)) ::
+          acc
+        when acc: term()
+  def fold_posts(acc, fun) when is_function(fun, 2) do
+    :dets.foldl(
+      fn
+        {key, _author, _text, ts} = row, acc when is_binary(key) and is_integer(ts) ->
+          fun.(row, acc)
+
+        _meta, acc ->
+          acc
+      end,
+      acc,
+      @table
+    )
+  rescue
+    _ -> acc
+  catch
+    _, _ -> acc
+  end
+
   @doc "Ingest a list of post maps (for tests/live tail)."
   def ingest(items) when is_list(items) do
     GenServer.cast(__MODULE__, {:ingest, items})
