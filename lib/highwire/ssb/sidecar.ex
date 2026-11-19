@@ -300,14 +300,39 @@ defmodule HighWire.SSB.Sidecar do
   # when it is an Erlang VM (a foreign process on the port just fails
   # the switch — it is not ours to kill). The store must never see two
   # writers, so a port that stays busy is an error, not a fallback.
+  #
+  # A graceful stop is not instant: the engine flushes its store and
+  # closes its log before the listening socket goes. Wait on the port
+  # the engine actually holds — the pidfile names it, and that is not
+  # always the configured one — and give it as much room as the
+  # shutdown contract gives a stopped sidecar, then some.
   defp ensure_port_free do
-    port = config_port()
+    port = engine_port()
     _ = stop_pidfile_engine()
     _ = stop_port_listener(port)
 
-    case await_closed(port, 50) do
-      :ok -> :ok
-      :timeout -> {:error, :port_busy}
+    case await_closed(port, 300) do
+      :ok ->
+        :ok
+
+      :timeout ->
+        Logger.error("sidecar: port #{port} is still held after the engine was stopped")
+        {:error, :port_busy}
+    end
+  end
+
+  # The socket the switch has to wait out: the one the running engine
+  # writes into the pidfile, whether it took the configured port or a
+  # free one the probe fell back to. A pidfile whose engine is already
+  # gone names nothing and the configured port is the one to watch.
+  defp engine_port do
+    case read_pidfile() do
+      %{"port" => port, "os_pid" => pid}
+      when is_integer(port) and port > 0 and is_integer(pid) ->
+        if os_alive?(pid), do: port, else: config_port()
+
+      _ ->
+        config_port()
     end
   end
 

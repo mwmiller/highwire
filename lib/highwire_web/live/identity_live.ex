@@ -307,6 +307,7 @@ defmodule HighWireWeb.IdentityLive do
 
   defp explain(:unknown_identity), do: "that identity is not here"
   defp explain(:disabled_identity), do: "that identity is disabled"
+  defp explain(:port_busy), do: "the engine is still shutting down; try again in a moment"
   defp explain(:active_identity), do: "switch away from it first"
   defp explain(:not_disabled), do: "disable it first"
   defp explain(:bad_label), do: "give it a label first"
