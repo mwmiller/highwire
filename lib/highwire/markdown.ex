@@ -115,18 +115,16 @@ defmodule HighWire.Markdown do
   defp walk(%Link{url: url, nodes: children} = node, ctx) do
     child_ctx = %{ctx | in_link: true}
 
-    cond do
-      picture_link?(url, children) ->
-        flat_walk(children, ctx)
+    if picture_link?(url, children) do
+      flat_walk(children, ctx)
+    else
+      case resolve_href(url) do
+        {:ok, href, _external?} ->
+          %{node | url: href, nodes: flat_walk(children, child_ctx)}
 
-      true ->
-        case resolve_href(url) do
-          {:ok, href, _external?} ->
-            %{node | url: href, nodes: flat_walk(children, child_ctx)}
-
-          :error ->
-            flat_walk(children, child_ctx)
-        end
+        :error ->
+          flat_walk(children, child_ctx)
+      end
     end
   end
 

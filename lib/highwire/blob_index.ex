@@ -128,12 +128,7 @@ defmodule HighWire.BlobIndex do
 
     new_rows =
       paths
-      |> Enum.flat_map(fn path ->
-        case hex_of(path) do
-          nil -> []
-          hex -> if MapSet.member?(known_hex, hex), do: [], else: [{hex, path}]
-        end
-      end)
+      |> Enum.flat_map(&fresh(&1, known_hex))
       |> Enum.chunk_every(@chunk)
       |> Enum.reduce([], fn chunk, acc ->
         rows =
@@ -170,6 +165,14 @@ defmodule HighWire.BlobIndex do
     e ->
       Logger.warning("blob index sweep failed: #{Exception.message(e)}")
       known
+  end
+
+  # A store file the sweep has not seen yet, as the pair its row wants;
+  # anything already known, or not a store file at all, adds nothing.
+  defp fresh(path, known_hex) do
+    hex = hex_of(path)
+
+    if is_nil(hex) or MapSet.member?(known_hex, hex), do: [], else: [{hex, path}]
   end
 
   # One store file → one row. The store name is the digest in minimal
@@ -211,17 +214,12 @@ defmodule HighWire.BlobIndex do
     SearchIndex.fold_posts(%{}, fn {key, author, text, ts}, acc ->
       case text do
         body when is_binary(body) ->
-          excerpt = excerpt(body)
+          entry = {key, author, excerpt(body), ts}
 
           body
           |> then(&Regex.scan(@ref, &1))
           |> List.flatten()
-          |> Enum.reduce(acc, fn ref, acc ->
-            case acc do
-              %{^ref => {_key, _author, _excerpt, seen}} when seen >= ts -> acc
-              _ -> Map.put(acc, ref, {key, author, excerpt, ts})
-            end
-          end)
+          |> Enum.reduce(acc, &put_ref(&1, entry, &2))
 
         _no_text ->
           acc
@@ -230,6 +228,15 @@ defmodule HighWire.BlobIndex do
     |> Map.new(fn {ref, {key, author, excerpt, ts}} ->
       {ref, %{key: key, author: author, text: excerpt, ts: ts}}
     end)
+  end
+
+  # One post's claim on one blob: the newest post wins when several
+  # point at the same bytes.
+  defp put_ref(ref, {_key, _author, _excerpt, ts} = entry, acc) do
+    case acc do
+      %{^ref => {_, _, _, seen}} when seen >= ts -> acc
+      _ -> Map.put(acc, ref, entry)
+    end
   end
 
   # The post's opening words as a reader would say them: the pictures it

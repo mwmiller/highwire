@@ -166,17 +166,7 @@ defmodule HighWireWeb.BlobsLive do
             %{acc | loose: [row | acc.loose]}
 
           post ->
-            case Map.fetch(acc.bundles, post.key) do
-              {:ok, bundle} ->
-                %{acc | bundles: Map.put(acc.bundles, post.key, add(bundle, row))}
-
-              :error ->
-                %{
-                  acc
-                  | order: [post.key | acc.order],
-                    bundles: Map.put(acc.bundles, post.key, add(new(post, row), row))
-                }
-            end
+            place(acc, post, row)
         end
       end)
 
@@ -188,6 +178,22 @@ defmodule HighWireWeb.BlobsLive do
         |> Enum.map(&%{&1 | rows: Enum.reverse(&1.rows)}),
       loose: Enum.reverse(acc.loose)
     }
+  end
+
+  # A blob's post already has a bundle: add to it. The first one makes
+  # the bundle and takes its place in the order.
+  defp place(acc, post, row) do
+    case Map.fetch(acc.bundles, post.key) do
+      {:ok, bundle} ->
+        %{acc | bundles: Map.put(acc.bundles, post.key, add(bundle, row))}
+
+      :error ->
+        %{
+          acc
+          | order: [post.key | acc.order],
+            bundles: Map.put(acc.bundles, post.key, add(new(post, row), row))
+        }
+    end
   end
 
   defp new(post, row) do
@@ -295,9 +301,10 @@ defmodule HighWireWeb.BlobsLive do
     posts = length(bundles)
     blobs = Enum.reduce(bundles, length(loose), &(length(&1.rows) + &2))
 
-    cond do
-      posts == 0 -> "#{blobs} blobs"
-      true -> "#{min(shown, posts)} of #{posts} posts · #{blobs} blobs"
+    if posts == 0 do
+      "#{blobs} blobs"
+    else
+      "#{min(shown, posts)} of #{posts} posts · #{blobs} blobs"
     end
   end
 
