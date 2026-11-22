@@ -4,6 +4,7 @@ defmodule HighWireWeb.BlobsLiveTest do
   import Phoenix.LiveViewTest
 
   alias HighWire.BlobIndex
+  alias HighWire.SSB.Profile
 
   setup do
     # The page reads the index out of `:persistent_term`, and the real
@@ -100,6 +101,92 @@ defmodule HighWireWeb.BlobsLiveTest do
     end
   end
 
+  describe "the author filter" do
+    test "typing a few letters narrows to that writer, and the URL keeps them", %{conn: conn} do
+      alice = blob(1)
+      bob = blob(2)
+
+      publish(
+        [alice, bob],
+        %{
+          alice.ref => post_row("%alice#1.sha256", "@alice.local"),
+          bob.ref => post_row("%bob#1.sha256", "@bob.local")
+        }
+      )
+
+      {:ok, view, html} = live(conn, "/blobs?author=alice")
+
+      assert html =~ "blob-post-" <> hex(1)
+      refute html =~ "blob-post-" <> hex(2)
+
+      render_change(view, "author", %{"author" => "bob"})
+      assert_patch(view, "/blobs?author=bob")
+
+      html = render(view)
+      assert html =~ "blob-post-" <> hex(2)
+      refute html =~ "blob-post-" <> hex(1)
+    end
+
+    test "the suggestions open with the writers who brought the most blobs", %{conn: conn} do
+      alice = blob(1)
+      bob_one = blob(2)
+      bob_two = blob(3)
+
+      publish(
+        [alice, bob_one, bob_two],
+        %{
+          alice.ref => post_row("%alice#1.sha256", "@alice.local"),
+          bob_one.ref => post_row("%bob#1.sha256", "@bob.local"),
+          bob_two.ref => post_row("%bob#1.sha256", "@bob.local")
+        }
+      )
+
+      {:ok, _view, html} = live(conn, "/blobs")
+
+      assert html =~ ~s(id="blob-authors")
+
+      # Bob carried two of the three blobs, so his name comes first.
+      assert pos(html, ~s(value="#{Profile.display_name("@bob.local")}")) <
+               pos(html, ~s(value="#{Profile.display_name("@alice.local")}"))
+    end
+  end
+
+  describe "ordering" do
+    test "posted order follows each post's own date, not when the bytes arrived", %{conn: conn} do
+      arrived_first = blob(1)
+      posted_newer = blob(2)
+
+      publish(
+        [arrived_first, posted_newer],
+        %{
+          arrived_first.ref => post_row("%old#1.sha256", "@a.local", ts: 1_600_000_000_000),
+          posted_newer.ref => post_row("%new#1.sha256", "@a.local", ts: 1_700_000_000_000)
+        }
+      )
+
+      {:ok, _view, html} = live(conn, "/blobs?sort=posted")
+
+      assert pos(html, "blob-post-" <> hex(2)) < pos(html, "blob-post-" <> hex(1))
+    end
+
+    test "author order files posts under the name they are shown by", %{conn: conn} do
+      zoe = blob(1)
+      amy = blob(2)
+
+      publish(
+        [zoe, amy],
+        %{
+          zoe.ref => post_row("%zoe#1.sha256", "@zoe.local"),
+          amy.ref => post_row("%amy#1.sha256", "@amy.local")
+        }
+      )
+
+      {:ok, _view, html} = live(conn, "/blobs?sort=author")
+
+      assert pos(html, "blob-post-" <> hex(2)) < pos(html, "blob-post-" <> hex(1))
+    end
+  end
+
   # A store row: minimal hex digest, its ref, what it is, how big, and how
   # long ago it reached the machine.
   defp blob(index, opts \\ []) do
@@ -114,10 +201,21 @@ defmodule HighWireWeb.BlobsLiveTest do
 
   defp hex(index), do: index |> Integer.to_string() |> String.pad_leading(64, "0")
 
-  defp publish(rows) do
+  defp publish(rows, parents \\ %{}) do
     :persistent_term.put({BlobIndex, :rows}, rows)
+    :persistent_term.put({BlobIndex, :parents}, parents)
     :persistent_term.put({BlobIndex, :counts}, %{all: length(rows)})
     :persistent_term.put({BlobIndex, :status}, :ready)
+  end
+
+  # The post that carried a blob, as the index records it.
+  defp post_row(key, author, opts \\ []) do
+    %{
+      key: key,
+      author: author,
+      text: Keyword.get(opts, :text, "words"),
+      ts: Keyword.get(opts, :ts, 1_700_000_000_000)
+    }
   end
 
   defp count(html, needle), do: length(String.split(html, needle)) - 1

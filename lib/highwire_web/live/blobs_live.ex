@@ -15,12 +15,15 @@ defmodule HighWireWeb.BlobsLive do
   rather than a sweep — the indexer's own pace is the only price.
 
   A store can hold tens of thousands of blobs, so the list is narrowed
-  rather than scrolled: kind, whether a post carried it, size band and
-  age each cut the list, the search matches a digest or the words and
-  author of the carrying post, and the order follows arrival or size.
+  rather than scrolled. The search matches a digest or the words and
+  author of the carrying post, a name narrows it to one writer, and kind,
+  arrival window, size band and whether a post carried it each cut the
+  list further; the order follows arrival, when the post was published,
+  size or author.
   Every one of those is page state and rides in the URL, so a narrowed
-  view survives a reload, the back button and a link. The header says how
-  much of the store the current view covers and how many bytes that is.
+  view survives a reload, the back button and a link. The header says what
+  the page is showing — its posts, the blobs in them and their bytes —
+  while the rail keeps the store's own total.
 
   Where a blob's post is known, the row carries both dates: when the
   post was published, and when the bytes actually reached this machine.
@@ -48,11 +51,16 @@ defmodule HighWireWeb.BlobsLive do
   @tiles 6
   @loose_page 36
 
+  # A store can have a thousand posters. The suggestions under the author
+  # box open with the ones who brought the most blobs, and typing a name
+  # narrows them; past the list, the box still filters by any name or key.
+  @author_hints 40
+
   @kinds [:all, :image, :audio, :video, :file]
   @attachments [:any, :attached, :loose]
   @bands [:any, :small, :medium, :large]
   @ages [:any, :day, :week, :month, :year]
-  @sorts [:newest, :oldest, :largest, :smallest]
+  @sorts [:newest, :oldest, :posted, :largest, :smallest, :author]
 
   @impl true
   def mount(params, _session, socket) do
@@ -110,6 +118,15 @@ defmodule HighWireWeb.BlobsLive do
         {:noreply,
          socket |> assign(:post, post) |> assign(:shown, @page) |> refresh() |> push_url()}
     end
+  end
+
+  def handle_event("author", %{"author" => author}, socket) do
+    {:noreply,
+     socket
+     |> assign(:author, blank_to_nil(author))
+     |> assign(:shown, @page)
+     |> refresh()
+     |> push_url()}
   end
 
   def handle_event("band", %{"band" => band}, socket) do
@@ -195,8 +212,6 @@ defmodule HighWireWeb.BlobsLive do
   defp load(socket) do
     rows = BlobIndex.rows()
     parents = BlobIndex.parents()
-    now = System.system_time(:second)
-    post_count = Enum.count(rows, &Map.has_key?(parents, &1.ref))
 
     socket
     |> assign(rows: rows)
@@ -204,13 +219,9 @@ defmodule HighWireWeb.BlobsLive do
     |> assign(search_text: search_text(parents))
     |> assign(counts: BlobIndex.counts())
     |> assign(status: BlobIndex.status())
-    |> assign(post_count: post_count)
-    |> assign(loose_count: length(rows) - post_count)
+    |> assign(author_text: author_text(parents))
+    |> assign(author_options: author_options(parents))
     |> assign(total_size: Enum.reduce(rows, 0, &(&1.size + &2)))
-    |> assign(
-      band_counts: Enum.frequencies_by(rows, &band_of(&1.size)) |> Map.put(:any, length(rows))
-    )
-    |> assign(age_counts: age_counts(rows, now))
     |> refresh()
   end
 
@@ -219,10 +230,8 @@ defmodule HighWireWeb.BlobsLive do
       rows: rows,
       parents: parents,
       search_text: texts,
-      kind: kind,
-      post: post,
-      band: band,
-      age: age,
+      author_text: author_texts,
+      author: author,
       sort: sort,
       query: query,
       shown: shown,
@@ -232,37 +241,64 @@ defmodule HighWireWeb.BlobsLive do
     now = System.system_time(:second)
     lowered = String.downcase(query)
 
-    filtered =
-      Enum.filter(rows, fn row ->
-        (kind == :all or row.kind == kind) and
-          post_state(post, parents, row) and
-          (band == :any or band_of(row.size) == band) and
-          (age == :any or now - row.mtime < window(age)) and
-          (query == "" or matches?(row, lowered, query, texts))
-      end)
+    ctx = %{
+      now: now,
+      lowered: lowered,
+      parents: parents,
+      texts: texts,
+      author_text: author_texts,
+      author_query: String.downcase(author || "")
+    }
 
-    %{bundles: bundles, loose: loose} = filtered |> sort(sort) |> bundle(parents)
+    filtered = Enum.filter(rows, &keep?(&1, socket.assigns, ctx))
 
-    # Only the slice the page draws is an assign, and its edge is where the
-    # counting stops: what lies past it is a button, not a number, so the
-    # rows the reader never sees are not counted. The match count and its
-    # bytes are the one total the header does show.
+    %{bundles: bundles, loose: loose} = filtered |> sort(sort, parents) |> bundle(parents)
+
+    # Only the slice the page draws is an assign, and the header's totals
+    # come from that slice: what lies past its edge is a button, not a
+    # number.
     {bundles, remaining} = Enum.split(bundles, shown)
     {loose, remaining_loose} = Enum.split(loose, loose_shown)
 
-    {visible_count, visible_size} =
-      Enum.reduce(filtered, {0, 0}, fn row, {count, bytes} -> {count + 1, bytes + row.size} end)
+    drawn = Enum.flat_map(bundles, & &1.rows) ++ loose
+
+    {drawn_count, drawn_size} =
+      Enum.reduce(drawn, {0, 0}, fn row, {count, bytes} -> {count + 1, bytes + row.size} end)
 
     assign(socket,
       bundles: bundles,
       more_bundles?: remaining != [],
       loose: loose,
       more_loose?: remaining_loose != [],
-      visible_count: visible_count,
-      visible_size: visible_size,
+      drawn_count: drawn_count,
+      drawn_size: drawn_size,
       filtering?: filtering?(socket.assigns)
     )
   end
+
+  # Whether a row survives the filters in hand: its kind, the post that
+  # carried it (and who posted that), its size band, arrival window and
+  # the search words all have to agree.
+  defp keep?(row, assigns, ctx) do
+    kind_kept?(assigns.kind, row) and
+      post_state(assigns.post, ctx.parents, row) and
+      author_state(assigns.author, ctx, row) and
+      size_kept?(assigns.band, row) and
+      age_kept?(assigns.age, row, ctx.now) and
+      text_kept?(assigns.query, row, ctx)
+  end
+
+  defp kind_kept?(:all, _row), do: true
+  defp kind_kept?(kind, row), do: row.kind == kind
+
+  defp size_kept?(:any, _row), do: true
+  defp size_kept?(band, row), do: band_of(row.size) == band
+
+  defp age_kept?(:any, _row, _now), do: true
+  defp age_kept?(age, row, now), do: now - row.mtime < window(age)
+
+  defp text_kept?("", _row, _ctx), do: true
+  defp text_kept?(query, row, ctx), do: matches?(row, ctx.lowered, query, ctx.texts)
 
   # The posted blobs are gathered under the post that carried them, in the
   # order the sort put their first blob; everything else falls through to
@@ -360,14 +396,73 @@ defmodule HighWireWeb.BlobsLive do
   defp display(author) when is_binary(author), do: Profile.display_name(author)
   defp display(_author), do: nil
 
-  defp sort(rows, :newest), do: rows
-  defp sort(rows, :oldest), do: Enum.reverse(rows)
-  defp sort(rows, :largest), do: Enum.sort_by(rows, & &1.size, :desc)
-  defp sort(rows, :smallest), do: Enum.sort_by(rows, & &1.size)
+  defp sort(rows, :newest, _parents), do: rows
+  defp sort(rows, :oldest, _parents), do: Enum.reverse(rows)
+  defp sort(rows, :largest, _parents), do: Enum.sort_by(rows, & &1.size, :desc)
+  defp sort(rows, :smallest, _parents), do: Enum.sort_by(rows, & &1.size)
+
+  # The date a post itself carries. A blob no post carried has none, so
+  # the loose strip follows the dated ones rather than interleaving.
+  defp sort(rows, :posted, parents) do
+    Enum.sort_by(rows, fn row ->
+      case parent(parents, row.ref) do
+        %{ts: ts} when is_integer(ts) -> {0, -ts, row.hex}
+        _ -> {1, 0, row.hex}
+      end
+    end)
+  end
+
+  # The person who posted the blob, by the name the profile shows. The
+  # loose strip again comes last: nobody to file it under.
+  defp sort(rows, :author, parents) do
+    Enum.sort_by(rows, fn row ->
+      case parent(parents, row.ref) do
+        %{author: author} when is_binary(author) ->
+          {0, String.downcase(name(author)), row.hex}
+
+        _ ->
+          {1, "", row.hex}
+      end
+    end)
+  end
 
   defp post_state(:any, _parents, _row), do: true
   defp post_state(:attached, parents, row), do: Map.has_key?(parents, row.ref)
   defp post_state(:loose, parents, row), do: not Map.has_key?(parents, row.ref)
+
+  defp author_state(nil, _ctx, _row), do: true
+
+  defp author_state(_author, ctx, row) do
+    String.contains?(Map.get(ctx.author_text, row.ref, ""), ctx.author_query)
+  end
+
+  # A blob's writer as one lowercased string — the name the profile
+  # shows and the key itself — so typing a few letters narrows by who
+  # posted it.
+  defp author_text(parents) do
+    Map.new(parents, fn {ref, value} -> {ref, author_haystack(normalize_parent(value))} end)
+  end
+
+  defp author_haystack(%{author: author}) when is_binary(author),
+    do: String.downcase("#{name(author)} #{author}")
+
+  defp author_haystack(_post), do: ""
+
+  # The names the author box offers first: the writers with the most
+  # blobs in the store, ties in name order. Counted from the parent map
+  # rather than the store rows — one entry per blob, no extra sweep.
+  defp author_options(parents) do
+    parents
+    |> Map.values()
+    |> Enum.reduce(%{}, fn
+      %{author: author}, acc when is_binary(author) -> Map.update(acc, author, 1, &(&1 + 1))
+      _post, acc -> acc
+    end)
+    |> Enum.sort_by(fn {author, count} -> {-count, String.downcase(name(author)), author} end)
+    |> Enum.take(@author_hints)
+    |> Enum.map(fn {author, _count} -> name(author) end)
+    |> Enum.uniq()
+  end
 
   defp band_of(size) when size < 100 * 1024, do: :small
   defp band_of(size) when size < 1024 * 1024, do: :medium
@@ -378,29 +473,25 @@ defmodule HighWireWeb.BlobsLive do
   defp window(:month), do: 30 * 86_400
   defp window(:year), do: 365 * 86_400
 
-  # The counts beside the time buttons: how many blobs arrived inside
-  # each window, so a band that would show nothing says so before it is
-  # pressed.
-  defp age_counts(rows, now) do
-    Enum.reduce(rows, %{any: length(rows), day: 0, week: 0, month: 0, year: 0}, fn row, acc ->
-      age = now - row.mtime
-      acc = if age < window(:day), do: Map.update!(acc, :day, &(&1 + 1)), else: acc
-      acc = if age < window(:week), do: Map.update!(acc, :week, &(&1 + 1)), else: acc
-      acc = if age < window(:month), do: Map.update!(acc, :month, &(&1 + 1)), else: acc
-      if age < window(:year), do: Map.update!(acc, :year, &(&1 + 1)), else: acc
-    end)
-  end
-
   # -- page state --------------------------------------------------------
 
   defp default_filters do
-    %{kind: :all, post: :any, band: :any, age: :any, sort: :newest, query: ""}
+    %{
+      kind: :all,
+      post: :any,
+      author: nil,
+      band: :any,
+      age: :any,
+      sort: :newest,
+      query: ""
+    }
   end
 
   defp filters_from(params) do
     %{
       kind: find(@kinds, Map.get(params, "kind")) || :all,
       post: find(@attachments, Map.get(params, "post")) || :any,
+      author: blank_to_nil(Map.get(params, "author")),
       band: find(@bands, Map.get(params, "size")) || :any,
       age: find(@ages, Map.get(params, "age")) || :any,
       sort: find(@sorts, Map.get(params, "sort")) || :newest,
@@ -414,9 +505,18 @@ defmodule HighWireWeb.BlobsLive do
 
   defp find(values, value), do: Enum.find(values, &(Atom.to_string(&1) == value))
 
+  defp blank_to_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp blank_to_nil(_value), do: nil
+
   defp filtering?(assigns) do
-    assigns.kind != :all or assigns.post != :any or assigns.band != :any or
-      assigns.age != :any or assigns.query != ""
+    assigns.kind != :all or assigns.post != :any or assigns.author != nil or
+      assigns.band != :any or assigns.age != :any or assigns.query != ""
   end
 
   # A default is left out of the URL, so the plain page is /blobs however
@@ -426,6 +526,7 @@ defmodule HighWireWeb.BlobsLive do
       [
         {"kind", param(assigns.kind, :all)},
         {"post", param(assigns.post, :any)},
+        {"author", assigns.author},
         {"size", param(assigns.band, :any)},
         {"age", param(assigns.age, :any)},
         {"sort", param(assigns.sort, :newest)},
@@ -486,10 +587,6 @@ defmodule HighWireWeb.BlobsLive do
   defp post_title(:attached), do: "Only blobs a post carried"
   defp post_title(:loose), do: "Only blobs no post carried"
 
-  defp attachment_count(_post_count, _loose_count, :any, total), do: total
-  defp attachment_count(post_count, _loose_count, :attached, _total), do: post_count
-  defp attachment_count(_post_count, loose_count, :loose, _total), do: loose_count
-
   defp band_label(:any), do: "Any"
   defp band_label(:small), do: "Small"
   defp band_label(:medium), do: "Medium"
@@ -514,8 +611,17 @@ defmodule HighWireWeb.BlobsLive do
 
   defp sort_label(:newest), do: "Newest"
   defp sort_label(:oldest), do: "Oldest"
+  defp sort_label(:posted), do: "Posted"
   defp sort_label(:largest), do: "Largest"
   defp sort_label(:smallest), do: "Smallest"
+  defp sort_label(:author), do: "Author"
+
+  defp sort_title(:newest), do: "Newest arrival first"
+  defp sort_title(:oldest), do: "Oldest arrival first"
+  defp sort_title(:posted), do: "Newest post first"
+  defp sort_title(:largest), do: "Largest blob first"
+  defp sort_title(:smallest), do: "Smallest blob first"
+  defp sort_title(:author), do: "Post author, A to Z"
 
   defp size(bytes) when bytes < 1024, do: "#{bytes} B"
 
@@ -562,21 +668,15 @@ defmodule HighWireWeb.BlobsLive do
     if MapSet.member?(expanded, bundle.key), do: bundle.rows, else: Enum.take(bundle.rows, @tiles)
   end
 
-  # What the header says the list covers: the posts shown, how much of the
-  # store the filters match, and the bytes behind it.
+  # What the page is showing: the posts drawn, the blobs in them and
+  # their bytes. Nothing is counted that is not on the page.
   defp summary(assigns) do
-    total = count(assigns.counts, :all)
     posts = length(assigns.bundles)
-
-    blobs =
-      if assigns.filtering?,
-        do: "#{number(assigns.visible_count)} of #{number(total)} blobs",
-        else: "#{number(total)} blobs"
 
     [
       if(posts > 0, do: "#{number(posts)} posts"),
-      blobs,
-      size(assigns.visible_size)
+      "#{number(assigns.drawn_count)} blobs",
+      size(assigns.drawn_size)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" · ")
@@ -588,6 +688,7 @@ defmodule HighWireWeb.BlobsLive do
     [
       if(assigns.kind != :all, do: kind_label(assigns.kind)),
       if(assigns.post != :any, do: post_label(assigns.post)),
+      if(assigns.author, do: "by “" <> assigns.author <> "”"),
       if(assigns.band != :any, do: band_title(assigns.band)),
       if(assigns.age != :any, do: age_title(assigns.age)),
       if(assigns.query != "", do: "“" <> assigns.query <> "”")
@@ -627,12 +728,40 @@ defmodule HighWireWeb.BlobsLive do
               name="q"
               value={@query}
               phx-debounce="200"
-              placeholder="Digest, words or author"
+              placeholder="Digest or post words"
               autocomplete="off"
               class="w-full rounded border border-edge bg-app px-2 py-0.5 text-xs text-paper transition placeholder:text-faint focus:border-dim focus:outline-none"
             />
             <p class="mt-1 text-[11px] leading-snug text-faint">
               A digest or ref, or the words and author of the post that carried the blob.
+            </p>
+          </div>
+        </form>
+
+        <form
+          :if={count(@counts, :all) > 0}
+          id="blobs-author"
+          phx-change="author"
+          phx-submit="author"
+        >
+          <Nav.rail_label>Author</Nav.rail_label>
+          <div class="px-4 pb-4">
+            <input
+              type="text"
+              name="author"
+              value={@author}
+              phx-debounce="200"
+              placeholder="Name or key"
+              list="blob-authors"
+              autocomplete="off"
+              class="w-full rounded border border-edge bg-app px-2 py-0.5 text-xs text-paper transition placeholder:text-faint focus:border-dim focus:outline-none"
+            />
+            <datalist id="blob-authors">
+              <option :for={label <- @author_options} value={label}></option>
+            </datalist>
+            <p class="mt-1 text-[11px] leading-snug text-faint">
+              A few letters of the name, or part of the key. The list opens with
+              the writers who brought the most blobs.
             </p>
           </div>
         </form>
@@ -651,49 +780,7 @@ defmodule HighWireWeb.BlobsLive do
                 @kind != kind && "border-edge text-muted hover:text-paper"
               ]}
             >
-              {kind_label(kind)} ({number(count(@counts, kind))})
-            </button>
-          </div>
-        </div>
-
-        <div :if={count(@counts, :all) > 0}>
-          <Nav.rail_label>Post</Nav.rail_label>
-          <div class="flex flex-wrap gap-1 px-4 pb-4">
-            <button
-              :for={post <- attachments()}
-              type="button"
-              phx-click="post"
-              phx-value-post={post}
-              title={post_title(post)}
-              class={[
-                "rounded border px-2 py-0.5 text-xs transition",
-                @post == post && "border-ink bg-raised text-paper",
-                @post != post && "border-edge text-muted hover:text-paper"
-              ]}
-            >
-              {post_label(post)} ({number(
-                attachment_count(@post_count, @loose_count, post, count(@counts, :all))
-              )})
-            </button>
-          </div>
-        </div>
-
-        <div :if={count(@counts, :all) > 0}>
-          <Nav.rail_label>Size</Nav.rail_label>
-          <div class="flex flex-wrap gap-1 px-4 pb-4">
-            <button
-              :for={band <- bands()}
-              type="button"
-              phx-click="band"
-              phx-value-band={band}
-              title={band_title(band)}
-              class={[
-                "rounded border px-2 py-0.5 text-xs transition",
-                @band == band && "border-ink bg-raised text-paper",
-                @band != band && "border-edge text-muted hover:text-paper"
-              ]}
-            >
-              {band_label(band)} ({number(Map.get(@band_counts, band, 0))})
+              {kind_label(kind)}
             </button>
           </div>
         </div>
@@ -713,7 +800,47 @@ defmodule HighWireWeb.BlobsLive do
                 @age != age && "border-edge text-muted hover:text-paper"
               ]}
             >
-              {age_label(age)} ({number(Map.get(@age_counts, age, 0))})
+              {age_label(age)}
+            </button>
+          </div>
+        </div>
+
+        <div :if={count(@counts, :all) > 0}>
+          <Nav.rail_label>Size</Nav.rail_label>
+          <div class="flex flex-wrap gap-1 px-4 pb-4">
+            <button
+              :for={band <- bands()}
+              type="button"
+              phx-click="band"
+              phx-value-band={band}
+              title={band_title(band)}
+              class={[
+                "rounded border px-2 py-0.5 text-xs transition",
+                @band == band && "border-ink bg-raised text-paper",
+                @band != band && "border-edge text-muted hover:text-paper"
+              ]}
+            >
+              {band_label(band)}
+            </button>
+          </div>
+        </div>
+
+        <div :if={count(@counts, :all) > 0}>
+          <Nav.rail_label>Post</Nav.rail_label>
+          <div class="flex flex-wrap gap-1 px-4 pb-4">
+            <button
+              :for={post <- attachments()}
+              type="button"
+              phx-click="post"
+              phx-value-post={post}
+              title={post_title(post)}
+              class={[
+                "rounded border px-2 py-0.5 text-xs transition",
+                @post == post && "border-ink bg-raised text-paper",
+                @post != post && "border-edge text-muted hover:text-paper"
+              ]}
+            >
+              {post_label(post)}
             </button>
           </div>
         </div>
@@ -726,6 +853,7 @@ defmodule HighWireWeb.BlobsLive do
               type="button"
               phx-click="sort"
               phx-value-sort={order}
+              title={sort_title(order)}
               class={[
                 "rounded border px-2 py-0.5 text-xs transition",
                 @sort == order && "border-ink bg-raised text-paper",
@@ -794,7 +922,7 @@ defmodule HighWireWeb.BlobsLive do
           </p>
 
           <p
-            :if={count(@counts, :all) > 0 and @visible_count == 0}
+            :if={count(@counts, :all) > 0 and @bundles == [] and @loose == []}
             id="blobs-empty"
             class="mt-6 text-sm text-faint"
           >
