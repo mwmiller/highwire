@@ -668,6 +668,57 @@ defmodule HighWireWeb.BlobsLive do
     if MapSet.member?(expanded, bundle.key), do: bundle.rows, else: Enum.take(bundle.rows, @tiles)
   end
 
+  # A tile with no picture to show still says what it holds: a mark for
+  # the kind and its name, so a recording or a document reads as one at a
+  # glance rather than as a bare word.
+  defp media_mark(assigns) do
+    ~H"""
+    <span class="flex flex-col items-center gap-1 text-faint" aria-hidden="true">
+      <svg
+        :if={@kind == :audio}
+        class="h-6 w-6"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M9 18V5l11-2v13" />
+        <circle cx="6" cy="18" r="3" />
+        <circle cx="17" cy="16" r="3" />
+      </svg>
+      <svg
+        :if={@kind == :video}
+        class="h-6 w-6"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M10 9.5l5 2.5-5 2.5z" />
+      </svg>
+      <svg
+        :if={@kind == :file}
+        class="h-6 w-6"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+        <path d="M14 3v5h5" />
+      </svg>
+      <span class="text-[10px] uppercase tracking-wider">{kind_word(@kind)}</span>
+    </span>
+    """
+  end
+
   # What the page is showing: the posts drawn, the blobs in them and
   # their bytes. Nothing is counted that is not on the page.
   defp summary(assigns) do
@@ -991,7 +1042,7 @@ defmodule HighWireWeb.BlobsLive do
                     loading="lazy"
                     class="h-full w-full object-cover"
                   />
-                  <span :if={blob.kind != :image} aria-hidden="true">{blob.kind}</span>
+                  <.media_mark :if={blob.kind != :image} kind={blob.kind} />
                   <span class="sr-only">{tile_title(blob, bundle.ts)}</span>
                 </a>
               </div>
@@ -1029,7 +1080,7 @@ defmodule HighWireWeb.BlobsLive do
                   loading="lazy"
                   class="h-full w-full object-cover"
                 />
-                <span :if={blob.kind != :image} aria-hidden="true">{blob.kind}</span>
+                <.media_mark :if={blob.kind != :image} kind={blob.kind} />
                 <span class="sr-only">{tile_title(blob)} — open the bytes</span>
                 <span
                   aria-hidden="true"

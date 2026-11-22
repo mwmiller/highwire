@@ -151,6 +151,17 @@ defmodule HighWireWeb.BlobsLiveTest do
     end
   end
 
+  describe "tiles" do
+    test "a blob without a picture says what it is", %{conn: conn} do
+      publish([blob(1, kind: :audio)])
+
+      {:ok, _view, html} = live(conn, "/blobs")
+
+      assert html =~ "Sound"
+      refute html =~ ">audio<"
+    end
+  end
+
   describe "ordering" do
     test "posted order follows each post's own date, not when the bytes arrived", %{conn: conn} do
       arrived_first = blob(1)
