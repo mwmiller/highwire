@@ -616,6 +616,29 @@ const LandOn = {
   }
 }
 
+// Picking the message a reply answers: the composer sits under the
+// thread, so the press brings the box into view and puts the caret in
+// it. The picked key rides on the element, so picking a different reply
+// runs this again even though the composer stayed mounted.
+const ReplyTarget = {
+  mounted() {
+    this.focusComposer()
+  },
+  updated() {
+    this.focusComposer()
+  },
+  focusComposer() {
+    const key = this.el.dataset.target
+    if (!key || key === this.picked) return
+    this.picked = key
+    const box = document.getElementById("reply-body")
+    if (!box) return
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    box.focus({preventScroll: true})
+    box.scrollIntoView({block: "center", behavior: reduced ? "auto" : "smooth"})
+  }
+}
+
 // The constellation's selected peer: when the server-side selection
 // changes, bring the matching list row into view. The row is found by
 // its data-sky-key (same string the SVG nodes carry), scoped to the
@@ -1305,6 +1328,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     FeedScroll,
     ClampRows,
     LandOn,
+    ReplyTarget,
     FollowMoves,
     HistoryNav,
     ReplayKeys

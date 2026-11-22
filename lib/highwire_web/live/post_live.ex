@@ -49,6 +49,7 @@ defmodule HighWireWeb.PostLive do
        reply_body: "",
        reply_error: nil,
        reply_pending: false,
+       reply_key: nil,
        like_pending: MapSet.new(),
        like_error: nil,
        mention_suggestions: [],
@@ -95,7 +96,7 @@ defmodule HighWireWeb.PostLive do
     socket =
       case result do
         {:ok, _key} ->
-          assign(socket, reply_body: "", reply_error: nil)
+          assign(socket, reply_body: "", reply_error: nil, reply_key: nil)
 
         {:error, reason} ->
           assign(socket, reply_error: reply_error(reason))
@@ -144,6 +145,9 @@ defmodule HighWireWeb.PostLive do
       root: root,
       replies: replies,
       not_found: not_found,
+      # A picked reply that is no longer in the thread has nothing left
+      # to answer, so the composer goes back to the thread root.
+      reply_key: live_reply_key(socket.assigns.reply_key, replies),
       # Which message of this thread the path named, so the anchor that
       # carries the landing hook is rendered on it and nowhere else.
       focus_key: post && post.focus,
@@ -243,6 +247,26 @@ defmodule HighWireWeb.PostLive do
     {:noreply, assign(socket, reply_body: body)}
   end
 
+  # Picking the message a reply answers: the pick is held as the branch
+  # the next reply names, and shown in the composer so who is being
+  # answered is never in doubt.
+  def handle_event("reply-to", %{"key" => key}, socket) when is_binary(key) do
+    cond do
+      socket.assigns.reply_pending ->
+        {:noreply, socket}
+
+      reply_in_thread?(socket.assigns.replies, key) ->
+        {:noreply, assign(socket, reply_key: key, mention_suggestions: [])}
+
+      true ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("reply-root", _params, socket) do
+    {:noreply, assign(socket, reply_key: nil)}
+  end
+
   def handle_event("reply", _params, socket) do
     root = socket.assigns.root
     body = String.trim(socket.assigns.reply_body)
@@ -302,11 +326,13 @@ defmodule HighWireWeb.PostLive do
   # "Replying…" with the button dead under it, so the answer is on its
   # way while the thread keeps answering.
   defp reply_now(socket, root, body) do
-    # A reply from this view answers the thread root; branch points at
-    # the same root (there is no per-reply addressing here). A private
-    # thread's reply is boxed for its participants so the answer never
-    # leaves the box the thread arrived in.
+    # A reply answers the picked reply when the composer was pointed at
+    # one, and the thread root otherwise. `branch` names that message, so
+    # every client reading the log nests the answer under the message it
+    # answers. A private thread's reply is boxed for its participants so
+    # the answer never leaves the box the thread arrived in.
     key = root["key"]
+    branch = reply_branch(socket.assigns)
     private? = private_thread?(root)
     recipients = private_recipients(socket)
     view = self()
@@ -314,15 +340,39 @@ defmodule HighWireWeb.PostLive do
     Task.start(fn ->
       result =
         if private? do
-          Timeline.reply_private(key, key, body, recipients)
+          Timeline.reply_private(key, branch, body, recipients)
         else
-          Timeline.reply(key, key, body)
+          Timeline.reply(key, branch, body)
         end
 
       send(view, {:reply_done, result})
     end)
 
     assign(socket, reply_pending: true)
+  end
+
+  defp reply_in_thread?(replies, key), do: Enum.any?(replies, &(&1["key"] == key))
+
+  defp reply_to_name(nil, _replies, _profiles), do: nil
+
+  defp reply_to_name(key, replies, profiles) do
+    case Enum.find(replies, &(&1["key"] == key)) do
+      nil -> nil
+      msg -> Ident.display_name(author_of(msg), profiles)
+    end
+  end
+
+  # The message a reply answers: the picked reply while it is still in
+  # the thread, the root otherwise.
+  defp reply_branch(assigns) do
+    key = assigns.reply_key
+    if key && reply_in_thread?(assigns.replies, key), do: key, else: assigns.root["key"]
+  end
+
+  defp live_reply_key(nil, _replies), do: nil
+
+  defp live_reply_key(key, replies) do
+    if reply_in_thread?(replies, key), do: key, else: nil
   end
 
   defp mention_candidates(socket, q) do
@@ -481,7 +531,8 @@ defmodule HighWireWeb.PostLive do
         root_liked: root_liked,
         root_likers: root_likers,
         participants: participants,
-        thread_end_key: thread_end_key
+        thread_end_key: thread_end_key,
+        reply_to_name: reply_to_name(assigns.reply_key, assigns.replies, assigns.profiles)
       )
 
     ~H"""
@@ -675,6 +726,26 @@ defmodule HighWireWeb.PostLive do
                 <%!-- A wrap: the same reason as the root's line — many
                 voters add lines, never width. --%>
                 <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <%!-- Answering this reply, rather than the thread: the
+                  next reply names this message as its branch, so it
+                  nests under it for every client reading the log. --%>
+                  <button
+                    type="button"
+                    phx-click="reply-to"
+                    phx-value-key={reply["key"]}
+                    aria-pressed={if @reply_key == reply["key"], do: "true", else: "false"}
+                    aria-label="Reply to this message"
+                    title="Reply to this message"
+                    class={[
+                      "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs leading-none transition-colors",
+                      if(@reply_key == reply["key"],
+                        do: "border-accent bg-active font-medium text-accent",
+                        else: "border-edge bg-raised text-dim hover:border-accent hover:text-accent"
+                      )
+                    ]}
+                  >
+                    Reply
+                  </button>
                   <Heart.pill
                     key={reply["key"]}
                     liked={reply["key"] in @my_likes}
@@ -702,6 +773,24 @@ defmodule HighWireWeb.PostLive do
               class="mt-6 border-t border-edge pt-4"
             >
               <label for="reply-body" class="sr-only">Reply</label>
+              <div
+                :if={@reply_to_name}
+                id="reply-target"
+                phx-hook="ReplyTarget"
+                data-target={@reply_key}
+                class="mb-2 flex flex-wrap items-center gap-2 text-xs"
+              >
+                <span class="text-dim">
+                  Replying to <span class="font-medium text-paper">{@reply_to_name}</span>
+                </span>
+                <button
+                  type="button"
+                  phx-click="reply-root"
+                  class="rounded border border-edge px-2 py-0.5 text-dim transition hover:text-paper"
+                >
+                  Reply to the thread instead
+                </button>
+              </div>
               <div class="relative">
                 <textarea
                   id="reply-body"

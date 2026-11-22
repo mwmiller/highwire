@@ -103,6 +103,37 @@ defmodule HighWireWeb.PostLiveTest do
       refute html =~ ~r/disabled=""\s*>\s*Replying…/
     end
 
+    test "a reply can answer one reply instead of the whole thread", %{conn: conn} do
+      alice = @alice
+      key = "%reply-pick=.sha256"
+      {:ok, view, _html} = live(conn, "/post/" <> Base.url_encode64(key, padding: false))
+
+      answer = msg(alice, "%reply-pick-answer=.sha256", "the first answer", 1_700_000_060_000)
+
+      seed_thread(
+        view,
+        msg(alice, key, "the post"),
+        [answer],
+        status: :ok,
+        self_id: "@me=.ed25519",
+        profiles: %{alice => %{name: "Alice Smith", image: nil}}
+      )
+
+      # Nothing is picked yet: the composer answers the thread.
+      refute render(view) =~ ~s(id="reply-target")
+
+      html = view |> element(~s(button[phx-click="reply-to"])) |> render_click()
+
+      assert html =~ ~s(id="reply-target")
+      assert html =~ "Replying to"
+      assert html =~ "Alice Smith"
+      assert html =~ ~s(aria-pressed="true")
+
+      # The way back to the thread is right there in the composer.
+      html = view |> element(~s(#reply-target button[phx-click="reply-root"])) |> render_click()
+      refute html =~ ~s(id="reply-target")
+    end
+
     test "the reply box opens the mention popup", %{conn: conn} do
       alice = @alice
       key = Base.url_encode64("%reply-mentions=.sha256", padding: false)

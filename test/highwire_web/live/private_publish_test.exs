@@ -203,4 +203,57 @@ defmodule HighWireWeb.PrivatePublishTest do
       end)
     end
   end
+
+  describe "thread structure" do
+    test "a reply names the message it answers as its branch", %{conn: conn} do
+      kp = keypair()
+      self_id = feed_id(kp)
+      key = "%thread-root=.sha256"
+      target_key = "%thread-answer=.sha256"
+      author = "@vkdMlsuBgzzo5eLS3LZLdqnBpZ26OauJOMIq9gQ2E7E=.ed25519"
+
+      root = %{
+        "key" => key,
+        "value" => %{
+          "author" => author,
+          "timestamp" => 1_700_000_000_000,
+          "content" => %{"type" => "post", "text" => "the thing"}
+        }
+      }
+
+      target = %{
+        "key" => target_key,
+        "value" => %{
+          "author" => author,
+          "timestamp" => 1_700_000_060_000,
+          "content" => %{"type" => "post", "text" => "first answer"}
+        }
+      }
+
+      {:ok, view, _html} = live(conn, "/post/" <> Base.url_encode64(key, padding: false))
+
+      view
+      |> seed(%{
+        status: :ok,
+        self_id: self_id,
+        not_found: false,
+        root: root,
+        replies: [target]
+      })
+
+      with_publish_capture(fn ->
+        render_click(view, "reply-to", %{"key" => target_key})
+        render_change(view, "reply-draft", %{"body" => "a nested answer"})
+        render_submit(view, "reply", %{})
+
+        assert_receive {:published, content}
+        # The root names the thread; the branch names the reply this one
+        # answers, so every client nests it under that message.
+        assert content["root"] == key
+        assert content["branch"] == target_key
+        refute Map.has_key?(content, "fork")
+        refute PrivateBox.private?(content)
+      end)
+    end
+  end
 end
