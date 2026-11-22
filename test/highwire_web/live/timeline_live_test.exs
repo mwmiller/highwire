@@ -291,11 +291,15 @@ defmodule HighWireWeb.TimelineLiveTest do
     html = view |> form("#compose", %{"body" => "hello world"}) |> render_submit()
 
     assert html =~ ~r/disabled=""\s*>\s*Publishing…/
+    assert html =~ ~s(id="compose-status")
+    assert html =~ "Your post stays in the box until it goes through."
+    # The box is held, not emptied: the words stay on screen for the wait.
+    assert html =~ ~s(readonly="")
 
     # The engine is off under test, so the publish refuses: the box
     # keeps what was written, the reason is said, and the button is
     # back in reach for a retry.
-    html = render(view)
+    html = wait_for_publish_answer(view)
     assert html =~ "Not connected yet. Try again in a moment."
     assert html =~ "hello world"
     refute html =~ ~r/disabled=""\s*>\s*Publishing…/
@@ -1903,6 +1907,20 @@ defmodule HighWireWeb.TimelineLiveTest do
 
   defp ssb_msg(key, author, ts, content) do
     %{"key" => key, "value" => %{"author" => author, "timestamp" => ts, "content" => content}}
+  end
+
+  # A publish runs in its own task so the view keeps rendering while the
+  # engine takes it. Wait the composer out of its publishing state rather
+  # than sleeping a fixed span.
+  defp wait_for_publish_answer(view, tries \\ 100) do
+    html = render(view)
+
+    if tries > 0 and html =~ ~s(id="compose-status") do
+      Process.sleep(10)
+      wait_for_publish_answer(view, tries - 1)
+    else
+      html
+    end
   end
 
   # A store query runs in its own task, so the answer lands a tick after

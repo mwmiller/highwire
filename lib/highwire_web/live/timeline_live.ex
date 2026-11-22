@@ -289,15 +289,12 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
-  # The publish itself, behind the held button: the press has already
-  # been shown the box in flight, and this reply is the one that says
-  # whether the post went out. The box and the recipients were settled
-  # at press time, so a tab switch under a publish cannot change who
-  # it goes to.
-  def handle_info({:publish_post, body, recipients, private?}, socket) do
-    result =
-      if private?, do: Timeline.publish_private(body, recipients), else: Timeline.publish(body)
-
+  # The publish runs beside the view, so the feed keeps rendering while
+  # the engine takes the post. The press has already been shown the box
+  # in flight, and this answer is the one that says whether the post
+  # went out. The box and the recipients were settled at press time, so
+  # a tab switch under a publish cannot change who it goes to.
+  def handle_info({:publish_done, private?, result}, socket) do
     socket =
       case result do
         {:ok, _key} ->
@@ -591,10 +588,18 @@ defmodule HighWireWeb.TimelineLive do
     if private? and recipients == [socket.assigns.self_id] do
       assign(socket, compose_error: "Choose at least one recipient.")
     else
-      send(self(), {:publish_post, body, recipients, private?})
+      view = self()
+
+      Task.start(fn ->
+        send(view, {:publish_done, private?, publish_for(body, recipients, private?)})
+      end)
+
       assign(socket, compose_pending: true)
     end
   end
+
+  defp publish_for(body, recipients, true), do: Timeline.publish_private(body, recipients)
+  defp publish_for(body, _recipients, false), do: Timeline.publish(body)
 
   # A private thread is boxed for the chosen follows plus self, so the
   # author can read back what they wrote. No choice means nothing to send
@@ -1326,6 +1331,7 @@ defmodule HighWireWeb.TimelineLive do
               data-attach-zone
               phx-submit="publish"
               phx-change="compose-draft"
+              aria-busy={@compose_pending}
               class="border-b border-edge px-4 py-3"
             >
               <div class="flex gap-3">
@@ -1344,6 +1350,7 @@ defmodule HighWireWeb.TimelineLive do
                       name="body"
                       phx-hook="Mentions"
                       phx-debounce="300"
+                      readonly={@compose_pending}
                       placeholder="Write a post…"
                       rows="3"
                       class="w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
@@ -1404,6 +1411,18 @@ defmodule HighWireWeb.TimelineLive do
                   </div>
                   <p :if={@compose_error} role="alert" class="mt-1 text-xs text-bad">
                     {@compose_error}
+                  </p>
+                  <%!-- A publish can take a while, and a still button alone
+                  reads as a stall. This says the words are kept while the
+                  answer is out, so the wait is never mistaken for a loss. --%>
+                  <p
+                    :if={@compose_pending}
+                    id="compose-status"
+                    role="status"
+                    class="mt-1 flex items-center gap-1.5 text-xs text-info"
+                  >
+                    <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current"></span>
+                    Publishing to the network. Your post stays in the box until it goes through.
                   </p>
                   <p
                     id="compose-attach-status"

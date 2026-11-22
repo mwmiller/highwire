@@ -53,6 +53,20 @@ defmodule HighWireWeb.PostLiveTest do
     end
   end
 
+  # A reply runs in its own task so the thread keeps rendering while the
+  # engine takes it. Wait the box out of its sending state rather than
+  # sleeping a fixed span.
+  defp wait_for_reply_answer(view, tries \\ 100) do
+    html = render(view)
+
+    if tries > 0 and html =~ ~s(id="reply-status") do
+      Process.sleep(10)
+      wait_for_reply_answer(view, tries - 1)
+    else
+      html
+    end
+  end
+
   describe "replying" do
     test "a reply is held down while the engine takes it", %{conn: conn} do
       key = Base.url_encode64("%reply-held=.sha256", padding: false)
@@ -75,11 +89,15 @@ defmodule HighWireWeb.PostLiveTest do
       # rather than a second reply.
       html = view |> form("#reply-form", %{}) |> render_submit()
       assert html =~ ~r/disabled=""\s*>\s*Replying…/
+      assert html =~ ~s(id="reply-status")
+      assert html =~ "It stays in the box until it goes through."
+      # The box is held, not emptied: the words stay on screen for the wait.
+      assert html =~ ~s(readonly="")
 
       # The engine is off under test, so the publish refuses: the box
       # keeps what was written, the reason is said, and the button is
       # back in reach for a retry.
-      html = render(view)
+      html = wait_for_reply_answer(view)
       assert html =~ "Still connecting. Try again in a moment."
       assert html =~ "the answer"
       refute html =~ ~r/disabled=""\s*>\s*Replying…/

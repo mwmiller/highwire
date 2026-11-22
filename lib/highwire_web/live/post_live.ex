@@ -88,21 +88,10 @@ defmodule HighWireWeb.PostLive do
     {:noreply, if(socket.assigns.raw_key, do: load(socket, socket.assigns.raw_key), else: socket)}
   end
 
-  # The reply itself, behind the held button: the press has already
-  # been shown the box in flight, and this reply is the one that says
-  # whether the answer went out.
-  def handle_info({:publish_reply, root, body}, socket) do
-    # A reply from this view answers the thread root; branch points
-    # at the same root (there is no per-reply addressing here).
-    # A private thread's reply is boxed for its participants so the
-    # answer never leaves the box the thread arrived in.
-    result =
-      if private_thread?(root) do
-        Timeline.reply_private(root["key"], root["key"], body, private_recipients(socket))
-      else
-        Timeline.reply(root["key"], root["key"], body)
-      end
-
+  # The reply runs beside the view, so the thread keeps rendering while
+  # the engine takes it. The press has already been shown the box in
+  # flight, and this answer is the one that says whether it went out.
+  def handle_info({:reply_done, result}, socket) do
     socket =
       case result do
         {:ok, _key} ->
@@ -313,7 +302,26 @@ defmodule HighWireWeb.PostLive do
   # "Replying…" with the button dead under it, so the answer is on its
   # way while the thread keeps answering.
   defp reply_now(socket, root, body) do
-    send(self(), {:publish_reply, root, body})
+    # A reply from this view answers the thread root; branch points at
+    # the same root (there is no per-reply addressing here). A private
+    # thread's reply is boxed for its participants so the answer never
+    # leaves the box the thread arrived in.
+    key = root["key"]
+    private? = private_thread?(root)
+    recipients = private_recipients(socket)
+    view = self()
+
+    Task.start(fn ->
+      result =
+        if private? do
+          Timeline.reply_private(key, key, body, recipients)
+        else
+          Timeline.reply(key, key, body)
+        end
+
+      send(view, {:reply_done, result})
+    end)
+
     assign(socket, reply_pending: true)
   end
 
@@ -688,6 +696,7 @@ defmodule HighWireWeb.PostLive do
             <form
               id="reply-form"
               phx-submit="reply"
+              aria-busy={@reply_pending}
               phx-hook="Attach"
               data-attach-zone
               class="mt-6 border-t border-edge pt-4"
@@ -701,6 +710,7 @@ defmodule HighWireWeb.PostLive do
                   data-draft-event="reply-draft"
                   phx-change="reply-draft"
                   phx-debounce="300"
+                  readonly={@reply_pending}
                   placeholder="Write a reply…"
                   rows="3"
                   class="w-full resize-none rounded border border-edge bg-input px-3 py-2 text-sm text-paper placeholder:text-dim focus:border-focus focus:outline-none"
@@ -734,6 +744,17 @@ defmodule HighWireWeb.PostLive do
               </div>
               <p :if={@reply_error} role="alert" class="mt-1 text-xs text-bad">
                 {@reply_error}
+              </p>
+              <%!-- A slow answer keeps its words in the box and says so,
+              so the wait never reads as a lost reply. --%>
+              <p
+                :if={@reply_pending}
+                id="reply-status"
+                role="status"
+                class="mt-1 flex items-center gap-1.5 text-xs text-info"
+              >
+                <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current"></span>
+                Sending your reply. It stays in the box until it goes through.
               </p>
               <p
                 id="reply-attach-status"
