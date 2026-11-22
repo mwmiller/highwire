@@ -598,7 +598,7 @@ defmodule HighWireWeb.BlobsLive do
   defp band_title(:large), do: "1 MB and up"
 
   defp age_label(:any), do: "Any"
-  defp age_label(:day), do: "24h"
+  defp age_label(:day), do: "Day"
   defp age_label(:week), do: "Week"
   defp age_label(:month), do: "Month"
   defp age_label(:year), do: "Year"
