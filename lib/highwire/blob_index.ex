@@ -157,7 +157,7 @@ defmodule HighWire.BlobIndex do
 
     # The parent map is the one expensive read (the whole search index),
     # so it is only rebuilt when the store gained something to place — or
-    # when the rows it holds predate what a row now says about its post.
+    # when the one in hand cannot be trusted.
     if new_rows != [] or known == [] or parents_stale?(), do: put_parents(parent_map())
     put_status(:ready)
     rows
@@ -254,13 +254,17 @@ defmodule HighWire.BlobIndex do
     |> String.slice(0, 160)
   end
 
-  # A map of bare post keys is what a sweep wrote before rows carried
-  # their post's author and words; the store has not changed, so the map
-  # is simply read again.
+  # Nothing durable holds the parent map, and the map a sweep reads does
+  # not depend on the store changing: a restart starts from none, a crawl
+  # that was still paging when the map was built left out every post it
+  # had not reached, and a bare post key is what a sweep wrote before
+  # rows carried their post's author and words. Each of those is read
+  # again on the next sweep.
   defp parents_stale? do
-    parents()
-    |> Map.values()
-    |> Enum.any?(&(not is_map(&1)))
+    parents = parents()
+
+    SearchIndex.status() != :live or map_size(parents) == 0 or
+      Enum.any?(parents, fn {_ref, post} -> not is_map(post) end)
   end
 
   # -- storage -----------------------------------------------------------
