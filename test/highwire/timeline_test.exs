@@ -2604,6 +2604,37 @@ defmodule HighWire.TimelineTest do
       assert post.focus == nil
     end
 
+    test "a nested reply stays on the page when its parent came from the thread" do
+      # The feed promised this reply, but the reader's window never
+      # carried the message it answers — only the engine's thread did.
+      # It must not vanish from the page the row opens.
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      parent =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      nested =
+        msg("@c=.ed25519", "%n=.sha256", 3_000, %{
+          "type" => "post",
+          "text" => "nested",
+          "root" => "%a=.sha256",
+          "branch" => ["%a=.sha256"]
+        })
+
+      {:ok, client} = ThreadClient.start([parent])
+      st = %{client: client, messages: %{messages: [nested, root]}}
+
+      {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
+
+      assert post.root["key"] == "%r=.sha256"
+      assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%n=.sha256"]
+    end
+
     test "an edit names the post it revises, never itself" do
       # An edit keys its own feed row, so the path can arrive naming a
       # message the thread does not hold — and the message on the page

@@ -1056,6 +1056,9 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ ~s(role="link")
     assert html =~ ~s(tabindex="0")
     assert html =~ ~s(aria-label="Open post by Alice")
+
+    render_hook(view, "open-post", %{"key" => msg["key"]})
+    assert_redirect(view, "/post/" <> Base.url_encode64(msg["key"], padding: false))
   end
 
   test "rows are named after their message, not their position", %{conn: conn} do

@@ -1802,7 +1802,7 @@ defmodule HighWire.Timeline do
 
       named ->
         root = resolve_root(state, window, key, named)
-        replies = post_replies(state, window, root["key"])
+        replies = post_replies(state, window, root["key"], [named, root])
 
         %{root: root, replies: replies, focus: thread_focus(root, replies, named)}
     end
@@ -1885,15 +1885,21 @@ defmodule HighWire.Timeline do
     get_msg(state.client, key) || Enum.find(window, &(&1["key"] == key))
   end
 
-  defp post_replies(state, window, root_key) do
+  # `known` is what opening this page already fetched — the message the
+  # path named and the root — and rides with the window when a reply's
+  # chain is walked. A nested reply whose parent the window never carried
+  # but this page does hold is still part of the thread, and the feed row
+  # that promised it must not open on a page without it.
+  defp post_replies(state, window, root_key, known) do
     replies =
       case fetch_thread(state.client, root_key) do
         list when is_list(list) and list != [] -> list
         _ -> window_replies(window, root_key)
       end
 
-    seated = attach_forks(replies, window, root_key)
-    by_key = Map.new(window ++ seated, &{&1["key"], &1})
+    chain = Enum.uniq_by(replies ++ known ++ window, & &1["key"])
+    seated = attach_forks(replies, chain, root_key)
+    by_key = Map.new(chain ++ seated, &{&1["key"], &1})
 
     Enum.map(seated, &Map.put(&1, :thread_depth, hops_to_root(&1, by_key, root_key, 0)))
   end

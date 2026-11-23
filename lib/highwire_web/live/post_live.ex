@@ -87,7 +87,7 @@ defmodule HighWireWeb.PostLive do
 
     # Re-read the thread so a reply or like we just published appears
     # without a navigation — fetch_post scans the in-memory window.
-    {:noreply, if(socket.assigns.raw_key, do: load(socket, socket.assigns.raw_key), else: socket)}
+    {:noreply, reload(socket)}
   end
 
   # The reply runs beside the view, so the thread keeps rendering while
@@ -124,7 +124,7 @@ defmodule HighWireWeb.PostLive do
     case result do
       {:error, reason} ->
         Logger.warning("post: like publish failed: #{inspect(reason)}")
-        socket = if socket.assigns.raw_key, do: load(socket, socket.assigns.raw_key), else: socket
+        socket = reload(socket)
         {:noreply, assign(socket, :like_error, like_error(reason))}
 
       _ok ->
@@ -133,6 +133,10 @@ defmodule HighWireWeb.PostLive do
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
+
+  defp reload(%{assigns: %{raw_key: nil}} = socket), do: socket
+
+  defp reload(socket), do: load(socket, socket.assigns.raw_key)
 
   defp load(socket, raw_key) do
     {status, payload} = Timeline.snapshot()

@@ -1726,7 +1726,7 @@ defmodule HighWireWeb.TimelineLive do
         MapSet.member?(@arrived, row_uid(@row)) && "gossip-arrived"
       ]}
       phx-hook="OpenPost"
-      data-key={@row.msg["key"]}
+      data-key={open_key(@row)}
       role="link"
       tabindex="0"
       aria-label={open_post_label(Ident.display_name(@author, @ctx))}
@@ -2402,6 +2402,17 @@ defmodule HighWireWeb.TimelineLive do
     shown = editors |> Enum.take(2) |> Enum.map_join(", ", &Ident.display_name(&1, ctx))
     if length(editors) > 2, do: "#{shown} +#{length(editors) - 2}", else: shown
   end
+
+  # The message a row's title click opens: the one the row shows. A
+  # thread row whose head is a revision opens the post it revised
+  # instead — a revision has no thread of its own, and the post is the
+  # message its replies and likes hang from.
+  defp open_key(%{kind: :thread, root_key: key, msg: msg}) when is_binary(key) do
+    if content(msg)["type"] == "post-edit", do: key, else: msg["key"]
+  end
+
+  defp open_key(%{msg: msg}), do: msg["key"]
+  defp open_key(_row), do: nil
 
   # The message a row's heart votes on: the thread root for threads
   # (counts aggregate the whole thread), the message itself otherwise.
