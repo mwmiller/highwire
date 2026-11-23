@@ -47,6 +47,27 @@ defmodule HighWire do
     Path.join(ssb_home(), ".ssberl")
   end
 
+  @doc """
+  Whether HighWire runs the engine for its repo.
+
+  True when the repo sits in the app home, and for
+  `HIGHWIRE_ENGINE=spawn`; false when `HIGHWIRE_ENGINE=attach`, and for
+  any SSB home named from outside, which belongs to whichever engine
+  already runs there. One repo, one writer: attaching only dials it.
+  """
+  def spawn_engine? do
+    case Application.get_env(:highwire, :engine) do
+      :spawn ->
+        true
+
+      :attach ->
+        false
+
+      _ ->
+        ssb_home() == home_dir()
+    end
+  end
+
   def images_dir do
     Path.join(home_dir(), "images")
   end

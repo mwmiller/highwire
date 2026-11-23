@@ -9,12 +9,11 @@ defmodule HighWire.SSBRootTest do
   alias HighWire.{Blob, SSB}
 
   setup do
-    previous_home = Application.get_env(:highwire, :ssb_home)
-    previous_store = Application.get_env(:highwire, :blob_store)
+    previous =
+      for key <- [:ssb_home, :blob_store, :engine], do: {key, Application.get_env(:highwire, key)}
 
     on_exit(fn ->
-      restore(:ssb_home, previous_home)
-      restore(:blob_store, previous_store)
+      for {key, value} <- previous, do: restore(key, value)
     end)
 
     :ok
@@ -41,6 +40,30 @@ defmodule HighWire.SSBRootTest do
     Application.delete_env(:highwire, :ssb_home)
 
     assert HighWire.ssb_dir() == Path.join(HighWire.home_dir(), ".ssberl")
+  end
+
+  describe "spawn_engine?/0" do
+    test "the app home is HighWire's engine to run" do
+      Application.delete_env(:highwire, :engine)
+
+      assert HighWire.spawn_engine?()
+    end
+
+    test "a home named from outside is left to its own engine" do
+      Application.delete_env(:highwire, :engine)
+      Application.put_env(:highwire, :ssb_home, Path.join(System.tmp_dir!(), "hw-elsewhere"))
+
+      refute HighWire.spawn_engine?()
+    end
+
+    test "spawn opts in on any home, attach opts out on the app home" do
+      Application.put_env(:highwire, :ssb_home, Path.join(System.tmp_dir!(), "hw-elsewhere"))
+      Application.put_env(:highwire, :engine, :spawn)
+      assert HighWire.spawn_engine?()
+
+      Application.put_env(:highwire, :engine, :attach)
+      refute HighWire.spawn_engine?()
+    end
   end
 
   defp restore(key, nil), do: Application.delete_env(:highwire, key)

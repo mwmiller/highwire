@@ -118,9 +118,13 @@ The engine's repo lives at `<HIGHWIRE_HOME>/.ssberl` — secret,
 home that already exists, set `HIGHWIRE_SSB_HOME` to it: everything
 under its `.ssberl` is read and written there, while HighWire's own
 files (the identity registry, its indexes, the image cache, logs) stay
-in `HIGHWIRE_HOME`. Against an engine that is already up, point
-`ERLBUTT_REL` at a path that does not exist so the sidecar spawns
-nothing.
+in `HIGHWIRE_HOME`.
+
+HighWire runs the engine only for its own app home. A home named from
+outside belongs to the engine already writing it, so HighWire attaches
+to that engine and starts nothing — one repo, one writer.
+`HIGHWIRE_ENGINE=spawn` starts an engine on such a home anyway, and
+`HIGHWIRE_ENGINE=attach` attaches even on the app home.
 
 `HIGHWIRE_BLOB_STORE` overrides just the blob store, for a setup that
 keeps blobs outside the engine home.

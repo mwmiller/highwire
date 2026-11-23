@@ -412,37 +412,51 @@ defmodule HighWire.SSB.Sidecar do
       import: nil,
       import_port: nil,
       import_pid: nil,
-      import_buf: ""
+      import_buf: "",
+      spawn: HighWire.spawn_engine?()
     }
 
-    if enabled?() do
-      # Seed overrides.cfg from the startup default before the probe or
-      # the spawn reads it, so a fresh install boots engine and clients
-      # on the same network.
-      _ = Network.ensure_default()
+    if enabled?(), do: boot(state), else: {:ok, state}
+  end
 
-      # Catch the identity registry up to whatever is running (a
-      # predating install's secret, an engine-minted one) before any
-      # page's rail asks it who is active.
-      _ = Identities.ensure_boot()
+  # The app's own repo: HighWire owns the engine, seeds the network file
+  # and the identity registry, and offers a first-run import.
+  defp boot(%{spawn: true} = state) do
+    # Seed overrides.cfg from the startup default before the probe or
+    # the spawn reads it, so a fresh install boots engine and clients
+    # on the same network.
+    _ = Network.ensure_default()
 
-      case Import.detect() do
-        {:ok, info} ->
-          # Nothing spawns until the offer is answered: the engine must
-          # not mint an identity (or open the store) that the import is
-          # about to replace. Any leftover engine from a previous run
-          # goes now — it would hold the very store prepare/0 wipes.
-          _ = stop_pidfile_engine()
-          Logger.info("sidecar: JS store found for #{info.id} — waiting on /import")
-          {:ok, %{state | status: :import_pending, import: info}}
+    # Catch the identity registry up to whatever is running (a
+    # predating install's secret, an engine-minted one) before any
+    # page's rail asks it who is active.
+    _ = Identities.ensure_boot()
 
-        :none ->
-          send(self(), :spawn_node)
-          {:ok, %{state | status: :starting}}
-      end
-    else
-      {:ok, state}
+    case Import.detect() do
+      {:ok, info} ->
+        # Nothing spawns until the offer is answered: the engine must
+        # not mint an identity (or open the store) that the import is
+        # about to replace. Any leftover engine from a previous run
+        # goes now — it would hold the very store prepare/0 wipes.
+        _ = stop_pidfile_engine()
+        Logger.info("sidecar: JS store found for #{info.id} — waiting on /import")
+        {:ok, %{state | status: :import_pending, import: info}}
+
+      :none ->
+        send(self(), :spawn_node)
+        {:ok, %{state | status: :starting}}
     end
+  end
+
+  # An SSB home named from outside belongs to the engine already writing
+  # it. Nothing here seeds into it or starts a second writer: the engine
+  # is dialed where it runs, and a home with no engine answering simply
+  # waits for one.
+  defp boot(%{spawn: false} = state) do
+    _ = Identities.ensure_boot()
+    Logger.info("sidecar: engine home #{HighWire.ssb_home()} is not ours — attaching only")
+    send(self(), :spawn_node)
+    {:ok, %{state | status: :starting}}
   end
 
   @impl true
@@ -524,7 +538,7 @@ defmodule HighWire.SSB.Sidecar do
       # Client.start_link links to us; a refused connect crashes the
       # client during init and would take this probe down with it.
       Process.flag(:trap_exit, true)
-      send(parent, {:probe_result, probe()})
+      send(parent, {:probe_result, probe(state.spawn)})
     end)
 
     {:noreply, %{state | status: :starting}}
@@ -569,6 +583,12 @@ defmodule HighWire.SSB.Sidecar do
 
   def handle_info({:probe_result, {:spawn, _mode}}, %{status: :ready} = state) do
     {:noreply, state}
+  end
+
+  # Attach-only and nothing at the address yet: the other writer is not
+  # up. Keep dialing on the retry schedule; start nothing.
+  def handle_info({:probe_result, :absent}, state) do
+    {:noreply, retry(state, :debug)}
   end
 
   def handle_info({:probe_result, {:spawn, mode}}, state) do
@@ -728,22 +748,30 @@ defmodule HighWire.SSB.Sidecar do
   # os pid when the live pidfile names this very port (it is ours and a
   # shutdown must stop it), nil for a foreign engine. {:spawn, :free |
   # :busy} — the configured port's disposition for a fresh spawn.
-  defp probe do
+  # :absent — nothing answers and nothing is ours to start.
+  defp probe(allow_spawn) do
     cfg = config_port()
     leftover = read_pidfile()
-
-    leftover_port =
-      if leftover && os_alive?(leftover["os_pid"]), do: [leftover["port"]], else: []
-
-    candidates = Enum.uniq([cfg | leftover_port])
+    candidates = Enum.uniq([cfg | leftover_ports(allow_spawn, leftover)])
 
     case Enum.find(candidates, &muxrpc_ok?/1) do
-      nil ->
-        if tcp_open?(cfg), do: {:spawn, :busy}, else: {:spawn, :free}
-
-      port ->
-        {:attach, port, owner_pid(port, leftover)}
+      nil -> unclaimed(allow_spawn, cfg)
+      port -> {:attach, port, if(allow_spawn, do: owner_pid(port, leftover))}
     end
+  end
+
+  # A pidfile engine is only looked for when this sidecar may hold one:
+  # with the engine off its hands, that port is not ours to dial home.
+  defp leftover_ports(true, %{"os_pid" => pid, "port" => port}) when is_integer(port) do
+    if os_alive?(pid), do: [port], else: []
+  end
+
+  defp leftover_ports(_allow_spawn, _leftover), do: []
+
+  defp unclaimed(false, _cfg), do: :absent
+
+  defp unclaimed(true, cfg) when is_integer(cfg) do
+    if tcp_open?(cfg), do: {:spawn, :busy}, else: {:spawn, :free}
   end
 
   @doc false
@@ -835,11 +863,16 @@ defmodule HighWire.SSB.Sidecar do
     end)
   end
 
-  defp retry(state) do
+  defp retry(state, level \\ :info) do
     attempts = state.attempts + 1
     delay = min(7_000 * attempts, 61_000)
     Process.send_after(self(), :spawn_node, delay)
-    Logger.info("sidecar: retrying spawn/attach in #{div(delay, 1_000)}s (attempt #{attempts})")
+
+    Logger.log(
+      level,
+      "sidecar: retrying spawn/attach in #{div(delay, 1_000)}s (attempt #{attempts})"
+    )
+
     %{state | status: :starting, attempts: attempts}
   end
 

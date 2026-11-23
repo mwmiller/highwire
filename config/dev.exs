@@ -9,7 +9,9 @@ import Config
 config :highwire, HighWireWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}, port: 24042],
+  # PORT moves the dev server off 24042, which an installed HighWire
+  # holds while a second dev server runs beside it.
+  http: [ip: {127, 0, 0, 1}, port: String.to_integer(System.get_env("PORT", "24042"))],
   http_options: [idle_timeout: 98947],
   check_origin: false,
   code_reloader: true,

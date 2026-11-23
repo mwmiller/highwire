@@ -19,6 +19,17 @@ if config_env() != :test do
   if blob_store = System.get_env("HIGHWIRE_BLOB_STORE") do
     config :highwire, blob_store: blob_store
   end
+
+  # Who runs the engine for that repo. HighWire spawns and stops it on
+  # its own app home; a home named from outside belongs to whatever
+  # engine already writes it, so there HighWire only attaches. `spawn`
+  # opts into starting one anyway; `attach` never starts one.
+  case System.get_env("HIGHWIRE_ENGINE") do
+    "spawn" -> config :highwire, engine: :spawn
+    "attach" -> config :highwire, engine: :attach
+    nil -> :ok
+    other -> raise "HIGHWIRE_ENGINE must be spawn or attach, got #{inspect(other)}"
+  end
 end
 
 # The packaged app: the release workflow builds erlbutt's prod profile
