@@ -313,7 +313,7 @@ defmodule HighWire.SearchIndex do
   end
 
   defp start_client do
-    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
+    secret = Path.join(HighWire.ssb_dir(), "secret")
 
     if File.exists?(secret) do
       keys = Keys.load!(secret)

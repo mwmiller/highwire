@@ -3094,7 +3094,7 @@ defmodule HighWire.Timeline do
   end
 
   defp connect(state) do
-    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
+    secret = Path.join(HighWire.ssb_dir(), "secret")
 
     # The sidecar knows its port before the engine it spawned can answer:
     # dialling that window is a refused socket, logged as a failed connect
@@ -3333,7 +3333,7 @@ defmodule HighWire.Timeline do
   defp connected?(pid), do: is_pid(pid) and Process.alive?(pid)
 
   defp dial_game(state, field) do
-    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
+    secret = Path.join(HighWire.ssb_dir(), "secret")
 
     if File.exists?(secret) do
       case start_client(secret) do
@@ -3411,7 +3411,7 @@ defmodule HighWire.Timeline do
   end
 
   defp dial_pages(state) do
-    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
+    secret = Path.join(HighWire.ssb_dir(), "secret")
 
     if File.exists?(secret) do
       case start_client(secret) do
@@ -3444,7 +3444,7 @@ defmodule HighWire.Timeline do
   end
 
   defp dial_drain(state) do
-    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
+    secret = Path.join(HighWire.ssb_dir(), "secret")
 
     if File.exists?(secret) do
       case start_client(secret) do

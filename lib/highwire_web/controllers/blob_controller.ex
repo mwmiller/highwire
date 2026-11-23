@@ -7,7 +7,7 @@ defmodule HighWireWeb.BlobController do
     1. `~/.highwire/images/<hex>` — HighWire's own cache (generated
        placeholders, plus copies made while the old store was still a
        source)
-    2. `<home>/.ssberl/blobs/<HH>/<rest>` — the engine's own blob
+    2. `<ssb home>/.ssberl/blobs/<HH>/<rest>` — the engine's own blob
        store: everything HighWire serves was imported or replicated
        into it, and the old JS-client store (`~/.ssb`) is never opened
     3. a neutral "missing blob" placeholder (dashed frame over a

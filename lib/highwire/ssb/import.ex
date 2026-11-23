@@ -291,7 +291,7 @@ defmodule HighWire.SSB.Import do
   def local_secret, do: Path.join([repo(), "secret"])
 
   @spec repo() :: Path.t()
-  def repo, do: Path.join(HighWire.home_dir(), ".ssberl")
+  def repo, do: HighWire.ssb_dir()
 
   # -- detect -------------------------------------------------------------
 

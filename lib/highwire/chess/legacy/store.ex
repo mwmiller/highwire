@@ -77,7 +77,7 @@ defmodule HighWire.Chess.Legacy.Store do
   def init(opts) do
     path =
       Keyword.get_lazy(opts, :path, fn ->
-        Path.join(HighWire.home_dir(), ".ssberl/chess_legacy.dets")
+        Path.join(HighWire.ssb_dir(), "chess_legacy.dets")
       end)
 
     case :dets.open_file(@table, file: String.to_charlist(path), type: :set) do

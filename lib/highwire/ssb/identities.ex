@@ -2,7 +2,7 @@ defmodule HighWire.SSB.Identities do
   @moduledoc """
   The local identity registry: every feed this install can sign as,
   kept in `<home>/identities.json` (mode 0600), with the active one
-  mirrored into `<home>/.ssberl/secret` — the file the engine and
+  mirrored into the engine's `.ssberl/secret` — the file the engine and
   every muxrpc client authenticate with. Switching identities rewrites
   that mirror; the store (`store.db`, feeds, blobs) never moves.
 
@@ -31,10 +31,9 @@ defmodule HighWire.SSB.Identities do
   alias HighWire.SSB.Keys
 
   @registry "identities.json"
-  @secret ".ssberl/secret"
 
   defp registry_path, do: Path.join(HighWire.home_dir(), @registry)
-  defp secret_path, do: Path.join(HighWire.home_dir(), @secret)
+  defp secret_path, do: Path.join(HighWire.ssb_dir(), "secret")
 
   # Every mutation is a load → change → persist read-modify-write, and two
   # of them racing would each write back a file that never saw the other's

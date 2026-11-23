@@ -758,7 +758,7 @@ defmodule HighWire.SSB.Sidecar do
   end
 
   defp muxrpc_ok?(port) do
-    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
+    secret = Path.join(HighWire.ssb_dir(), "secret")
 
     with true <- File.exists?(secret),
          {:ok, client} <-
@@ -892,12 +892,14 @@ defmodule HighWire.SSB.Sidecar do
   defp do_spawn(state) do
     rel = Keyword.get(config(), :erlbutt_rel, "")
     home = HighWire.home_dir()
+    ssb_home = HighWire.ssb_home()
 
     with true <- File.dir?(rel),
          erl when not is_nil(erl) <- engine_erl(rel) do
       File.mkdir_p!(home)
+      File.mkdir_p!(ssb_home)
       config_path = Path.join(home, "erlbutt")
-      File.write!(config_path <> ".config", sys_config(home, state.listen_port))
+      File.write!(config_path <> ".config", sys_config(ssb_home, state.listen_port))
 
       ebin =
         Path.wildcard(Path.join(rel, "lib/*/ebin"))
@@ -1121,8 +1123,12 @@ defmodule HighWire.SSB.Sidecar do
     end)
   end
 
+  # The log stays in the app home either way, so an engine repo kept
+  # elsewhere does not scatter its log there too.
   @doc false
-  def sys_config(home, port) do
+  def sys_config(ssb_home, port) do
+    home = HighWire.home_dir()
+
     """
     [{kernel,
       [{logger,
@@ -1134,7 +1140,7 @@ defmodule HighWire.SSB.Sidecar do
                         max_no_files => 3,
                         compress_on_rotate => true}}}]}]},
      {ssb, [{ssb_log_level, info},
-            {ssb_home, "#{home}"},
+            {ssb_home, "#{ssb_home}"},
             {port, #{port}}]}].
     """
   end
@@ -1198,7 +1204,8 @@ defmodule HighWire.SSB.Sidecar do
   defp open_import_port(state, rel, home, flume) do
     config_path = Path.join(home, "erlbutt-import")
     File.mkdir_p!(home)
-    File.write!(config_path <> ".config", import_sys_config(home))
+    File.mkdir_p!(HighWire.ssb_home())
+    File.write!(config_path <> ".config", import_sys_config(HighWire.ssb_home()))
 
     ebin =
       Path.wildcard(Path.join(rel, "lib/*/ebin"))
@@ -1359,7 +1366,9 @@ defmodule HighWire.SSB.Sidecar do
   # hands to the converter — a path never has to be quoted into the
   # eval itself.
   @doc false
-  def import_sys_config(home) do
+  def import_sys_config(ssb_home) do
+    home = HighWire.home_dir()
+
     """
     [{kernel,
       [{logger,
@@ -1371,7 +1380,7 @@ defmodule HighWire.SSB.Sidecar do
                         max_no_files => 3,
                         compress_on_rotate => true}}}]}]},
      {ssb, [{ssb_log_level, info},
-            {ssb_home, "#{home}"},
+            {ssb_home, "#{ssb_home}"},
             {import_blob_src, #{blob_src_term()}},
             {port, 0}]}].
     """

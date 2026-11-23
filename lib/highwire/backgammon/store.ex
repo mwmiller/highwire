@@ -283,7 +283,7 @@ defmodule HighWire.Backgammon.Store do
     ArgumentError -> {:error, :disabled}
   end
 
-  defp dets_path, do: Path.join([HighWire.home_dir(), ".ssberl", "backgammon.dets"])
+  defp dets_path, do: Path.join(HighWire.ssb_dir(), "backgammon.dets")
 
   @doc false
   # Kept for the router's constraints and for tests that need a valid id.

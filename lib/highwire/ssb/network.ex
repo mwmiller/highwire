@@ -142,7 +142,7 @@ defmodule HighWire.SSB.Network do
   defp seed(_unknown), do: :ok
 
   @spec path() :: String.t()
-  def path, do: Path.join([HighWire.home_dir(), ".ssberl", "overrides.cfg"])
+  def path, do: Path.join(HighWire.ssb_dir(), "overrides.cfg")
 
   defp other(:dev), do: :mainnet
   defp other(:mainnet), do: :dev

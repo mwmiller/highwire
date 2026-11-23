@@ -113,10 +113,17 @@ engine.update` alias) pulls and rebuilds the engine when upstream
 moves. Point `ERLBUTT_REL` at another release to run against a
 working engine checkout instead.
 
-Blobs are served from the engine's store under `HIGHWIRE_HOME`
-(`.ssberl/blobs`). An engine that keeps its blobs in another SSB home
-needs `HIGHWIRE_BLOB_STORE` pointing at that store, or `/blob/<hex>`
-falls back to the placeholder for pictures that are on disk.
+The engine's repo lives at `<HIGHWIRE_HOME>/.ssberl` — secret,
+`conn.json`, `ssb.cfg`, feeds, DETS and blobs. To run against an SSB
+home that already exists, set `HIGHWIRE_SSB_HOME` to it: everything
+under its `.ssberl` is read and written there, while HighWire's own
+files (the identity registry, its indexes, the image cache, logs) stay
+in `HIGHWIRE_HOME`. Against an engine that is already up, point
+`ERLBUTT_REL` at a path that does not exist so the sidecar spawns
+nothing.
+
+`HIGHWIRE_BLOB_STORE` overrides just the blob store, for a setup that
+keeps blobs outside the engine home.
 
 ## License
 

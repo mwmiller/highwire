@@ -190,7 +190,7 @@ defmodule HighWire.SSB.MessageIndex do
     :ok
   end
 
-  defp dets_path, do: Path.join([HighWire.home_dir(), ".ssberl", "message-index.dets"])
+  defp dets_path, do: Path.join(HighWire.ssb_dir(), "message-index.dets")
 
   # -- message shapes ----------------------------------------------------
 

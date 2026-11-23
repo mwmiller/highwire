@@ -4,10 +4,10 @@ defmodule HighWire.Blob do
   stores are laid out by, and the local URL that serves them.
 
   `/blob/<hex>` is answered from HighWire's own data: the engine's
-  blob store (`<home>/.ssberl/blobs/<HH>/<rest>` — erlbutt's layout),
+  blob store (`blobs/<HH>/<rest>` in its `.ssberl` — erlbutt's layout),
   then the `images/` cache, then a generated placeholder. The old
   JS-client store (`~/.ssb`) is not consulted: everything on screen
-  was imported or replicated into HighWire's directories.
+  was imported or replicated into these directories.
 
   A blob carries no name, so what it is comes from its bytes: the
   signature says whether it is a picture, a recording, a film or
@@ -68,17 +68,14 @@ defmodule HighWire.Blob do
   @doc """
   The engine's blob store root.
 
-  HighWire's own engine keeps it under the app home. An engine running
-  somewhere else keeps its blobs with its own SSB home, and
-  `HIGHWIRE_BLOB_STORE` (the `:blob_store` config) names that
-  directory; a `~` in it is expanded like a shell would.
+  The engine keeps it at `blobs/` in its `.ssberl`, so this follows
+  `HIGHWIRE_SSB_HOME`. A store kept somewhere else is named outright
+  by `HIGHWIRE_BLOB_STORE`; a `~` in either is expanded like a shell
+  would.
   """
   def store_root do
     :highwire
-    |> Application.get_env(
-      :blob_store,
-      Path.join([HighWire.home_dir(), ".ssberl", "blobs"])
-    )
+    |> Application.get_env(:blob_store, Path.join(HighWire.ssb_dir(), "blobs"))
     |> Path.expand()
   end
 

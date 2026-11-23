@@ -273,7 +273,7 @@ defmodule HighWire.Chess.Store do
     ArgumentError -> {:error, :disabled}
   end
 
-  defp dets_path, do: Path.join([HighWire.home_dir(), ".ssberl", "chess.dets"])
+  defp dets_path, do: Path.join(HighWire.ssb_dir(), "chess.dets")
 
   # The catalog is a cache of recency, so a boot rebuilds it from the rows
   # the store already holds: touching in age order leaves the newest game

@@ -5,11 +5,17 @@ home = System.get_env("HIGHWIRE_HOME", "~/.highwire")
 if config_env() != :test do
   config :highwire, application_dir: home
 
-  # The engine's blob store, which `/blob/<hex>` serves from. HighWire's
-  # own engine keeps it under the app home, but an engine that runs
-  # elsewhere — `ERLBUTT_REL` pointed at a checkout, or a node already up
-  # with its own SSB home — keeps its blobs where that engine does.
-  # HIGHWIRE_BLOB_STORE names that directory.
+  # The engine's SSB home: the parent of the `.ssberl` that holds its
+  # secret, conn.json, feeds, blobs and DETS. It is the app home unless
+  # HIGHWIRE_SSB_HOME names an engine home that already exists, which is
+  # how HighWire attaches to an erlbutt already running on its own.
+  if ssb_home = System.get_env("HIGHWIRE_SSB_HOME") do
+    config :highwire, ssb_home: ssb_home
+  end
+
+  # A blob store outside the engine's home, for a setup that keeps only
+  # the blobs elsewhere. Otherwise store_root/0 is `<ssb home>/.ssberl/
+  # blobs`.
   if blob_store = System.get_env("HIGHWIRE_BLOB_STORE") do
     config :highwire, blob_store: blob_store
   end

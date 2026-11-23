@@ -103,7 +103,7 @@ defmodule HighWire.SSB.Admin do
   # Sidecar's port: prefer the running process's listen port so a call
   # mid-switch targets the engine that is actually up.
   defp do_call(name, args, timeout) do
-    secret = Path.join([HighWire.home_dir(), ".ssberl", "secret"])
+    secret = Path.join(HighWire.ssb_dir(), "secret")
 
     try do
       with true <- File.exists?(secret),

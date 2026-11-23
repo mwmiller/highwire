@@ -30,13 +30,13 @@ defmodule HighWire.SSB.ConnSuppress do
   something applied on its own.
   """
 
-  @path ".ssberl/conn.json"
+  @file_name "conn.json"
 
   @no_reply_min_attempts 2
 
   @doc "The engine's address book."
   @spec path() :: Path.t()
-  def path, do: Path.join(HighWire.home_dir(), @path)
+  def path, do: Path.join(HighWire.ssb_dir(), @file_name)
 
   @doc """
   Read the address book straight off disk as `known_peers`-shaped maps
