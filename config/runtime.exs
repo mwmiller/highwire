@@ -4,6 +4,15 @@ home = System.get_env("HIGHWIRE_HOME", "~/.highwire")
 
 if config_env() != :test do
   config :highwire, application_dir: home
+
+  # The engine's blob store, which `/blob/<hex>` serves from. HighWire's
+  # own engine keeps it under the app home, but an engine that runs
+  # elsewhere — `ERLBUTT_REL` pointed at a checkout, or a node already up
+  # with its own SSB home — keeps its blobs where that engine does.
+  # HIGHWIRE_BLOB_STORE names that directory.
+  if blob_store = System.get_env("HIGHWIRE_BLOB_STORE") do
+    config :highwire, blob_store: blob_store
+  end
 end
 
 # The packaged app: the release workflow builds erlbutt's prod profile

@@ -113,6 +113,11 @@ engine.update` alias) pulls and rebuilds the engine when upstream
 moves. Point `ERLBUTT_REL` at another release to run against a
 working engine checkout instead.
 
+Blobs are served from the engine's store under `HIGHWIRE_HOME`
+(`.ssberl/blobs`). An engine that keeps its blobs in another SSB home
+needs `HIGHWIRE_BLOB_STORE` pointing at that store, or `/blob/<hex>`
+falls back to the placeholder for pictures that are on disk.
+
 ## License
 
 MIT (see `LICENSE`). See `THIRD_PARTY.md` for the erlbutt/GPL notice.

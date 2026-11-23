@@ -65,13 +65,21 @@ defmodule HighWire.Blob do
     "&" <> Base.encode64(Base.decode16!(hex, case: :lower)) <> ".sha256"
   end
 
-  @doc "The engine's blob store root."
+  @doc """
+  The engine's blob store root.
+
+  HighWire's own engine keeps it under the app home. An engine running
+  somewhere else keeps its blobs with its own SSB home, and
+  `HIGHWIRE_BLOB_STORE` (the `:blob_store` config) names that
+  directory; a `~` in it is expanded like a shell would.
+  """
   def store_root do
-    Application.get_env(
-      :highwire,
+    :highwire
+    |> Application.get_env(
       :blob_store,
       Path.join([HighWire.home_dir(), ".ssberl", "blobs"])
     )
+    |> Path.expand()
   end
 
   @doc "HighWire's image cache: generated placeholders and legacy copies."
