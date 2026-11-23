@@ -12,7 +12,9 @@ defmodule HighWireWeb.IdentityLive do
   underneath (its stop → write → start lives in
   `HighWire.SSB.Sidecar.switch_identity/1`), so the event runs in a
   task and the page says "Switching…" until the result lands. With
-  the engine disabled the secret is written directly.
+  the engine disabled the secret is written directly. On an engine
+  HighWire did not start, the switch is refused: the secret in that
+  engine's repo is its to hold.
 
   Deleting is two-stage by design: a click on Delete only arms an
   inline confirmation, and only a disabled identity gets the button
@@ -47,6 +49,7 @@ defmodule HighWireWeb.IdentityLive do
      socket
      |> assign(
        page_title: "Identity",
+       own_engine: HighWire.spawn_engine?(),
        switching: false,
        confirming: nil,
        renaming: nil,
@@ -305,6 +308,9 @@ defmodule HighWireWeb.IdentityLive do
     end
   end
 
+  defp explain(:engine_not_owned),
+    do: "this service runs outside HighWire; its identity was left alone"
+
   defp explain(:unknown_identity), do: "that identity is not here"
   defp explain(:disabled_identity), do: "that identity is disabled"
   defp explain(:port_busy), do: "the engine is still shutting down; try again in a moment"
@@ -339,6 +345,12 @@ defmodule HighWireWeb.IdentityLive do
             Every identity lives in this one installation. Switching changes who you
             post as, not where your data lives. Deleting is two-stage: an identity must
             be disabled before it can be removed for good.
+          </p>
+
+          <p :if={not @own_engine} class="mt-3 text-sm text-dim">
+            The service this app talks to runs on its own, so HighWire does not
+            change the identity it signs as. Switch identities in that service's
+            own client.
           </p>
 
           <p :if={@notice} role="status" class={notice_class(@notice)}>
@@ -448,7 +460,7 @@ defmodule HighWireWeb.IdentityLive do
                     class="btn"
                     phx-click="switch"
                     phx-value-id={row["id"]}
-                    disabled={@switching}
+                    disabled={@switching or not @own_engine}
                   >
                     Switch
                   </button>

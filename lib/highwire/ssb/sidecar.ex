@@ -152,6 +152,12 @@ defmodule HighWire.SSB.Sidecar do
     end
   end
 
+  # Only an engine this configuration started is ours to stop and write
+  # for. The three actions below — network switch, identity switch, and
+  # address-book suppression — rewrite the engine's repo and restart it,
+  # so on an engine HighWire did not start they answer :engine_not_owned
+  # instead of editing a live store out from under its owner.
+
   @doc """
   Switch the engine to another network profile: stop this sidecar and
   the engine it owns, make sure nothing still holds the muxrpc port,
@@ -159,15 +165,19 @@ defmodule HighWire.SSB.Sidecar do
   again. Returns once the new sidecar is up; the engine then boots
   asynchronously and `status/0` moves `:starting → :ready`.
 
-  Refuses when the engine is disabled in this configuration, and rolls
-  the sidecar back if the old port cannot be freed — a leftover engine
-  still holding the store must never run beside its replacement.
+  Refuses when the engine is disabled in this configuration, and on an
+  engine HighWire did not start, whose repo keeps its own network file.
+  Rolls the sidecar back if the old port cannot be freed — a leftover
+  engine still holding the store must never run beside its replacement.
   """
   @spec switch_network(Network.selectable()) :: :ok | {:error, term()}
   def switch_network(profile) when profile in [:dev, :mainnet] do
     cond do
       not enabled?() ->
         {:error, :disabled}
+
+      not HighWire.spawn_engine?() ->
+        {:error, :engine_not_owned}
 
       profile == Network.current() ->
         :ok
@@ -198,10 +208,17 @@ defmodule HighWire.SSB.Sidecar do
   identities are refused before anything stops, and a failure after
   the stop rolls back to the previous engine — whose secret is still
   the one in place.
+
+  Refused on an engine HighWire did not start: the secret in its repo
+  is that engine's to hold, and changing it here would leave the running
+  engine signing as a feed this app no longer presents.
   """
   @spec switch_identity(String.t()) :: :ok | {:error, term()}
   def switch_identity(id) when is_binary(id) do
     cond do
+      not HighWire.spawn_engine?() ->
+        {:error, :engine_not_owned}
+
       not enabled?() ->
         Identities.activate(id)
 
@@ -236,17 +253,25 @@ defmodule HighWire.SSB.Sidecar do
   editing while it runs would be a race the edit usually loses. Stopping
   first also means there is no window in which the dialer could read a
   half-written book.
+
+  Refused on an engine HighWire did not start, whose address book is
+  that engine's to hold.
   """
   @spec apply_conn_suppression(list(String.t())) ::
           {:ok, integer(), Path.t()} | {:error, term()}
   def apply_conn_suppression(addrs) when is_list(addrs) do
-    if enabled?() do
-      case stop_and_free() do
-        :ok -> apply_while_stopped(addrs)
-        {:error, reason} -> {:error, {:stop_failed, reason}}
-      end
-    else
-      ConnSuppress.apply(addrs)
+    cond do
+      not HighWire.spawn_engine?() ->
+        {:error, :engine_not_owned}
+
+      enabled?() ->
+        case stop_and_free() do
+          :ok -> apply_while_stopped(addrs)
+          {:error, reason} -> {:error, {:stop_failed, reason}}
+        end
+
+      true ->
+        ConnSuppress.apply(addrs)
     end
   end
 

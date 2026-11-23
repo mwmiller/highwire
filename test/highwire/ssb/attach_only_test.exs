@@ -13,7 +13,7 @@ defmodule HighWire.SSB.AttachOnlyTest do
 
   use ExUnit.Case, async: false
 
-  alias HighWire.SSB.{Import, Network, Sidecar}
+  alias HighWire.SSB.{Identities, Import, Network, Sidecar}
 
   setup do
     root = Path.join(System.tmp_dir!(), "hw-attach-#{System.unique_integer([:positive])}")
@@ -74,7 +74,6 @@ defmodule HighWire.SSB.AttachOnlyTest do
     assert await(fn -> :sys.get_state(pid).attempts > 0 end, 10_000) == :ok
 
     assert Sidecar.status() == :starting
-    assert Sidecar.import_info() == nil
 
     # Nothing of HighWire's lands in the engine's repo: no seeded
     # overrides file, no conn.json, no `.ssberl`, no secret, no import log.
@@ -102,6 +101,35 @@ defmodule HighWire.SSB.AttachOnlyTest do
 
     assert os_alive?(decoy), "a recorded engine was stopped by the attach-only sidecar"
     assert File.read!(pidfile) == body, "the pidfile highwire did not write was rewritten"
+    assert tree(ctx.ssb_home) == []
+  end
+
+  # `Identities.ensure_boot/0` restores a vanished secret from the active
+  # registry row, which is a write into the repo. Here the registry has an
+  # active identity and the external home has no secret yet, so that branch
+  # is the one the boot reaches — and it must not put the key there.
+  test "an active registry row restores no secret into the external home", ctx do
+    id = seed_identity!(ctx.app_home)
+
+    assert Identities.active_id() == id
+    refute File.exists?(Path.join([ctx.ssb_home, ".ssberl", "secret"]))
+
+    pid = start_sidecar!()
+    assert await(fn -> :sys.get_state(pid).attempts > 0 end, 10_000) == :ok
+
+    assert tree(ctx.ssb_home) == []
+    assert Identities.active_id() == id
+  end
+
+  test "the actions that stop or rewrite the engine are refused", ctx do
+    # Each of these stops the engine and rewrites its repo when HighWire
+    # owns the engine; on this home they answer without touching it.
+    assert {:error, :engine_not_owned} = Sidecar.switch_network(:mainnet)
+    assert {:error, :engine_not_owned} = Sidecar.switch_identity("@nobody.ed25519")
+
+    assert {:error, :engine_not_owned} =
+             Sidecar.apply_conn_suppression(["net:127.0.0.1:8020~shs:key"])
+
     assert tree(ctx.ssb_home) == []
   end
 
@@ -180,19 +208,52 @@ defmodule HighWire.SSB.AttachOnlyTest do
     match?({_, 0}, System.cmd("kill", ["-0", to_string(pid)], stderr_to_stdout: true))
   end
 
+  # A registry row as the app writes it, with the active pointer set: the
+  # install believes it posts as this key, and no secret exists anywhere
+  # except the registry's own copy.
+  defp seed_identity!(app_home) do
+    keys = keypair()
+
+    row = %{
+      "id" => keys.id,
+      "label" => "Main",
+      "created_at" => 0,
+      "disabled" => false,
+      "public" => keys.public,
+      "private" => keys.private
+    }
+
+    File.write!(
+      Path.join(app_home, "identities.json"),
+      Jason.encode!(%{"active" => keys.id, "identities" => [row]})
+    )
+
+    keys.id
+  end
+
   defp write_secret!(path) do
-    %{public: public, secret: private} = :enacl.sign_keypair()
+    keys = keypair()
 
     body =
       Jason.encode!(%{
         "curve" => "ed25519",
-        "public" => Base.encode64(public) <> ".ed25519",
-        "private" => Base.encode64(private) <> ".ed25519",
-        "id" => "@" <> Base.encode64(public) <> ".ed25519"
+        "public" => keys.public,
+        "private" => keys.private,
+        "id" => keys.id
       })
 
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, body <> "\n")
+  end
+
+  defp keypair do
+    %{public: public, secret: private} = :enacl.sign_keypair()
+
+    %{
+      id: "@" <> Base.encode64(public) <> ".ed25519",
+      public: Base.encode64(public) <> ".ed25519",
+      private: Base.encode64(private) <> ".ed25519"
+    }
   end
 
   defp free_port do

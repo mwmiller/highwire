@@ -110,8 +110,10 @@ defmodule HighWire.SSB.Identities do
   Reconcile the registry with the secret: adopt a running identity
   the registry has never seen (a predating install, or an engine that
   minted its own), catch the registry's active entry up to the secret,
-  and restore a vanished secret from the registry's active row.
-  Idempotent; called at sidecar boot and on the identity page.
+  and restore a vanished secret from the registry's active row — in a
+  repo HighWire runs the engine in, since a restored secret is a write
+  into that repo. Idempotent; called at sidecar boot and on the
+  identity page.
   """
   @spec ensure_boot() :: :ok | {:error, term()}
   def ensure_boot do
@@ -125,7 +127,7 @@ defmodule HighWire.SSB.Identities do
       nil ->
         case registry_row(reg, reg["active"]) do
           nil -> :ok
-          row -> write_secret(row)
+          row -> restore_secret(row)
         end
 
       keys ->
@@ -421,6 +423,13 @@ defmodule HighWire.SSB.Identities do
   defp revert(reg, error) do
     _ = persist(reg)
     error
+  end
+
+  # Restoring a vanished secret writes one into the repo, so it is ours
+  # to do only where HighWire runs the engine. A repo named from outside,
+  # or an engine someone else started, keeps the secret it has.
+  defp restore_secret(row) do
+    if HighWire.spawn_engine?(), do: write_secret(row), else: :ok
   end
 
   defp write_secret(row), do: write(secret_path(), secret_text(row))

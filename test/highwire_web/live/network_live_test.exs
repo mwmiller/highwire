@@ -92,6 +92,18 @@ defmodule HighWireWeb.NetworkLiveTest do
 
       refute html =~ "Switching to"
     end
+
+    test "an engine HighWire did not start keeps its network and address book", %{conn: conn} do
+      outside = external_engine_home()
+
+      {:ok, _view, html} = live(conn, "/network")
+
+      assert html =~ "This service runs outside HighWire"
+      # No control offers a rewrite of a file HighWire does not own.
+      refute html =~ ~s(phx-click="switch_network")
+      refute html =~ ~s(phx-click="suppress-preview")
+      refute File.exists?(Path.join(outside, ".ssberl"))
+    end
   end
 
   describe "dialer controls (engine down)" do
@@ -1008,6 +1020,7 @@ defmodule HighWireWeb.NetworkLiveTest do
           active: true,
           tick_timer: nil,
           network: :dev,
+          own_engine: true,
           net_status: :ready,
           switching: false,
           switch_notice: nil,

@@ -112,6 +112,7 @@ defmodule HighWireWeb.NetworkLive do
      |> assign(selected: nil)
      |> assign(
        network: Network.current(),
+       own_engine: HighWire.spawn_engine?(),
        net_status: Sidecar.status(),
        switching: false,
        switch_notice: nil,
@@ -247,6 +248,9 @@ defmodule HighWireWeb.NetworkLive do
         {:error, {:restart_failed, reason, changed, backup}} ->
           "Wrote #{changed} suppression#{if changed == 1, do: "", else: "s"} (backup #{Path.basename(backup)}), " <>
             "but the service would not restart: #{inspect(reason)}"
+
+        {:error, :engine_not_owned} ->
+          "This service runs outside HighWire; its address book was left alone."
 
         {:error, reason} ->
           "Suppression failed: #{inspect(reason)}"
@@ -546,12 +550,23 @@ defmodule HighWireWeb.NetworkLive do
               </span>
             </p>
 
-            <p class="mt-2 text-sm text-dim">
+            <p :if={@own_engine} class="mt-2 text-sm text-dim">
               Switching rewrites the local configuration and restarts the service.
               Feeds and blobs carry over either way.
             </p>
 
-            <div class="mt-3 flex flex-wrap gap-3" role="group" aria-label="Network">
+            <p :if={not @own_engine} class="mt-2 text-sm text-dim">
+              This service runs outside HighWire, so its network is set in its own
+              repository. HighWire reads the profile above and leaves the setting
+              alone.
+            </p>
+
+            <div
+              :if={@own_engine}
+              class="mt-3 flex flex-wrap gap-3"
+              role="group"
+              aria-label="Network"
+            >
               <button
                 :for={{key, label} <- Network.profiles()}
                 type="button"
@@ -1083,7 +1098,12 @@ defmodule HighWireWeb.NetworkLive do
                   re-announcement; applying it restarts the service to take effect.
                 </p>
 
-                <div class="mt-2 flex flex-wrap items-center gap-3">
+                <p :if={not @own_engine} class="mt-2 text-xs text-dim">
+                  This address book belongs to a service HighWire did not start, so
+                  HighWire does not rewrite it or restart that service.
+                </p>
+
+                <div :if={@own_engine} class="mt-2 flex flex-wrap items-center gap-3">
                   <button
                     type="button"
                     class="pref-choice"
@@ -1296,6 +1316,9 @@ defmodule HighWireWeb.NetworkLive do
   end
 
   defp switch_error(:disabled), do: "SSB is disabled in this configuration."
+
+  defp switch_error(:engine_not_owned),
+    do: "this service runs outside HighWire, so its network was left alone."
 
   defp switch_error(:port_busy),
     do: "the port is still in use. A leftover process is holding it."

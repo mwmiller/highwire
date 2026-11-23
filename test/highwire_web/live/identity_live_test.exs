@@ -116,6 +116,25 @@ defmodule HighWireWeb.IdentityLiveTest do
       assert Identities.active_id() == bot
     end
 
+    test "an engine HighWire did not start keeps its own identity", %{conn: conn} do
+      {:ok, _} = Identities.create("Main")
+      {:ok, bot} = Identities.create("Bot")
+
+      outside = external_engine_home()
+
+      {:ok, view, html} = live(conn, "/identity")
+
+      assert html =~ "runs on its own"
+      assert html =~ ~r/phx-click="switch"[^>]*disabled/
+
+      # The page's own registry healing does not write a secret into a repo
+      # it does not run, and a stale click is refused rather than applied.
+      refute File.exists?(Path.join(outside, ".ssberl"))
+      html = render_click(view, "switch", %{"id" => bot})
+      assert html =~ "its identity was left alone"
+      refute File.exists?(Path.join(outside, ".ssberl"))
+    end
+
     test "the rail and card show what followers see, label in parens after", %{conn: conn} do
       {:ok, id} = Identities.create("Main")
       ref = "&ohrb6WhNesxa/1Qu6mccRSZgjUKh5kF1tZ5aykPQDjo=.sha256"
