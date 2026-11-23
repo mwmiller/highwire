@@ -80,6 +80,22 @@ defmodule HighWireWeb.MessageTextTest do
       refute MessageText.labelled_type?(nil)
     end
 
+    test "a run of channel toggles names the direction and the channels" do
+      assert MessageText.describe_channels(:subscribed, ["core"]) == "subscribed to #core"
+
+      assert MessageText.describe_channels(:subscribed, ["core", "ssb-show"]) ==
+               "subscribed to #core, #ssb-show"
+
+      assert MessageText.describe_channels(:unsubscribed, ["a", "b", "c", "d"]) ==
+               "unsubscribed from #a, #b, #c, #d"
+
+      # a toggle with no direction or no channel has nothing to name
+      assert MessageText.describe_channels(:toggled, []) == "toggled a channel subscription"
+
+      assert MessageText.describe_channels(:subscribed, []) ==
+               "toggled a channel subscription"
+    end
+
     test "the family is what a sentence names, not the sub-type" do
       # A reader who does not implement the protocol has no use for the
       # difference between adding a film and reviewing one.

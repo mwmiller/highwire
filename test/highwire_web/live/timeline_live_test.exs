@@ -692,33 +692,52 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ "That like didn&#39;t go through"
     end
 
-    test "channel subscriptions say which channel and which way", %{conn: conn} do
+    test "channel subscriptions say which channel and which way, folded by direction",
+         %{conn: conn} do
       now = 1_700_000_000_000
 
       msgs = [
-        ssb_msg("%sub-core.sha256", "@alice:.ed25519", now - 2_000, %{
+        ssb_msg("%sub-core.sha256", "@alice:.ed25519", now - 6_000, %{
           "type" => "channel",
           "channel" => "core",
           "subscribed" => true
         }),
-        ssb_msg("%unsub-rant.sha256", "@alice:.ed25519", now - 1_000, %{
+        ssb_msg("%sub-ssb.sha256", "@alice:.ed25519", now - 5_000, %{
+          "type" => "channel",
+          "channel" => "#ssb-show",
+          "subscribed" => true
+        }),
+        ssb_msg("%sub-emacs.sha256", "@alice:.ed25519", now - 4_000, %{
+          "type" => "channel",
+          "channel" => "#emacs",
+          "subscribed" => true
+        }),
+        ssb_msg("%unsub-rant.sha256", "@alice:.ed25519", now - 3_000, %{
           "type" => "channel",
           "channel" => "#rant",
           "subscribed" => false
         }),
-        ssb_msg("%sub-nochannel.sha256", "@alice:.ed25519", now - 500, %{
+        ssb_msg("%sub-nochannel.sha256", "@alice:.ed25519", now - 2_000, %{
           "type" => "channel",
           "subscribed" => true
+        }),
+        ssb_msg("%toggle.sha256", "@alice:.ed25519", now - 1_000, %{
+          "type" => "channel"
         })
       ]
 
       {:ok, view, _html} = live(conn, "/")
       html = notify(view, feed_payload(msgs))
 
-      assert html =~ "subscribed to #core"
-      # a leading # is not doubled when the message already carries one
+      # subscriptions made in one sitting are one row, newest first like a
+      # contact spate, and a leading # is neither doubled nor dropped
+      assert html =~ "subscribed to #emacs, #ssb-show, #core"
+      refute html =~ "subscribed to #ssb-show"
+
+      # the other direction keeps a row of its own
       assert html =~ "unsubscribed from #rant"
       refute html =~ "sent a channel message"
+
       # a toggle that names no channel still reads as a toggle
       assert html =~ "toggled a channel subscription"
     end

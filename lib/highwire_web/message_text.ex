@@ -48,6 +48,23 @@ defmodule HighWireWeb.MessageText do
   end
 
   @doc """
+  One sentence for a run of channel toggles: the direction they went and the
+  channels it is given. The view decides how many of them to name; a toggle
+  that names no channel reads as the generic toggle sentence, the same way a
+  lone one does.
+  """
+  @spec describe_channels(:subscribed | :unsubscribed | :toggled, [binary()]) :: binary()
+  def describe_channels(action, channels) when is_list(channels) do
+    case {action, channels} do
+      {direction, [_ | _]} when direction in [:subscribed, :unsubscribed] ->
+        "#{channel_verb(direction == :subscribed)} #{Enum.map_join(channels, ", ", &"##{&1}")}"
+
+      _ ->
+        "toggled a channel subscription"
+    end
+  end
+
+  @doc """
   The kind a message belongs to, named as a reader names it: the family
   its protocol type sits under — `movieclub` for `movieclub/new`.
 

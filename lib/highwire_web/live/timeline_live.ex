@@ -1997,17 +1997,33 @@ defmodule HighWireWeb.TimelineLive do
     # A run of the same unknown type is one fact, not several: the row
     # names the type once and says there were some of them. The newest
     # message anchors it.
+    #
+    # A run of channel toggles is one row too, so it lists the channels
+    # it touched — three at a time, with the rest behind the same
+    # "+N more" the contact rows use.
+    channels = Map.get(assigns.row, :channels)
+    expanded? = MapSet.member?(assigns.ctx.expanded, assigns.row.msg["key"])
+    shown = if expanded?, do: channels || [], else: Enum.take(channels || [], 3)
+
     description =
-      if Map.get(assigns.row, :other_count, 1) > 1 do
-        MessageText.describe_spate(assigns.row.msg)
-      else
-        MessageText.describe(assigns.row.msg, assigns.ctx)
+      cond do
+        channels != nil ->
+          MessageText.describe_channels(assigns.row.channel_action, shown)
+
+        Map.get(assigns.row, :other_count, 1) > 1 ->
+          MessageText.describe_spate(assigns.row.msg)
+
+        true ->
+          MessageText.describe(assigns.row.msg, assigns.ctx)
       end
 
     assigns =
       assigns
       |> assign(:href, profile_href(author_of(assigns.row.msg)))
       |> assign(:description, description)
+      |> assign(:channels, channels)
+      |> assign(:shown, shown)
+      |> assign(:expanded?, expanded?)
 
     ~H"""
     <div class="flex items-center gap-3 px-4 py-2.5 text-sm italic text-faint hover:bg-panel">
@@ -2028,6 +2044,24 @@ defmodule HighWireWeb.TimelineLive do
         </span>
         <Relationship.badge standing={standing(@ctx, author_of(@row.msg))} class="ml-1 align-middle" />
         {@description}
+        <button
+          :if={@channels != nil and length(@channels) > length(@shown)}
+          type="button"
+          phx-click="expand"
+          phx-value-key={@row.msg["key"]}
+          class="not-italic text-accent hover:underline"
+        >
+          +{length(@channels) - length(@shown)} more
+        </button>
+        <button
+          :if={@expanded? and @channels != nil and length(@channels) > 3}
+          type="button"
+          phx-click="expand"
+          phx-value-key={@row.msg["key"]}
+          class="not-italic text-accent hover:underline"
+        >
+          show less
+        </button>
       </p>
       <span class="ml-auto not-italic text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
     </div>

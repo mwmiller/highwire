@@ -4159,14 +4159,21 @@ defmodule HighWire.Timeline do
             )
           end)
 
+        {channels, labelled} = Enum.split_with(labelled, &channel?/1)
+
         labelled_entries = Enum.map(labelled, &event_row(&1, like_counts, self_id))
+
+        channel_entries =
+          channels
+          |> collapse_channels()
+          |> Enum.map(&channel_entry(&1, self_id))
 
         event_entries =
           unknown
           |> collapse_events()
           |> Enum.map(&event_entry(&1, like_counts, self_id))
 
-        post_entries ++ labelled_entries ++ event_entries
+        post_entries ++ labelled_entries ++ channel_entries ++ event_entries
       end)
 
     (thread_entries ++ contact_entries ++ other_entries)
@@ -4507,6 +4514,92 @@ defmodule HighWire.Timeline do
       mentioned?: mentions_self?(msg, self_id)
     )
   end
+
+  # Channel toggles arrive in runs the same way contact edits do: a client
+  # subscribes to a set of channels in one sitting, and every toggle used to
+  # make its own row. Folded per author per direction on the contact cooloff,
+  # a run reads as one line naming the channels it touched, while a lone
+  # toggle still says exactly which channel and which way.
+  #
+  # The direction is the row's key, as it is for contacts: a run of
+  # unsubscribes must never read as subscribes.
+  defp collapse_channels(msgs) do
+    msgs
+    |> Enum.filter(fn msg -> is_binary(msg["value"]["author"]) end)
+    |> Enum.group_by(fn msg -> {msg["value"]["author"], channel_action(content(msg))} end)
+    |> Enum.flat_map(fn {{author, action}, group} ->
+      group
+      |> Enum.map(fn msg -> {bump_ts(msg), msg} end)
+      |> Enum.sort_by(&elem(&1, 0), :desc)
+      |> spates()
+      |> Enum.map(&channel_spate(&1, author, action))
+    end)
+  end
+
+  # One direction's toggles — newest first — as a spate entry: the anchor
+  # positions the row, the channels name what the run touched.
+  defp channel_spate([{anchor_ts, anchor} | _] = spate, author, action) do
+    channels =
+      spate
+      |> Enum.map(fn {_ts, msg} -> channel_name(content(msg)) end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    %{
+      key: anchor["key"],
+      anchor_ts: anchor_ts,
+      author: author,
+      action: action,
+      channels: channels,
+      oldest_ts: spate |> List.last() |> elem(0)
+    }
+  end
+
+  # One folded channel run as a feed row. The row keeps the anchor's key and
+  # time and rebuilds the toggle it stands for, so the same `other_row` that
+  # draws a single toggle draws the run, from the `:channels` it carries.
+  defp channel_entry(%{anchor_ts: anchor_ts, action: action, channels: channels} = row, self_id) do
+    c = %{"type" => "channel", "channel" => List.first(channels)}
+
+    c =
+      case action do
+        :subscribed -> Map.put(c, "subscribed", true)
+        :unsubscribed -> Map.put(c, "subscribed", false)
+        _ -> c
+      end
+
+    msg = %{
+      "key" => row.key,
+      "timestamp" => anchor_ts,
+      "value" => %{"author" => row.author, "timestamp" => anchor_ts, "content" => c}
+    }
+
+    build_entry(:other, msg, anchor_ts, [row.author], 0, 0, [],
+      self_id: self_id,
+      rooted: true
+    )
+    |> Map.put(:channels, channels)
+    |> Map.put(:channel_action, action)
+  end
+
+  defp channel?(msg), do: content(msg)["type"] == "channel"
+
+  # Which way a channel toggle went. A toggle that names neither reads as a
+  # toggle, so it folds with the others but has no direction to show.
+  defp channel_action(%{"subscribed" => true}), do: :subscribed
+  defp channel_action(%{"subscribed" => false}), do: :unsubscribed
+  defp channel_action(_content), do: :toggled
+
+  # The channel's name without the protocol's leading #, so the sentence can
+  # put one on: messages arrive both ways.
+  defp channel_name(%{"channel" => channel}) when is_binary(channel) do
+    case channel |> String.trim() |> String.trim_leading("#") do
+      "" -> nil
+      name -> name
+    end
+  end
+
+  defp channel_name(_content), do: nil
 
   # Every message a game's store files, in either of the formats this node
   # reads: none of them is a timeline row.
