@@ -49,21 +49,18 @@ defmodule HighWire.Chess.Legacy.Store do
   @doc "Every game this node has seen in this format, newest activity first."
   @spec games() :: [map()]
   def games do
-    @table
-    |> :dets.match_object({{:game, :_}, :_})
+    all_rows()
     |> Enum.map(fn {_key, row} -> Legacy.fold(row.rows) end)
     |> Enum.reject(&is_nil(&1.game_id))
     |> Enum.sort_by(& &1.updated_at, :desc)
-  rescue
-    ArgumentError -> []
   end
 
   @doc "One game's snapshot, or nil."
   @spec get(binary()) :: map() | nil
   def get(game_id) when is_binary(game_id) do
     case lookup(game_id) do
-      nil -> nil
-      row -> Legacy.fold(row.rows)
+      row when is_map(row) -> Legacy.fold(row.rows)
+      _ -> nil
     end
   end
 
@@ -75,10 +72,7 @@ defmodule HighWire.Chess.Legacy.Store do
 
   @impl true
   def init(opts) do
-    path =
-      Keyword.get_lazy(opts, :path, fn ->
-        Path.join(HighWire.ssb_dir(), "chess_legacy.dets")
-      end)
+    path = Keyword.get(opts, :path, dets_path())
 
     case :dets.open_file(@table, file: String.to_charlist(path), type: :set) do
       {:ok, @table} ->
@@ -117,28 +111,40 @@ defmodule HighWire.Chess.Legacy.Store do
   # re-delivered message is the same row, not a second move.
   defp file(%{"key" => key, "value" => %{"author" => author, "content" => content} = value}) do
     with true <- Legacy.message?(content),
-         game_id when is_binary(game_id) <- game_id(key, content),
-         row when is_map(row) <-
-           lookup(game_id) || %{game_id: game_id, rows: [], keys: MapSet.new()},
-         false <- MapSet.member?(row.keys, key) do
-      row = %{
-        row
-        | rows: [%{key: key, author: author, content: content, ts: value["timestamp"]} | row.rows],
-          keys: MapSet.put(row.keys, key)
-      }
-
-      :dets.insert(@table, {{:game, game_id}, row})
-      announce(game_id)
-      {:ok, game_id}
+         game_id when is_binary(game_id) <- game_id(key, content) do
+      add_row(game_id, key, author, content, value["timestamp"])
     else
-      true -> :ignored
-      _ -> :seen
+      _ -> :ignored
     end
-  rescue
-    ArgumentError -> :seen
   end
 
   defp file(_msg), do: :ignored
+
+  defp add_row(game_id, key, author, content, ts) do
+    case lookup(game_id) do
+      {:unreadable, reason} ->
+        dropped(reason)
+
+      row ->
+        row = row || %{game_id: game_id, rows: [], keys: MapSet.new()}
+
+        if MapSet.member?(row.keys, key) do
+          :seen
+        else
+          row = %{
+            row
+            | rows: [%{key: key, author: author, content: content, ts: ts} | row.rows],
+              keys: MapSet.put(row.keys, key)
+          }
+
+          :dets.insert(@table, {{:game, game_id}, row})
+          announce(game_id)
+          {:ok, game_id}
+        end
+    end
+  rescue
+    ArgumentError -> dropped(:closed)
+  end
 
   defp game_id(key, content) do
     # Every message in a game names its root; the invite is its own root.
@@ -150,25 +156,49 @@ defmodule HighWire.Chess.Legacy.Store do
     end
   end
 
+  # A table that cannot answer is not the same as one without the game.
+  # Only an empty answer means the game is new; anything else leaves the
+  # row unknown, so nothing is filed rather than written where it cannot
+  # be read back.
   defp lookup(game_id) do
     case :dets.lookup(@table, {:game, game_id}) do
       [{_key, row}] -> row
       [] -> nil
+      {:error, reason} -> {:unreadable, reason}
     end
   rescue
-    ArgumentError -> nil
+    ArgumentError -> {:unreadable, :closed}
   end
+
+  # A table that cannot answer fails every lookup, and a boot replays a whole
+  # backlog, so the run gets one warning, with the reason. Only the store's own
+  # process files rows, so the flag in its dictionary lasts exactly one run.
+  defp dropped(reason) do
+    unless Process.get(:warned_unreadable) do
+      Process.put(:warned_unreadable, true)
+      Logger.warning("chess legacy store: cannot file a row: #{inspect(reason)}")
+    end
+
+    :ignored
+  end
+
+  # A damaged or closed table raises rather than answering; it holds no rows
+  # this node can read.
+  defp all_rows do
+    :dets.match_object(@table, {{:game, :_}, :_})
+  rescue
+    ArgumentError -> []
+  end
+
+  defp dets_path, do: Path.join(HighWire.ssb_dir(), "chess_legacy.dets")
 
   # The catalog is a cache of recency: a boot rebuilds it from the rows
   # already on disk, oldest first, so the newest game ends at the front.
   defp seed_catalog do
-    @table
-    |> :dets.match_object({{:game, :_}, :_})
+    all_rows()
     |> Enum.map(fn {_key, row} -> {updated_at(row.rows), row.game_id} end)
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.each(fn {_ts, game_id} -> Catalog.touch(:chess_legacy, game_id) end)
-  rescue
-    ArgumentError -> :ok
   end
 
   defp updated_at(rows) do
@@ -181,7 +211,5 @@ defmodule HighWire.Chess.Legacy.Store do
   defp announce(game_id) do
     Catalog.touch(:chess_legacy, game_id)
     PubSub.broadcast(HighWire.PubSub, @topic, {:chess_legacy, game_id})
-  rescue
-    _ -> :ok
   end
 end
