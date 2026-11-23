@@ -91,6 +91,7 @@ defmodule HighWire.MixProject do
       {:excon, "~> 4.1"},
       {:mdex, "~> 0.14.2"},
       {:memoize, "~> 1.4"},
+      {:libgraph, "~> 0.17"},
       # enacl tracks Moid's moid-v1.1.1 maintenance branch (the same
       # branch erlbutt's rebar.config pins): backports flow in with
       # `mix deps.update enacl`. enacl's origin/main is a different
