@@ -18,7 +18,7 @@ defmodule HighWireWeb.ProfileLive do
   alias HighWire.SSB.{Profile, Relations}
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
-  alias HighWireWeb.Components.{Nav, Shell}
+  alias HighWireWeb.Components.{Nav, Relationship, Shell}
 
   import HighWireWeb.Components.Time, only: [age: 1]
 
@@ -449,42 +449,60 @@ defmodule HighWireWeb.ProfileLive do
     |> assign(:more, false)
   end
 
-  # The relationship has three states, and each one is exclusive: a block
+  # The relationship has states, and each one is exclusive: a block
   # retracts the follow in the same message, so a feed cannot be both
-  # followed and blocked. The default — no edge at all — is the passive
-  # one: the feed is readable, and nothing of the reader's is published
-  # about it.
-  defp state(id, self_id, follows, blocked) do
-    cond do
-      id == self_id -> :self
-      id in blocked -> :blocked
-      id in follows -> :following
-      true -> :reading
-    end
-  end
+  # followed and blocked. Which one the reader sees comes from both sides
+  # — the edge they published and the edge the feed published about them
+  # — through the same resolution every byline uses. The default — no edge
+  # either way — is the passive one: the feed is readable, and nothing of
+  # the reader's is published about it.
+  defp standing(id, self_id, follows, blocked) when is_binary(id),
+    do: Relations.state(id, self_id, follows, blocked)
 
+  defp standing(_id, _self_id, _follows, _blocked), do: :reading
+
+  defp state_label(:self), do: "You"
+  defp state_label(:mutual), do: "Mutual"
   defp state_label(:following), do: "Following"
+  defp state_label(:followed_by), do: "Follows you"
   defp state_label(:blocked), do: "Blocked"
+  defp state_label(:blocking), do: "Blocks you"
   defp state_label(_), do: "Reading"
 
   # What each state means, in the one line the reader needs: whether
   # their word goes out, whether they can read the feed, and what a
   # block does to both.
+  defp state_note(:mutual),
+    do: "You follow each other: your follow is public, and their feed is in yours."
+
   defp state_note(:following),
     do: "Your follow is public: it rides your contact graph to the feeds that follow you."
+
+  defp state_note(:followed_by),
+    do: "They follow you. Their feed is not in yours until you follow it."
 
   defp state_note(:blocked),
     do: "Their posts are hidden from you, and the block retracts any follow."
 
+  defp state_note(:blocking),
+    do:
+      "They block you, so nothing of yours reaches them. What they publish is still theirs to read."
+
   defp state_note(_),
     do: "You can read this feed, and nothing is published about it."
 
+  defp state_dot(:mutual), do: "bg-accent"
   defp state_dot(:following), do: "bg-accent"
+  defp state_dot(:followed_by), do: "bg-ok"
   defp state_dot(:blocked), do: "bg-bad"
+  defp state_dot(:blocking), do: "bg-warn"
   defp state_dot(_), do: "bg-dot"
 
+  defp state_color(:mutual), do: "text-accent"
   defp state_color(:following), do: "text-accent"
+  defp state_color(:followed_by), do: "text-ok"
   defp state_color(:blocked), do: "text-bad"
+  defp state_color(:blocking), do: "text-warn"
   defp state_color(_), do: "text-sub"
 
   defp load(socket, id) do
@@ -686,6 +704,25 @@ defmodule HighWireWeb.ProfileLive do
 
   @impl true
   def render(assigns) do
+    # The standing is read from the lists the render already holds, so a
+    # press, a payload or a stale pair of lists all answer the same way:
+    # there is no second copy of the relationship to keep in step.
+    assigns =
+      assign(
+        assigns,
+        :standing,
+        standing(assigns.id, assigns.self_id, assigns.follows, assigns.blocked)
+      )
+      |> assign(
+        :relation_standings,
+        Relations.standings(
+          Enum.uniq([assigns.id | assigns.relations.follows ++ assigns.relations.blocked]),
+          self_id: assigns.self_id,
+          follows: assigns.follows,
+          blocked: assigns.blocked
+        )
+      )
+
     ~H"""
     <Shell.app id="profile-root" phx-hook="TabActivity" gossip={@gossip}>
       <:rail>
@@ -703,11 +740,11 @@ defmodule HighWireWeb.ProfileLive do
           </p>
           <p class="mt-0.5 break-all font-mono text-[10px] text-dim">{@id}</p>
 
-          <%!-- The relationship has three states, and the rail names the
-          one the reader is in before offering anything: following (a
-          public statement that puts the feed in the reader's list),
-          reading (the default, no edge at all) or blocked (the feed is
-          hidden from the reader). Naming the state is what makes the
+          <%!-- The rail names the standing before offering anything:
+          following (a public statement that puts the feed in the
+          reader's list), mutual (each follows the other), followed back
+          (their edge alone), reading (no edge either way), or blocked in
+          either direction. Naming the standing is what makes the
           controls legible: each state offers only the moves it has. --%>
           <p
             :if={@id != @self_id and @status != :disabled}
@@ -715,10 +752,10 @@ defmodule HighWireWeb.ProfileLive do
           >
             <span class={[
               "h-1.5 w-1.5 shrink-0 rounded-full",
-              state_dot(state(@id, @self_id, @follows, @blocked))
+              state_dot(@standing)
             ]}></span>
-            <span class={["font-medium", state_color(state(@id, @self_id, @follows, @blocked))]}>
-              {state_label(state(@id, @self_id, @follows, @blocked))}
+            <span class={["font-medium", state_color(@standing)]}>
+              {state_label(@standing)}
             </span>
           </p>
 
@@ -726,7 +763,7 @@ defmodule HighWireWeb.ProfileLive do
             :if={@id != @self_id and @status != :disabled}
             class="mt-1 text-[11px] leading-snug text-faint"
           >
-            {state_note(state(@id, @self_id, @follows, @blocked))}
+            {state_note(@standing)}
           </p>
 
           <%!-- A blocked feed is not offered the follow control: the two
@@ -828,6 +865,10 @@ defmodule HighWireWeb.ProfileLive do
                     class="shrink-0"
                   />
                   <span class="min-w-0 truncate">{Profile.display_name(followed)}</span>
+                  <Relationship.badge
+                    standing={Map.get(@relation_standings, followed)}
+                    class="ml-auto"
+                  />
                 </.link>
               </div>
             </details>
@@ -856,6 +897,10 @@ defmodule HighWireWeb.ProfileLive do
                     class="shrink-0"
                   />
                   <span class="min-w-0 truncate">{Profile.display_name(blocked)}</span>
+                  <Relationship.badge
+                    standing={Map.get(@relation_standings, blocked)}
+                    class="ml-auto"
+                  />
                 </.link>
               </div>
             </details>
@@ -881,9 +926,12 @@ defmodule HighWireWeb.ProfileLive do
 
             <div class="min-w-0 flex-1">
               <div class="flex items-start justify-between gap-3">
-                <h1 class="min-w-0 text-xl font-bold text-paper">
-                  {heading(@profile) || fallback_name(@id)}
-                </h1>
+                <div class="flex min-w-0 items-center gap-2">
+                  <h1 class="min-w-0 text-xl font-bold text-paper">
+                    {heading(@profile) || fallback_name(@id)}
+                  </h1>
+                  <Relationship.badge standing={Map.get(@relation_standings, @id)} />
+                </div>
 
                 <%!-- The about info is edited where it reads: the press
                 opens the two fields this header shows, and saving

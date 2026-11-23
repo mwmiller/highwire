@@ -530,8 +530,10 @@ defmodule HighWireWeb.TimelineLiveTest do
 
       # two lines, not one row re-counting the older spate — the live
       # spate is anchored at the newest edit and the cooled-off one keeps
-      # its own anchor, so the row dedupe must not collapse them
-      assert count(html, "blocked") == 2
+      # its own anchor, so the row dedupe must not collapse them. Counted
+      # inside the feed: the rail's marks legend names blocks too.
+      feed = view |> element("#feed-column") |> render()
+      assert count(feed, "blocked") == 2
       assert html =~ eve
       assert html =~ frank
       assert pos(html, frank) < pos(html, eve)

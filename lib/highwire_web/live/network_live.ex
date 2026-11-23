@@ -38,10 +38,21 @@ defmodule HighWireWeb.NetworkLive do
   require Logger
 
   alias HighWire.Avatar, as: Ident
-  alias HighWire.SSB.{Admin, ConnSuppress, Invite, Network, PeerAddress, Sidecar}
+
+  alias HighWire.SSB.{
+    Admin,
+    ConnSuppress,
+    Identities,
+    Invite,
+    Network,
+    PeerAddress,
+    Relations,
+    Sidecar
+  }
+
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
-  alias HighWireWeb.Components.{Nav, Shell}
+  alias HighWireWeb.Components.{Nav, Relationship, Shell}
 
   import HighWireWeb.Components.Time, only: [age: 1]
 
@@ -507,8 +518,28 @@ defmodule HighWireWeb.NetworkLive do
     {:noreply, assign(socket, :selected, selected)}
   end
 
+  # Peers are people like any other face on a page, so the rows that name
+  # one carry the reader's mark for it. Both lists are read here: the sky
+  # and the address book share the same ids.
+  defp standings(report) do
+    ids =
+      (report["connections"] || []) ++
+        Enum.map(known_rows(report, @known_peers_cap), &elem(&1, 1))
+
+    Relations.standings_for(ids, current_self())
+  end
+
+  defp current_self do
+    case Identities.active() do
+      %{"id" => id} when is_binary(id) -> id
+      _ -> nil
+    end
+  end
+
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :standings, standings(assigns.report))
+
     ~H"""
     <Shell.app id="network-root" phx-hook="TabActivity" gossip={@gossip}>
       <:rail>
@@ -1067,6 +1098,7 @@ defmodule HighWireWeb.NetworkLive do
                   >
                     {Ident.display_name(id, @profiles)}
                   </.link>
+                  <Relationship.badge standing={Map.get(@standings, id)} />
                   <span class="ml-auto shrink-0 font-mono text-[11px] text-faint">
                     {Ident.short_id(id)}
                   </span>
@@ -1187,6 +1219,11 @@ defmodule HighWireWeb.NetworkLive do
                       {addr_text(peer["address"])}
                     </span>
                   </span>
+                  <Relationship.badge
+                    :if={id}
+                    standing={Map.get(@standings, id)}
+                    class="shrink-0"
+                  />
                   <span
                     :if={no_reply?(peer["address"], @peer_meta)}
                     class="shrink-0 text-bad"

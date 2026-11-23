@@ -16,8 +16,8 @@ defmodule HighWireWeb.GameLive do
   alias HighWire.Chess.Engine
   alias HighWire.Chess.Legacy
   alias HighWire.Games.Catalog
-  alias HighWire.SSB.{Identities, Profile}
-  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Shell}
+  alias HighWire.SSB.{Identities, Profile, Relations}
+  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Relationship, Shell}
 
   # How long one ply of playback stays on the board: fast enough to read a
   # game, slow enough to see the move land.
@@ -576,6 +576,21 @@ defmodule HighWireWeb.GameLive do
     end
   end
 
+  # Every player the page names, resolved in one pass per render: a badge is
+  # then a map lookup, not its own identity read and store scan.
+  defp standings(game, self_id) do
+    players =
+      [
+        Map.get(game, :challenger),
+        Map.get(game, :accepter),
+        Map.get(game, :white),
+        Map.get(game, :black),
+        opponent(game)
+      ] ++ Enum.map(Map.get(game, :history) || [], &Map.get(&1, :player))
+
+    Relations.standings_for(players, self_id)
+  end
+
   attr :step, :map, default: nil
   attr :current, :integer, default: 0
 
@@ -778,7 +793,10 @@ defmodule HighWireWeb.GameLive do
   end
 
   def render(%{game: %{kind: :chess}} = assigns) do
-    assigns = assign(assigns, current: current(assigns), now: now(assigns))
+    assigns =
+      assigns
+      |> assign(current: current(assigns), now: now(assigns))
+      |> assign(:standings, standings(assigns.game, assigns.self_id))
 
     ~H"""
     <Shell.app>
@@ -790,8 +808,18 @@ defmodule HighWireWeb.GameLive do
 
           <header class="mb-4">
             <div class="grid grid-cols-2 gap-2">
-              <.side id={@game.white || invited(@game)} color={:white} turn={@game.turn} />
-              <.side id={@game.black || invited(@game)} color={:black} turn={@game.turn} />
+              <.side
+                id={@game.white || invited(@game)}
+                color={:white}
+                turn={@game.turn}
+                standings={@standings}
+              />
+              <.side
+                id={@game.black || invited(@game)}
+                color={:black}
+                turn={@game.turn}
+                standings={@standings}
+              />
             </div>
             <p class="mt-2 flex items-center gap-2 text-xs text-dim">
               <span :if={@now.live?}>{chess_line(@game, @self_id)}</span>
@@ -925,6 +953,8 @@ defmodule HighWireWeb.GameLive do
   end
 
   def render(assigns) do
+    assigns = assign(assigns, :standings, standings(assigns.game, assigns.self_id))
+
     ~H"""
     <Shell.app>
       <:rail></:rail>
@@ -937,10 +967,15 @@ defmodule HighWireWeb.GameLive do
             <div class="flex items-center gap-2">
               <Avatar.face :if={@game.challenger} id={@game.challenger} size={20} />
               <span class="text-sm text-paper">{name(@game.challenger)}</span>
+              <Relationship.badge
+                :if={@game.challenger}
+                standing={Map.get(@standings, @game.challenger)}
+              />
               <span :if={seat = opponent(@game)} class="flex items-center gap-2">
                 <span class="text-[10px] uppercase tracking-wide text-faint">vs</span>
                 <Avatar.face id={seat} size={20} />
                 <span class="text-sm text-paper">{name(seat)}</span>
+                <Relationship.badge standing={Map.get(@standings, seat)} />
               </span>
             </div>
             <p class="mt-1 flex items-center gap-2 text-xs text-dim">
@@ -1072,7 +1107,13 @@ defmodule HighWireWeb.GameLive do
             >
               <span class="text-faint">{item.turn}</span>
               <span class="min-w-0">
+                <Avatar.avatar
+                  id={item.player}
+                  size={14}
+                  class="inline-block align-middle"
+                />
                 <span class="text-muted">{name(item.player)}</span>
+                <Relationship.badge standing={Map.get(@standings, item.player)} />
                 <span :if={item.type == "resign"} class="ml-1 text-faint">resigned</span>
                 <span :if={item.type != "resign"} class="ml-1 font-mono text-[11px] text-dim">
                   {item.roll} {item.moves}
@@ -1117,6 +1158,7 @@ defmodule HighWireWeb.GameLive do
   attr :id, :string, default: nil
   attr :color, :atom, required: true
   attr :turn, :atom, required: true
+  attr :standings, :map, default: %{}
 
   defp side(assigns) do
     ~H"""
@@ -1128,7 +1170,10 @@ defmodule HighWireWeb.GameLive do
       <Avatar.face :if={@id} id={@id} size={24} />
       <div class="min-w-0">
         <div class="text-[10px] uppercase tracking-wide text-faint">{@color}</div>
-        <div class="truncate text-sm text-paper">{name(@id)}</div>
+        <div class="flex items-center gap-1.5 truncate text-sm text-paper">
+          {name(@id)}
+          <Relationship.badge :if={@id} standing={Map.get(@standings, @id)} />
+        </div>
       </div>
     </div>
     """

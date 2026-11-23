@@ -27,11 +27,13 @@ defmodule HighWireWeb.TimelineLive do
   alias HighWire.Contacts
   alias HighWire.Markdown
   alias HighWire.SearchIndex
+  alias HighWire.SSB.Relations
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Heart
   alias HighWireWeb.Components.Likers
   alias HighWireWeb.Components.Mentions
+  alias HighWireWeb.Components.Relationship
   alias HighWireWeb.Components.Shell
   alias HighWireWeb.MessageText
 
@@ -779,6 +781,31 @@ defmodule HighWireWeb.TimelineLive do
     for s <- suggestions, is_binary(s["id"]), do: s["id"]
   end
 
+  # Everyone on screen, and how the reader stands with each of them. One
+  # read of the store's incoming edges answers the whole set, so a byline
+  # costs a map lookup rather than a question to the store. Rows, the
+  # rail and search hits all draw from this set; anything outside it is a
+  # stranger to the reader until the next pass puts them in it.
+  defp relationships(assigns, rows) do
+    ids =
+      rows
+      |> Enum.flat_map(&row_profile_ids(&1, assigns.likes_by))
+      |> Enum.concat(assigns.all_contacts)
+      |> Enum.concat(rail_ids(assigns.suggestions))
+      |> Enum.concat(Enum.map(assigns.search_hits, & &1.author))
+      |> Enum.concat([assigns.self_id])
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+
+    Relations.standings(ids,
+      self_id: assigns.self_id,
+      follows: assigns.all_contacts,
+      blocked: assigns.blocked
+    )
+  end
+
+  defp standing(ctx, id), do: Map.get(Map.get(ctx, :relationships, %{}), id)
+
   # Everyone a contact row is about — the lists are the row's action
   # (:followed, :blocked, :unfollowed, :unblocked), so all of them must
   # be collected for profiles and search alike.
@@ -1152,6 +1179,7 @@ defmodule HighWireWeb.TimelineLive do
     page = Map.get(assigns.paged, assigns.view, %{rows: [], more: false})
     rows = search_rows(assigns, page.rows)
     ui = ui_state(assigns, page, rows)
+    relationships = relationships(assigns, rows)
 
     assigns =
       assign(assigns,
@@ -1159,6 +1187,7 @@ defmodule HighWireWeb.TimelineLive do
         views: @views,
         left_views: Enum.filter(@views, fn {v, _} -> v in @left_views end),
         right_views: Enum.filter(@views, fn {v, _} -> v in @right_views end),
+        relationships: relationships,
         more: page.more,
         loading?: ui.loading?,
         finished?: ui.finished?,
@@ -1175,7 +1204,8 @@ defmodule HighWireWeb.TimelineLive do
           rev: assigns.blob_rev,
           my_likes: assigns.my_likes,
           likes_by: assigns.likes_by,
-          like_pending: assigns.like_pending
+          like_pending: assigns.like_pending,
+          relationships: relationships
         }
       )
 
@@ -1203,6 +1233,7 @@ defmodule HighWireWeb.TimelineLive do
               rev={@blob_rev}
             />
             <span class="min-w-0 truncate">{Ident.display_name(c, @profiles)}</span>
+            <Relationship.badge standing={Map.get(@relationships, c)} class="ml-auto" />
           </.link>
           <button
             :if={length(@all_contacts) > @max_sidebar_contacts}
@@ -1236,6 +1267,7 @@ defmodule HighWireWeb.TimelineLive do
               rev={@blob_rev}
             />
             <span class="min-w-0 truncate">{Ident.display_name(s["id"], @profiles)}</span>
+            <Relationship.badge standing={Map.get(@relationships, s["id"])} class="ml-auto" />
           </.link>
           <button
             type="button"
@@ -1249,6 +1281,11 @@ defmodule HighWireWeb.TimelineLive do
             {if @suggestions_pending, do: "Finding…", else: "Show another set"}
           </button>
         </div>
+
+        <%!-- The marks beside names, spelled out in one place. Collapsed
+        by default: the rail is for people, and a reader who already
+        knows a mark can hover it instead of opening this. --%>
+        <Relationship.legend />
       </:rail>
 
       <div class="flex min-w-0 flex-1 flex-col">
@@ -1376,6 +1413,7 @@ defmodule HighWireWeb.TimelineLive do
                           class="shrink-0"
                         />
                         <span class="min-w-0 truncate text-paper">{name}</span>
+                        <Relationship.badge standing={Map.get(@relationships, id)} />
                         <span class="ml-auto shrink-0 font-mono text-[10px] text-faint">
                           {Ident.short_id(id)}
                         </span>
@@ -1403,9 +1441,16 @@ defmodule HighWireWeb.TimelineLive do
                           value={id}
                           checked={id in @private_recipients}
                         />
+                        <Avatar.avatar
+                          id={id}
+                          size={16}
+                          image={image_of(id, @profiles)}
+                          rev={@blob_rev}
+                        />
                         <span class="min-w-0 truncate text-paper">
                           {Ident.display_name(id, @profiles)}
                         </span>
+                        <Relationship.badge standing={Map.get(@relationships, id)} />
                       </label>
                     </div>
                   </div>
@@ -1538,6 +1583,7 @@ defmodule HighWireWeb.TimelineLive do
                       >
                         {Ident.display_name(h.author, @profiles)}
                       </span>
+                      <Relationship.badge standing={Map.get(@relationships, h.author)} />
                       <span class="shrink-0 text-faint">{format_ts(h.ts)}</span>
                     </div>
                     <p class="mt-0.5 whitespace-pre-wrap break-words text-sm text-ink">
@@ -1702,6 +1748,7 @@ defmodule HighWireWeb.TimelineLive do
             </.link>
             <span :if={@author_href == nil}>{Ident.display_name(@author, @ctx)}</span>
           </span>
+          <Relationship.badge standing={standing(@ctx, @author)} />
           <span class="text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
           <span :if={@row.activity > ts(@row.msg)} class="text-xs text-faint">
             · active <.age ts={@row.activity} />
@@ -1778,6 +1825,7 @@ defmodule HighWireWeb.TimelineLive do
             <span class="shrink-0 text-xs font-medium text-muted">
               {Ident.display_name(author_of(reply), @ctx)}
             </span>
+            <Relationship.badge standing={standing(@ctx, author_of(reply))} />
             <span class="min-w-0 truncate text-xs text-sub">{snippet(reply, @ctx)}</span>
             <span class="ml-auto shrink-0 text-[11px] text-faint">
               <.age ts={ts(reply)} />
@@ -1840,7 +1888,8 @@ defmodule HighWireWeb.TimelineLive do
           {@author_name}
         </.link>
         <span :if={@author_href == nil} class="text-ink">{@author_name}</span>
-        liked <span class="text-ink">{vote_target_label(@row.msg, @ctx)}</span>
+        <Relationship.badge standing={standing(@ctx, @author)} /> liked
+        <span class="text-ink">{vote_target_label(@row.msg, @ctx)}</span>
       </p>
       <span class="ml-auto text-xs text-faint"><.age ts={ts(@row.msg)} /></span>
     </div>
@@ -1898,6 +1947,7 @@ defmodule HighWireWeb.TimelineLive do
         <span :if={profile_href(@author) == nil} class="text-ink">
           {Ident.display_name(@author, @ctx)}
         </span>
+        <Relationship.badge standing={standing(@ctx, @author)} class="ml-1 align-middle" />
         {@verb}
         <span class="ml-1 inline-flex flex-wrap items-center gap-x-3 gap-y-1 align-middle">
           <span :for={fid <- @shown} class="inline-flex items-center gap-1.5">
@@ -1913,6 +1963,7 @@ defmodule HighWireWeb.TimelineLive do
               />
               <span class="text-ink hover:underline">{Ident.display_name(fid, @ctx)}</span>
             </.link>
+            <Relationship.badge standing={standing(@ctx, fid)} />
           </span>
           <button
             :if={length(@people) > length(@shown)}
@@ -1975,6 +2026,7 @@ defmodule HighWireWeb.TimelineLive do
           </.link>
           <span :if={@href == nil}>{Ident.display_name(author_of(@row.msg), @ctx)}</span>
         </span>
+        <Relationship.badge standing={standing(@ctx, author_of(@row.msg))} class="ml-1 align-middle" />
         {@description}
       </p>
       <span class="ml-auto not-italic text-xs text-faint"><.age ts={ts(@row.msg)} /></span>

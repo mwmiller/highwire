@@ -17,12 +17,12 @@ defmodule HighWireWeb.PostLive do
 
   alias HighWire.Avatar, as: Ident
   alias HighWire.Markdown
+  alias HighWire.SSB.Relations
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.Heart
   alias HighWireWeb.Components.Likers
-  alias HighWireWeb.Components.Mentions
-  alias HighWireWeb.Components.{Nav, Shell}
+  alias HighWireWeb.Components.{Mentions, Nav, Relationship, Shell}
   alias HighWireWeb.MessageText
 
   import HighWireWeb.Components.Time, only: [age: 1]
@@ -53,6 +53,7 @@ defmodule HighWireWeb.PostLive do
        like_pending: MapSet.new(),
        like_error: nil,
        mention_suggestions: [],
+       relationships: %{},
        blob_rev: 0
      )}
   end
@@ -137,6 +138,7 @@ defmodule HighWireWeb.PostLive do
     {status, payload} = Timeline.snapshot()
     post = Timeline.post(raw_key)
     {root, replies, not_found} = thread(post, socket.assigns)
+    relationships = relationships(payload, root, replies)
 
     socket
     |> assign(
@@ -159,6 +161,7 @@ defmodule HighWireWeb.PostLive do
       likes_by: Map.get(payload, :likes_by, %{}),
       my_likes: Map.get(payload, :my_likes, []),
       self_id: Map.get(payload, :self_id),
+      relationships: relationships,
       blob_rev: Map.get(payload, :blob_rev, 0)
     )
     |> request_missing_profiles()
@@ -176,8 +179,25 @@ defmodule HighWireWeb.PostLive do
   end
 
   defp thread(nil, _assigns), do: {nil, [], true}
-
   defp thread(post, _assigns), do: {post.root, post.replies || [], false}
+
+  # The reader's standing with everyone this thread shows. One read of the
+  # store's incoming edges for the whole page, the same trade the feed
+  # makes: a byline is a map lookup, not a question to the store.
+  defp relationships(payload, root, replies) do
+    ids =
+      [if(is_map(root), do: author_of(root)) | Enum.map(replies, &author_of/1)]
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+
+    Relations.standings(ids,
+      self_id: Map.get(payload, :self_id),
+      follows: Map.get(payload, :follows, []),
+      blocked: Map.get(payload, :blocked, [])
+    )
+  end
+
+  defp standing(relationships, id), do: Map.get(relationships, id)
 
   # The message the reader asked for carries the hook that brings it into
   # view, so the landing stays with the element: the browser scrolls when
@@ -422,6 +442,7 @@ defmodule HighWireWeb.PostLive do
   attr :profiles, :map, required: true
   attr :rev, :any, default: nil
   attr :class, :string, default: "mt-1.5"
+  attr :relationships, :map, default: %{}
 
   # A message that says nothing in words still said something — a block,
   # a follow, a like — and reads as a sentence here instead of leaving a
@@ -459,6 +480,7 @@ defmodule HighWireWeb.PostLive do
             <span :if={profile_href(id) == nil} class="not-italic text-ink">
               {name || Ident.display_name(id, @profiles)}
             </span>
+            <Relationship.badge standing={Map.get(@relationships, id)} />
           </span>
       <% end %>
     </div>
@@ -553,6 +575,7 @@ defmodule HighWireWeb.PostLive do
               rev={@blob_rev}
             />
             <span class="min-w-0 truncate">{Ident.display_name(who, @profiles)}</span>
+            <Relationship.badge standing={standing(@relationships, who)} class="ml-auto" />
           </Nav.rail_link>
 
           <p :if={@replies != []} class="px-4 pt-3 text-xs text-faint">
@@ -599,6 +622,7 @@ defmodule HighWireWeb.PostLive do
                         {Ident.display_name(author_of(@root), @profiles)}
                       </span>
                     </span>
+                    <Relationship.badge standing={standing(@relationships, author_of(@root))} />
                     <span class="text-xs text-faint"><.age ts={ts(@root)} /></span>
                     <span
                       :if={@root["value"]["private"]}
@@ -633,6 +657,7 @@ defmodule HighWireWeb.PostLive do
                     msg={@root}
                     profiles={@profiles}
                     rev={@blob_rev}
+                    relationships={@relationships}
                     class="mt-3"
                   />
 
@@ -703,6 +728,7 @@ defmodule HighWireWeb.PostLive do
                       {Ident.display_name(author_of(reply), @profiles)}
                     </span>
                   </span>
+                  <Relationship.badge standing={standing(@relationships, author_of(reply))} />
                   <span class="text-xs text-faint"><.age ts={ts(reply)} /></span>
                   <span
                     :if={reply["value"]["private"]}
@@ -721,6 +747,7 @@ defmodule HighWireWeb.PostLive do
                   msg={reply}
                   profiles={@profiles}
                   rev={@blob_rev}
+                  relationships={@relationships}
                 />
 
                 <%!-- A wrap: the same reason as the root's line — many
@@ -825,6 +852,7 @@ defmodule HighWireWeb.PostLive do
                       class="shrink-0"
                     />
                     <span class="min-w-0 truncate text-paper">{name}</span>
+                    <Relationship.badge standing={Map.get(@relationships, id)} />
                     <span class="ml-auto shrink-0 font-mono text-[10px] text-faint">
                       {Ident.short_id(id)}
                     </span>

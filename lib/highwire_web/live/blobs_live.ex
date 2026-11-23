@@ -34,8 +34,8 @@ defmodule HighWireWeb.BlobsLive do
   use HighWireWeb, :live_view
 
   alias HighWire.BlobIndex
-  alias HighWire.SSB.Profile
-  alias HighWireWeb.Components.{Nav, Shell}
+  alias HighWire.SSB.{Identities, Profile, Relations}
+  alias HighWireWeb.Components.{Avatar, Nav, Relationship, Shell}
   import HighWireWeb.Components.Time, only: [age: 1, rel_time: 1]
 
   # Tens of thousands of blobs live here, but they arrive in a few
@@ -645,6 +645,18 @@ defmodule HighWireWeb.BlobsLive do
   defp name(author) when is_binary(author), do: Profile.display_name(author)
   defp name(_author), do: "someone"
 
+  # One pass for the posts on this page: every bundle's author resolved
+  # against the reader's own edges, so each mark is a map lookup.
+  defp standings(bundles) do
+    case Identities.active() do
+      %{"id" => self_id} when is_binary(self_id) ->
+        Relations.standings_for(Enum.map(bundles, & &1.author), self_id)
+
+      _ ->
+        %{}
+    end
+  end
+
   defp profile_href(id), do: "/profile?id=" <> URI.encode_www_form(id)
 
   # Post routes carry the message id base64-encoded, the same way the
@@ -749,6 +761,8 @@ defmodule HighWireWeb.BlobsLive do
 
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :standings, standings(assigns.bundles))
+
     ~H"""
     <Shell.app gossip={@gossip}>
       <:rail>
@@ -991,7 +1005,14 @@ defmodule HighWireWeb.BlobsLive do
               class="py-4"
             >
               <div class="flex items-baseline justify-between gap-3 text-xs">
-                <div class="flex min-w-0 items-baseline gap-1.5 text-faint">
+                <div class="flex min-w-0 items-center gap-1.5 text-faint">
+                  <Avatar.avatar
+                    :if={bundle.author}
+                    id={bundle.author}
+                    size={16}
+                    image={Profile.image(bundle.author)}
+                    rev={Profile.rev()}
+                  />
                   <a
                     :if={bundle.author}
                     href={profile_href(bundle.author)}
@@ -1000,6 +1021,10 @@ defmodule HighWireWeb.BlobsLive do
                   >
                     {name(bundle.author)}
                   </a>
+                  <Relationship.badge
+                    :if={bundle.author}
+                    standing={Map.get(@standings, bundle.author)}
+                  />
                   <span :if={!bundle.author}>someone</span>
                   <span :if={bundle.ts} title="When the post was published">
                     · posted <.age ts={bundle.ts} />

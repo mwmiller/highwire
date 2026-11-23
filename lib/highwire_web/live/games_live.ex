@@ -17,8 +17,8 @@ defmodule HighWireWeb.GamesLive do
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
   alias HighWire.Games.{Catalog, Filter, Interest}
-  alias HighWire.SSB.{Identities, Profile}
-  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Shell, Time}
+  alias HighWire.SSB.{Identities, Profile, Relations}
+  alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Relationship, Shell, Time}
 
   # The stores are append-only, so the room shows a page of what changed
   # recently and pages back through every game the catalog holds. Nothing
@@ -562,6 +562,7 @@ defmodule HighWireWeb.GamesLive do
   attr :title, :string, required: true
   attr :games, :list, required: true
   attr :self_id, :string, default: nil
+  attr :standings, :map, default: %{}
 
   defp section(assigns) do
     ~H"""
@@ -570,7 +571,12 @@ defmodule HighWireWeb.GamesLive do
         {@title} <span class="text-faint">· {count(@games)}</span>
       </h3>
       <div :if={@games != []} class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <.game_card :for={game <- @games} game={game} self_id={@self_id} />
+        <.game_card
+          :for={game <- @games}
+          game={game}
+          self_id={@self_id}
+          standings={@standings}
+        />
       </div>
     </section>
     """
@@ -582,6 +588,7 @@ defmodule HighWireWeb.GamesLive do
 
   attr :invitee, :string, default: nil
   attr :invitees, :list, required: true
+  attr :standings, :map, default: %{}
 
   # Who a new challenge is addressed to. The menu lists the feeds this
   # reader follows, named the way the rest of the room names them; the open
@@ -592,6 +599,7 @@ defmodule HighWireWeb.GamesLive do
       <summary class="flex cursor-pointer list-none items-center gap-1 rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper [&::-webkit-details-marker]:hidden">
         <span class="text-[10px] uppercase tracking-wide text-faint">with</span>
         <span class="max-w-24 truncate">{choice(@invitee)}</span>
+        <Relationship.badge :if={@invitee} standing={Map.get(@standings, @invitee)} />
         <svg
           class="h-2.5 w-2.5 text-faint transition group-open:rotate-180"
           viewBox="0 0 10 10"
@@ -620,7 +628,11 @@ defmodule HighWireWeb.GamesLive do
           onclick="this.closest('details').removeAttribute('open')"
           class={choice_class(id == @invitee)}
         >
-          {name(id)}
+          <span class="inline-flex items-center gap-1.5">
+            <Avatar.avatar id={id} size={14} />
+            {name(id)}
+            <Relationship.badge standing={Map.get(@standings, id)} />
+          </span>
         </button>
       </div>
     </details>
@@ -657,6 +669,12 @@ defmodule HighWireWeb.GamesLive do
 
   @impl true
   def render(assigns) do
+    ids =
+      Enum.flat_map(assigns.games, &[&1.challenger, opponent(&1)]) ++
+        List.wrap(assigns.invitees)
+
+    assigns = assign(assigns, :standings, Relations.standings_for(ids, assigns.self_id))
+
     ~H"""
     <Shell.app>
       <:rail>
@@ -681,7 +699,11 @@ defmodule HighWireWeb.GamesLive do
               </span>
               <span class="text-[10px] uppercase tracking-wide text-faint">new game</span>
 
-              <.invite_picker invitee={@invitee} invitees={@invitees} />
+              <.invite_picker
+                invitee={@invitee}
+                invitees={@invitees}
+                standings={@standings}
+              />
 
               <button
                 phx-click="new"
@@ -732,6 +754,7 @@ defmodule HighWireWeb.GamesLive do
             title={title}
             games={games}
             self_id={@self_id}
+            standings={@standings}
           />
 
           <div :if={length(@games) < @total} class="mt-4 flex justify-center">
@@ -750,6 +773,7 @@ defmodule HighWireWeb.GamesLive do
 
   attr :game, :map, required: true
   attr :self_id, :string, default: nil
+  attr :standings, :map, default: %{}
 
   defp game_card(assigns) do
     ~H"""
@@ -768,10 +792,15 @@ defmodule HighWireWeb.GamesLive do
           <div class="flex min-w-0 items-center gap-2">
             <Avatar.face :if={@game.challenger} id={@game.challenger} size={18} />
             <span class="truncate text-xs text-muted">{name(@game.challenger)}</span>
+            <Relationship.badge
+              :if={@game.challenger}
+              standing={Map.get(@standings, @game.challenger)}
+            />
             <span :if={seat = opponent(@game)} class="flex min-w-0 items-center gap-2">
               <span class="text-[10px] uppercase tracking-wide text-faint">vs</span>
               <Avatar.face id={seat} size={18} />
               <span class="truncate text-xs text-muted">{name(seat)}</span>
+              <Relationship.badge standing={Map.get(@standings, seat)} />
             </span>
           </div>
         </div>
