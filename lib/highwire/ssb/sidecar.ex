@@ -363,20 +363,26 @@ defmodule HighWire.SSB.Sidecar do
 
   defp stop_pidfile_engine do
     case read_pidfile() do
-      %{"os_pid" => pid} when is_integer(pid) ->
+      %{"os_pid" => pid} = leftover when is_integer(pid) ->
         # The pidfile survives the process that wrote it, so its pid can
         # name anything by now. Only ever signal our own engine: a
-        # recycled pid would take an innocent process down with it. A
-        # stale pidfile is dropped either way.
-        if beam?(to_string(pid)) do
-          System.cmd("kill", ["-TERM", to_string(pid)], stderr_to_stdout: true)
-        end
-
-        remove_pidfile(pid)
+        # recycled pid would take an innocent process down with it, and
+        # a live other HighWire's engine is not ours to stop. A pidfile
+        # naming an engine we may not touch is left where its owner can
+        # still find it.
+        if ours?(leftover), do: stop_engine_at(pid)
 
       _none ->
         :ok
     end
+  end
+
+  defp stop_engine_at(pid) do
+    if beam?(to_string(pid)) do
+      System.cmd("kill", ["-TERM", to_string(pid)], stderr_to_stdout: true)
+    end
+
+    remove_pidfile(pid)
   end
 
   defp stop_port_listener(port) do
@@ -803,12 +809,37 @@ defmodule HighWire.SSB.Sidecar do
   def owner_pid(port, leftover) do
     case leftover do
       %{"os_pid" => pid, "port" => ^port} when is_integer(pid) ->
-        if os_alive?(pid), do: pid, else: nil
+        if os_alive?(pid) and ours?(leftover), do: pid, else: nil
 
       _ ->
         nil
     end
   end
+
+  # The pidfile is shared by every HighWire pointed at this home: the
+  # app, a second dev server, a script. It answers "which engine is
+  # here" for all of them, but it only says an engine is OURS when the
+  # VM that spawned it is this one — or is gone, which is the leftover
+  # a crash leaves behind. Taking a live process's engine on the
+  # strength of a shared file is how quitting the app used to stop the
+  # engine a dev server was reading its feed from: the ports matched,
+  # so the pid looked owned, and terminate/2 stopped it.
+  defp ours?(leftover) do
+    case Map.get(leftover, "by") do
+      by when is_binary(by) ->
+        case Integer.parse(by) do
+          {spawner, ""} -> spawner == me() or not os_alive?(spawner)
+          _ -> true
+        end
+
+      # A pidfile from before `by` was written: the old rule, so a
+      # leftover from an earlier build can still be reaped.
+      _ ->
+        true
+    end
+  end
+
+  defp me, do: System.pid() |> String.to_integer()
 
   defp muxrpc_ok?(port) do
     secret = Path.join(HighWire.ssb_dir(), "secret")
@@ -1459,8 +1490,13 @@ defmodule HighWire.SSB.Sidecar do
 
   defp pidfile_path, do: Path.join(HighWire.home_dir(), "sidecar.json")
 
+  # `by` names the HighWire VM that spawned the engine, so a pidfile
+  # found later says whether the engine is this process's leftover or
+  # another HighWire's live engine (see ours?/1).
   defp write_pidfile(port, os_pid) do
-    case File.write(pidfile_path(), Jason.encode!(%{"port" => port, "os_pid" => os_pid})) do
+    body = %{"port" => port, "os_pid" => os_pid, "by" => System.pid()}
+
+    case File.write(pidfile_path(), Jason.encode!(body)) do
       :ok ->
         :ok
 

@@ -28,6 +28,50 @@ defmodule HighWire.SSB.SidecarTest do
       assert Sidecar.owner_pid(8899, %{"os_pid" => 1}) == nil
       assert Sidecar.owner_pid(8899, %{"port" => 8899}) == nil
     end
+
+    # The pidfile is shared by every HighWire on this home, so a live
+    # engine is only ours when this VM spawned it. Otherwise quitting
+    # the app (or a second dev server) stops the engine the first
+    # server is reading its feed from.
+    test "claims an engine this VM spawned" do
+      me = System.pid() |> String.to_integer()
+
+      assert Sidecar.owner_pid(8899, %{"os_pid" => me, "port" => 8899, "by" => System.pid()}) ==
+               me
+    end
+
+    test "ignores an engine another live HighWire spawned, and reaps it once that one is gone" do
+      me = System.pid() |> String.to_integer()
+      other = spawn_sleeper()
+      leaked = %{"os_pid" => me, "port" => 8899, "by" => to_string(other)}
+
+      assert Sidecar.owner_pid(8899, leaked) == nil
+
+      stop_sleeper(other)
+      assert Sidecar.owner_pid(8899, leaked) == me
+    end
+  end
+
+  defp spawn_sleeper do
+    port = Port.open({:spawn_executable, "/bin/sleep"}, [:binary, {:args, ["30"]}])
+    {:os_pid, pid} = :erlang.port_info(port, :os_pid)
+    pid
+  end
+
+  defp stop_sleeper(pid) do
+    System.cmd("kill", ["-TERM", to_string(pid)], stderr_to_stdout: true)
+    wait_until_gone(pid, 50)
+  end
+
+  defp wait_until_gone(_pid, 0), do: :ok
+
+  defp wait_until_gone(pid, tries) do
+    if match?({_, 0}, System.cmd("kill", ["-0", to_string(pid)], stderr_to_stdout: true)) do
+      Process.sleep(20)
+      wait_until_gone(pid, tries - 1)
+    else
+      :ok
+    end
   end
 
   # The engine's logger renders with an explicit depth: without it a
