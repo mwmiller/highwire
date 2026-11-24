@@ -61,6 +61,42 @@ defmodule HighWireWeb.MessageTextTest do
     end
   end
 
+  describe "about updates" do
+    test "a definition of someone else names the feed it touches" do
+      bob = "@bob.ed25519"
+      short = HighWire.Avatar.short_id(bob)
+
+      assert MessageText.describe(msg(%{"type" => "about", "about" => bob, "name" => "Bob"})) ==
+               "set #{short}'s display name"
+
+      assert MessageText.describe(
+               msg(%{"type" => "about", "about" => bob, "description" => "hi"})
+             ) == "wrote #{short}'s bio"
+
+      assert MessageText.describe(msg(%{"type" => "about", "about" => bob})) ==
+               "updated #{short}'s profile"
+    end
+
+    test "a definition of the author's own feed does not repeat their name" do
+      me = "@maya.ed25519"
+
+      about = fn fields ->
+        %{
+          "key" => "%m.sha256",
+          "value" => %{"author" => me, "content" => Map.put(fields, "type", "about")}
+        }
+      end
+
+      assert MessageText.describe(about.(%{"about" => me, "name" => "Maya"})) ==
+               "set their display name"
+
+      assert MessageText.describe(about.(%{"about" => me, "description" => "hello"})) ==
+               "wrote their bio"
+
+      assert MessageText.describe(about.(%{"about" => me})) == "updated their profile"
+    end
+  end
+
   describe "other payloads" do
     test "a textless post names the channel it landed in" do
       assert MessageText.describe(msg(%{"type" => "post", "channel" => "drama"})) ==

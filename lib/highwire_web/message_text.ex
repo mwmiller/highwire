@@ -161,7 +161,7 @@ defmodule HighWireWeb.MessageText do
   # Every type carries its own payload, so name the specific thing
   # rather than echoing the raw protocol type at the reader.
   defp typed_label("contact", c, _msg, ctx), do: contact_label(c, ctx)
-  defp typed_label("about", c, _msg, ctx), do: about_label(c, ctx)
+  defp typed_label("about", c, msg, ctx), do: about_label(c, msg, ctx)
   defp typed_label("channel", c, _msg, _ctx), do: channel_label(c)
   defp typed_label("pub", c, _msg, _ctx), do: pub_label(c)
   defp typed_label("room/alias", c, _msg, _ctx), do: alias_label(c)
@@ -207,17 +207,27 @@ defmodule HighWireWeb.MessageText do
   # An about message sets a name/description for the feed it points at.
   # Resolve that feed to a display name when we can; fall back to the
   # generic phrase when the target isn't in the index.
-  defp about_label(%{"about" => about} = c, ctx) when is_binary(about) do
-    target = Map.get(index(ctx), about) || about
+  #
+  # A definition of the author's own feed is the exception: the row
+  # already names the author, so "Maya set Maya's display name" is not a
+  # sentence. It reads as one about themselves, the same way an edit of
+  # one's own post reads "edited their post".
+  defp about_label(%{"about" => about} = c, msg, ctx) when is_binary(about) do
+    whose =
+      if about == author_of(msg) do
+        "their"
+      else
+        "#{Ident.display_name(Map.get(index(ctx), about) || about, ctx)}'s"
+      end
 
     cond do
-      is_binary(c["name"]) -> "set #{Ident.display_name(target, ctx)}'s display name"
-      is_binary(c["description"]) -> "wrote #{Ident.display_name(target, ctx)}'s bio"
-      true -> "updated #{Ident.display_name(target, ctx)}'s profile"
+      is_binary(c["name"]) -> "set #{whose} display name"
+      is_binary(c["description"]) -> "wrote #{whose} bio"
+      true -> "updated #{whose} profile"
     end
   end
 
-  defp about_label(c, _ctx) do
+  defp about_label(c, _msg, _ctx) do
     cond do
       Map.has_key?(c, "name") -> "set a display name"
       Map.has_key?(c, "description") -> "wrote a bio"

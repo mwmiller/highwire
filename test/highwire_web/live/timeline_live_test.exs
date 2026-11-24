@@ -763,12 +763,13 @@ defmodule HighWireWeb.TimelineLiveTest do
 
       # No profiles are loaded in this payload, so the target resolves to
       # its short id — the label still names the profile it touched,
-      # which is the point.
-      alice = HighWire.Avatar.short_id("@alice:.ed25519")
+      # which is the point. Alice's update is about Alice herself, and a
+      # row already names its author, so it reads as her own profile
+      # rather than repeating her name.
       bob = HighWire.Avatar.short_id("@bob:.ed25519")
 
-      assert html =~ "set #{alice}"
-      assert html =~ "display name"
+      assert html =~ "set their display name"
+      refute html =~ "set #{HighWire.Avatar.short_id("@alice:.ed25519")}"
       assert html =~ "wrote #{bob}"
       assert html =~ "bio"
       refute html =~ "sent a about"
