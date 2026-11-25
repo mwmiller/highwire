@@ -499,6 +499,11 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # The job's CFLAGS are gcc-style for the Erlang port compiler,
+          # and MSVC's cl rejects them (D8021 on -Wno-error=...). Rust
+          # deps that compile C — ring, behind the updater's TLS — need
+          # cl to see only the vcpkg headers here.
+          CFLAGS: -IC:/vcpkg/installed/x64-windows/include
         run: tauri build --config tauri.windows.conf.json
 
       - uses: actions/upload-artifact@v6
