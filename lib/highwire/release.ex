@@ -27,10 +27,14 @@ defmodule HighWire.Release do
   NIF at its own directory — `$ORIGIN` (patchelf) on Linux, `@loader_path`
   (install_name_tool) on macOS — so it carries its libsodium with it.
 
+  Windows needs the same DLL and nothing else: OTP opens a NIF with
+  `LOAD_WITH_ALTERED_SEARCH_PATH`, whose search starts in the NIF's own
+  directory, so a `sodium.dll` copied beside `enacl_nif.dll` is found
+  without any rpath step. The workflow names the vcpkg DLL in
+  `HIGHWIRE_SODIUM_DLL` and fails the build if it never arrives.
+
   Best-effort: a missing tool or library only warns, so a source checkout
   still produces a (host-dependent) release instead of failing the build.
-  Windows is out of scope here — its `sodium.dll` gap is handled
-  separately.
   """
   @spec bundle_libsodium(%{path: Path.t()}) :: %{path: Path.t()}
   def bundle_libsodium(%{path: path} = rel) do
@@ -42,15 +46,25 @@ defmodule HighWire.Release do
   end
 
   @doc """
-  Every `enacl_nif.so` in an assembled release: HighWire's own and the
-  engine's copy under `priv/erlbutt`.
+  Every enacl NIF in an assembled release, HighWire's own and the
+  engine's copy under `priv/erlbutt`, whichever platform's suffix it
+  carries.
   """
   @spec nif_paths(Path.t()) :: [Path.t()]
   def nif_paths(release_path) do
-    Path.wildcard(Path.join(release_path, "lib/**/enacl_nif.so"))
+    Enum.flat_map(["enacl_nif.so", "enacl_nif.dll"], fn name ->
+      Path.wildcard(Path.join(release_path, "lib/**/#{name}"))
+    end)
   end
 
   defp bundle(nif) do
+    case :os.type() do
+      {:win32, _} -> bundle_windows(nif)
+      _unix -> bundle_unix(nif)
+    end
+  end
+
+  defp bundle_unix(nif) do
     with {:ok, lib} <- libsodium(nif),
          :ok <- place(lib, nif),
          :ok <- repoint(nif, lib) do
@@ -58,6 +72,22 @@ defmodule HighWire.Release do
     else
       {:error, reason} ->
         IO.puts(:stderr, "warning: release left libsodium unbundled for #{nif}: #{reason}")
+    end
+  end
+
+  # No repointing to do on Windows: the NIF's directory is already where
+  # its dependencies are looked for first, so copying the DLL beside the
+  # NIF is the whole fix. The workflow names the DLL it wants carried.
+  defp bundle_windows(nif) do
+    with dll when dll != "" <- System.get_env("HIGHWIRE_SODIUM_DLL") || "",
+         :ok <- copy(dll, Path.join(Path.dirname(nif), Path.basename(dll))) do
+      IO.puts("release: bundled #{Path.basename(dll)} beside #{nif}")
+    else
+      _missing ->
+        IO.puts(
+          :stderr,
+          "warning: release left sodium.dll unbundled for #{nif}: HIGHWIRE_SODIUM_DLL named no DLL that could be copied"
+        )
     end
   end
 

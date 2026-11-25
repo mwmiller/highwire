@@ -30,6 +30,31 @@ defmodule HighWire.ReleaseTest do
 
       assert Enum.sort(Release.nif_paths(dir)) == Enum.sort([app, engine])
     end
+
+    @tag :tmp_dir
+    test "nif_paths finds the Windows NIFs too", %{tmp_dir: dir} do
+      app = Path.join([dir, "lib", "enacl-1.1.1", "priv", "enacl_nif.dll"])
+
+      engine =
+        Path.join([
+          dir,
+          "lib",
+          "highwire-1.1.7",
+          "priv",
+          "erlbutt",
+          "lib",
+          "enacl-1.1.1",
+          "priv",
+          "enacl_nif.dll"
+        ])
+
+      for nif <- [app, engine] do
+        File.mkdir_p!(Path.dirname(nif))
+        File.write!(nif, "")
+      end
+
+      assert Enum.sort(Release.nif_paths(dir)) == Enum.sort([app, engine])
+    end
   end
 
   describe "bundling libsodium" do

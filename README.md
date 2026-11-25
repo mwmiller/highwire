@@ -85,8 +85,9 @@ first move, not a habit.
 - The engine's `enacl` sodium NIF is dlopen'd, so the bundlers never
   see it; the release copies libsodium next to the NIF and repoints the
   NIF at its own directory, keeping the engine self-contained on Linux
-  and macOS whatever the host provides. Known gap: the Windows build
-  still needs `sodium.dll` beside the backend at runtime.
+  and macOS whatever the host provides. On Windows the same copy is
+  enough — OTP resolves a NIF's dependencies from the NIF's own
+  directory — and the workflow fails the build if the DLL is missing.
 
 ## Data and identity
 
