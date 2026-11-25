@@ -583,8 +583,10 @@ jobs:
 
           platforms = {}
 
+          # download-artifact keeps each bundle's own directory
+          # (macos/, appimage/, nsis/), so the search is recursive.
           def add(platform, pattern):
-              for path in sorted(glob.glob(f"dist/{pattern}")):
+              for path in sorted(glob.glob(f"dist/**/{pattern}", recursive=True)):
                   signature = path + ".sig"
                   if not os.path.isfile(signature):
                       continue
@@ -596,9 +598,9 @@ jobs:
                   }
 
           add("darwin-aarch64", "*.app.tar.gz")
-          add("linux-x86_64", "*_amd64.AppImage.tar.gz")
-          add("linux-aarch64", "*_aarch64.AppImage.tar.gz")
-          add("windows-x86_64", "*.nsis.zip")
+          add("linux-x86_64", "*_amd64.AppImage")
+          add("linux-aarch64", "*_aarch64.AppImage")
+          add("windows-x86_64", "*_x64-setup.exe")
 
           if not platforms:
               raise SystemExit("no signed updater artifacts to publish")
