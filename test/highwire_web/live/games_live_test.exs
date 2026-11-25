@@ -197,7 +197,8 @@ defmodule HighWireWeb.GamesLiveTest do
 
       {:ok, view, html} = live(conn, "/games")
 
-      assert html =~ "2 of 2 shown"
+      # Nothing is filtered, so the shelf says nothing about its own size.
+      refute html =~ "shown"
       refute html =~ "clear"
 
       html = view |> element("button[data-facet='length'][data-value='short']") |> render_click()
@@ -211,7 +212,21 @@ defmodule HighWireWeb.GamesLiveTest do
       assert html =~ "No game matches that"
 
       html = view |> element("button", "clear") |> render_click()
-      assert html =~ "2 of 2 shown"
+      refute html =~ "shown"
+    end
+
+    test "a big room says how much of it survives the filters, without figures", %{conn: conn} do
+      # Thirteen short games and one long one: the shelf is too crowded to
+      # read as two numbers, so it says how much it is holding back.
+      for i <- 1..13, do: seed_legacy([{1, "d2", "d4", "d4"}], byte: i)
+      seed_legacy(ruy_lopez(), byte: 0xAB)
+
+      {:ok, view, html} = live(conn, "/games")
+      refute html =~ "shown"
+
+      html = view |> element("button[data-facet='length'][data-value='short']") |> render_click()
+
+      assert html =~ "about a dozen games shown · a game hidden"
     end
 
     test "the room can be read a period at a time", %{conn: conn} do

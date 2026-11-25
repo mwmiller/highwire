@@ -98,6 +98,21 @@ defmodule HighWire.TimelineTest do
              }
     end
 
+    test "reply content carries the thread's channel when it has one" do
+      content = Timeline.reply_content("%root=.sha256", "%parent=.sha256", "yo", "music")
+
+      # Other clients file a reply under the root's channel; a reply that
+      # drops it reads outside the thread it answers.
+      assert content["channel"] == "music"
+
+      for channel <- [nil, ""] do
+        refute Map.has_key?(
+                 Timeline.reply_content("%root=.sha256", "%parent=.sha256", "yo", channel),
+                 "channel"
+               )
+      end
+    end
+
     test "vote content matches this network's production shape" do
       assert Timeline.vote_content("%target=.sha256", 1) == %{
                "type" => "vote",
@@ -923,7 +938,6 @@ defmodule HighWire.TimelineTest do
       %{
         feed: [],
         messages: [],
-        reply_counts: %{},
         like_counts: %{},
         likes_by: %{},
         my_likes: [],
@@ -2507,6 +2521,89 @@ defmodule HighWire.TimelineTest do
       assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%f=.sha256", "%s=.sha256"]
     end
 
+    test "a thread whose engine view lists its root shows it once" do
+      # patchwork.thread.sorted can list the thread's head among the
+      # replies; the page draws the root already, so a second copy would
+      # read as a depth-0 reply and add one to the reply count.
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      reply =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      {:ok, client} = ThreadClient.start([root, reply, reply])
+      st = %{client: client, messages: %{messages: [root]}}
+      {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
+
+      assert post.root["key"] == "%r=.sha256"
+      assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256"]
+      assert Enum.map(post.replies, & &1.thread_depth) == [0]
+    end
+
+    test "a row and its thread page count the same replies" do
+      # The roots rollup counts only what the engine's thread view seated;
+      # the window also carries a fork the page renders. The row must show
+      # the page's total, not a second one of its own.
+      [root, reply, fork | _] = fork_window()
+
+      item = %{
+        "key" => root["key"],
+        "value" => root["value"],
+        "timestamp" => root["timestamp"],
+        "totalReplies" => 1,
+        "latestReplies" => [reply]
+      }
+
+      {:ok, client} = ScriptClient.start([{:item, item}, :done])
+
+      state = %{
+        client: client,
+        pages_client: nil,
+        self_id: "@me=.ed25519",
+        messages: %{messages: [root, reply, fork]},
+        pending: %{}
+      }
+
+      {:reply, page, _state} =
+        Timeline.handle_call({:feed, :public, nil}, {self(), make_ref()}, state)
+
+      assert [row] = page.rows
+
+      {:reply, post, _state} =
+        Timeline.handle_call({:post, root["key"]}, {self(), make_ref()}, %{
+          client: nil,
+          messages: %{messages: [root, reply, fork]}
+        })
+
+      assert row.replies == Timeline.reply_count(post.replies)
+      assert row.replies == 2
+      assert Timeline.reply_summary(row.replies) == "a few replies"
+    end
+
+    test "a big thread is counted the way people count" do
+      assert Timeline.reply_summary(0) == "no replies"
+      assert Timeline.reply_summary(1) == "a reply"
+      assert Timeline.reply_summary(3) == "a few replies"
+      assert Timeline.reply_summary(9) == "several replies"
+      assert Timeline.reply_summary(12) == "about a dozen replies"
+      assert Timeline.reply_summary(20) == "a score of replies"
+
+      for count <- [99, 100, 101] do
+        assert Timeline.reply_summary(count) == "dozens of replies"
+      end
+
+      assert Timeline.reply_summary(250) == "hundreds of replies"
+      assert Timeline.reply_summary(4_000) == "thousands of replies"
+      assert Timeline.reply_summary(40_000) == "tens of thousands of replies"
+      assert Timeline.reply_summary(400_000) == "hundreds of thousands of replies"
+      assert Timeline.reply_summary(4_000_000) == "millions of replies"
+      assert Timeline.reply_summary(4_000_000_000) == "billions of replies"
+    end
+
     test "each reply carries its hop count from the root" do
       # The chain the post viewer indents by: a root reply is 0, a fork
       # answering a reply is 1, and a fork answering that fork is 2.
@@ -2546,6 +2643,67 @@ defmodule HighWire.TimelineTest do
                {"%f=.sha256", 1},
                {"%g=.sha256", 2}
              ]
+    end
+
+    test "a root cycle ends the hop count instead of recursing forever" do
+      # Two replies naming each other in root is malformed, not merely
+      # deep: without a seen set the hop walk would recurse until the
+      # Timeline process died, taking its callers with it. The cycle must
+      # end the count and still seat both replies.
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      a =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "one",
+          "root" => "%b=.sha256",
+          "branch" => ["%b=.sha256"],
+          "fork" => "%r=.sha256"
+        })
+
+      b =
+        msg("@c=.ed25519", "%b=.sha256", 3_000, %{
+          "type" => "post",
+          "text" => "two",
+          "root" => "%a=.sha256",
+          "branch" => ["%a=.sha256"],
+          "fork" => "%r=.sha256"
+        })
+
+      st = %{client: nil, messages: %{messages: [root, a, b]}}
+      {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
+
+      assert Enum.map(post.replies, & &1["key"]) == ["%a=.sha256", "%b=.sha256"]
+
+      assert Enum.all?(
+               post.replies,
+               &(is_integer(&1.thread_depth) and &1.thread_depth <= Timeline.thread_root_depth())
+             )
+    end
+
+    test "reply counts belong to the thread, not the parent a fork names" do
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      reply =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      fork =
+        msg("@c=.ed25519", "%f=.sha256", 3_000, %{
+          "type" => "post",
+          "text" => "second",
+          "root" => "%a=.sha256",
+          "branch" => ["%a=.sha256"],
+          "fork" => "%r=.sha256"
+        })
+
+      # Counting raw roots credited the fork's parent instead, leaving the
+      # thread's own total short by every nested reply.
+      assert Timeline.reply_counts([root, reply, fork]) == %{"%r=.sha256" => 2}
     end
 
     test "a get that answers with the engine's error map still resolves the thread" do

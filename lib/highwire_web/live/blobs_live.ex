@@ -34,6 +34,7 @@ defmodule HighWireWeb.BlobsLive do
   use HighWireWeb, :live_view
 
   alias HighWire.BlobIndex
+  alias HighWire.CountWords
   alias HighWire.SSB.{Identities, Profile, Relations}
   alias HighWireWeb.Components.{Avatar, Nav, Relationship, Shell}
   import HighWireWeb.Components.Time, only: [age: 1, rel_time: 1]
@@ -549,16 +550,6 @@ defmodule HighWireWeb.BlobsLive do
 
   defp count(counts, kind), do: Map.get(counts, kind, 0)
 
-  # Store totals run to six figures; grouped digits are read at a glance
-  # where a run of them is not.
-  defp number(n) when is_integer(n) do
-    n
-    |> Integer.to_string()
-    |> String.reverse()
-    |> then(&Regex.replace(~r/(\d{3})(?=\d)/, &1, "\\1,"))
-    |> String.reverse()
-  end
-
   # `{@kinds}` in a template is an assign lookup, not the module attribute.
   defp kinds, do: @kinds
   defp attachments, do: @attachments
@@ -731,20 +722,6 @@ defmodule HighWireWeb.BlobsLive do
     """
   end
 
-  # What the page is showing: the posts drawn, the blobs in them and
-  # their bytes. Nothing is counted that is not on the page.
-  defp summary(assigns) do
-    posts = length(assigns.bundles)
-
-    [
-      if(posts > 0, do: "#{number(posts)} posts"),
-      "#{number(assigns.drawn_count)} blobs",
-      size(assigns.drawn_size)
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join(" · ")
-  end
-
   # The active filters, spelled the way the rail labels them, so a
   # narrowed list explains itself instead of looking like a small store.
   defp active_filters(assigns) do
@@ -772,7 +749,7 @@ defmodule HighWireWeb.BlobsLive do
             Indexing the blob store…
           </p>
           <p :if={@status != :indexing} class="px-4 text-xs text-muted">
-            {number(count(@counts, :all))} blobs · {size(@total_size)}
+            {CountWords.phrase(count(@counts, :all), "blob")} · {size(@total_size)}
           </p>
           <p class="px-4 pt-1 text-xs text-faint">
             Read from this machine's blob store. Each post reads with the blobs it
@@ -961,8 +938,12 @@ defmodule HighWireWeb.BlobsLive do
             The blob store is empty.
           </p>
 
-          <p :if={count(@counts, :all) > 0} id="blobs-summary" class="mt-4 text-xs text-faint">
-            {summary(assigns)}
+          <p
+            :if={@status == :ready and count(@counts, :all) > 0}
+            id="blobs-summary"
+            class="mt-4 text-xs text-faint"
+          >
+            {size(@drawn_size)}
           </p>
 
           <p
@@ -1035,7 +1016,7 @@ defmodule HighWireWeb.BlobsLive do
                 </div>
 
                 <div class="flex shrink-0 items-baseline gap-2 text-faint">
-                  <span>{number(length(bundle.rows))} blobs · {size(bundle.size)}</span>
+                  <span>{size(bundle.size)}</span>
                   <.link
                     navigate={post_path(bundle.key)}
                     title="Open the post that carried these blobs"
@@ -1079,9 +1060,7 @@ defmodule HighWireWeb.BlobsLive do
                 phx-value-key={bundle.key}
                 class="mt-2 text-xs text-sub transition hover:text-paper"
               >
-                {if MapSet.member?(@expanded, bundle.key),
-                  do: "Show fewer",
-                  else: "Show all " <> number(length(bundle.rows))}
+                {if MapSet.member?(@expanded, bundle.key), do: "Show fewer", else: "Show all"}
               </button>
             </article>
           </div>

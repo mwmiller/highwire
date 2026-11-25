@@ -25,6 +25,7 @@ defmodule HighWireWeb.TimelineLive do
 
   alias HighWire.Avatar, as: Ident
   alias HighWire.Contacts
+  alias HighWire.CountWords
   alias HighWire.Markdown
   alias HighWire.SearchIndex
   alias HighWire.SSB.Relations
@@ -76,7 +77,6 @@ defmodule HighWireWeb.TimelineLive do
   @empty_payload %{
     feed: [],
     messages: [],
-    reply_counts: %{},
     like_counts: %{},
     likes_by: %{},
     my_likes: [],
@@ -1241,9 +1241,7 @@ defmodule HighWireWeb.TimelineLive do
             phx-click="toggle-contacts"
             class="w-full px-4 py-1 text-left text-[11px] text-faint transition hover:bg-raised hover:text-paper"
           >
-            {if @contacts_expanded,
-              do: "Show fewer",
-              else: "Show all #{length(@all_contacts)}"}
+            {if @contacts_expanded, do: "Show fewer", else: "Show all"}
           </button>
         </div>
 
@@ -1257,7 +1255,7 @@ defmodule HighWireWeb.TimelineLive do
           <.link
             :for={s <- @suggestions}
             navigate={profile_href(s["id"])}
-            title={"#{s["followers"]} followers"}
+            title={CountWords.phrase(s["followers"], "follower")}
             class="flex items-center gap-2 px-4 py-1 text-xs text-muted hover:bg-raised hover:text-paper"
           >
             <Avatar.avatar
@@ -1545,9 +1543,7 @@ defmodule HighWireWeb.TimelineLive do
                   role="status"
                   class="px-4 pb-1 pt-3 text-[11px] uppercase tracking-wider text-faint"
                 >
-                  {match_count(@search_hits)} {if length(@search_hits) == 1,
-                    do: "match",
-                    else: "matches"}
+                  {CountWords.phrase(length(@search_hits), "match", "matches")}
                 </p>
                 <article
                   :for={h <- @search_hits}
@@ -1794,7 +1790,7 @@ defmodule HighWireWeb.TimelineLive do
         </button>
 
         <div class="mt-1.5 flex items-center gap-4 text-xs text-dim">
-          <span :if={@row.replies > 0}>{@row.replies} replies</span>
+          <span :if={@row.replies > 0}>{Timeline.reply_summary(@row.replies)}</span>
           <%!-- A wrap, so a post the whole crowd liked adds lines under
           it rather than pushing the row — and the column it sits in —
           sideways off the screen. --%>
@@ -1972,7 +1968,7 @@ defmodule HighWireWeb.TimelineLive do
             phx-value-key={@row.msg["key"]}
             class="text-accent hover:underline"
           >
-            +{length(@people) - length(@shown)} more
+            {CountWords.words(length(@people) - length(@shown))} more
           </button>
           <button
             :if={@expanded? and length(@people) > 3}
@@ -2092,7 +2088,6 @@ defmodule HighWireWeb.TimelineLive do
     socket
     |> assign(:feed, feed)
     |> assign(:messages, Map.get(payload, :messages, []))
-    |> assign(:reply_counts, payload.reply_counts)
     |> assign(:like_counts, payload.like_counts)
     |> assign(:likes_by, Map.get(payload, :likes_by, %{}))
     |> assign(:my_likes, Map.get(payload, :my_likes, []))
@@ -2113,7 +2108,6 @@ defmodule HighWireWeb.TimelineLive do
     socket
     |> assign(:feed, @empty_payload.feed)
     |> assign(:messages, @empty_payload.messages)
-    |> assign(:reply_counts, @empty_payload.reply_counts)
     |> assign(:like_counts, @empty_payload.like_counts)
     |> assign(:likes_by, @empty_payload.likes_by)
     |> assign(:my_likes, @empty_payload.my_likes)
@@ -2158,28 +2152,25 @@ defmodule HighWireWeb.TimelineLive do
 
   defp matched_threads(messages, q) do
     ql = String.downcase(q)
+    by_key = Map.new(messages, &{&1["key"], &1})
 
     messages
     |> Enum.filter(fn msg ->
       String.contains?(String.downcase(author_of(msg)), ql) or
         String.contains?(String.downcase(text(msg)), ql)
     end)
-    |> Enum.map(&thread_id/1)
+    |> Enum.map(&thread_id(&1, by_key))
     |> Enum.reject(&is_nil/1)
     |> MapSet.new()
   end
 
-  # The row a message belongs to: a reply rides its root's row, a
-  # rootless post is its own. Non-posts (votes, abouts) never key a row
-  # the same way, so they contribute nothing.
-  defp thread_id(msg) do
-    c = content(msg)
-
-    cond do
-      c["type"] != "post" -> nil
-      is_binary(c["root"]) -> c["root"]
-      true -> msg["key"]
-    end
+  # The row a message belongs to: a reply rides the thread its root chain
+  # (or fork) reaches — not just its parent, which is what the raw root
+  # names on a nested reply — and a rootless post is its own. Non-posts
+  # (votes, abouts) never key a row the same way, so they contribute
+  # nothing.
+  defp thread_id(msg, by_key) do
+    if content(msg)["type"] == "post", do: Timeline.thread_root(msg, by_key)
   end
 
   defp matches_query?(_row, ""), do: true
@@ -2249,14 +2240,8 @@ defmodule HighWireWeb.TimelineLive do
   defp index_status_title(:live),
     do: "Search is up to date"
 
-  defp index_status_title({:crawling, n}),
-    do:
-      "Search is still warming up. #{format_count(n)} messages so far, so results may be incomplete"
-
-  # The query takes at most 200 hits; at the cap the true total is
-  # unknown, so say so rather than pass the last page off as the end.
-  defp match_count(hits),
-    do: if(length(hits) >= 200, do: "200+", else: Integer.to_string(length(hits)))
+  defp index_status_title({:crawling, _}),
+    do: "Search is still warming up, so results may be incomplete"
 
   defp search_empty_message({:crawling, _}, q),
     do: "Nothing matches “#{q}” yet. Search is still warming up."
@@ -2268,13 +2253,6 @@ defmodule HighWireWeb.TimelineLive do
     do: "Nothing matches “#{q}” yet. Search is catching up."
 
   defp search_empty_message(_status, q), do: "Nothing matches “#{q}”."
-
-  # 412553 -> 412,553. The header's only big number, and not a library.
-  # The lookahead is non-capturing on purpose: a capture there lands its
-  # triplet in \1 and replaces the digit we mean to keep, so 60_000 came
-  # out "6000,000" and every count from 1,000 up lost a digit.
-  defp format_count(n) when is_integer(n),
-    do: Regex.replace(~r/(\d)(?=(?:\d{3})+$)/, Integer.to_string(n), "\\1,")
 
   # -- message helpers ---------------------------------------------------
 

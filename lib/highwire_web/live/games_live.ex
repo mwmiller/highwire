@@ -16,6 +16,7 @@ defmodule HighWireWeb.GamesLive do
 
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
+  alias HighWire.CountWords
   alias HighWire.Games.{Catalog, Filter, Interest}
   alias HighWire.SSB.{Identities, Profile, Relations}
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Nav, Relationship, Shell, Time}
@@ -465,10 +466,28 @@ defmodule HighWireWeb.GamesLive do
         <.group_chip by={:result} label="result" group={@group} />
       </div>
 
-      <p class="mt-2 text-[10px] text-faint">{@shown} of {@total} shown</p>
+      <p :if={@shown != @total} class="mt-2 text-[10px] text-faint">
+        {shelf_summary(@shown, @total)}
+      </p>
     </div>
     """
   end
+
+  # A room of a dozen or fewer is small enough that the figures are the
+  # clearest thing to say; past that they stop being readable at a glance
+  # and the words take over.
+  @small_room 12
+
+  # How much of the room survives the filters. A big room reads as words —
+  # the reader is checking whether the chips have narrowed the shelf and
+  # roughly by how much, and two large figures side by side answer neither
+  # at a glance.
+  defp shelf_summary(shown, total) when total <= @small_room, do: "#{shown} of #{total} shown"
+
+  defp shelf_summary(shown, total),
+    do:
+      "#{CountWords.phrase(shown, "game")} shown · " <>
+        "#{CountWords.phrase(total - shown, "game")} hidden"
 
   attr :title, :string, required: true
   attr :facet, :string, required: true

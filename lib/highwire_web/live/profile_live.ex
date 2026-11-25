@@ -848,7 +848,7 @@ defmodule HighWireWeb.ProfileLive do
               open={length(@relations.follows) <= 8}
             >
               <summary class="cursor-pointer text-xs text-sub">
-                Following ({length(@relations.follows)})
+                Following
               </summary>
               <div class="mt-1 max-h-48 space-y-px overflow-y-auto">
                 <.link
@@ -880,7 +880,7 @@ defmodule HighWireWeb.ProfileLive do
               open={length(@relations.blocked) <= 8}
             >
               <summary class="cursor-pointer text-xs text-bad">
-                Blocking ({length(@relations.blocked)})
+                Blocking
               </summary>
               <div class="mt-1 max-h-48 space-y-px overflow-y-auto">
                 <.link

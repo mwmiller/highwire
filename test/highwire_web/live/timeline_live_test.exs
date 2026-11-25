@@ -54,12 +54,9 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ ~s(data-status="disabled")
   end
 
-  test "the crawling index tooltip separates thousands instead of eating a digit", %{conn: conn} do
+  test "a crawling index says it is behind without reporting its progress", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
 
-    # The count the header reported as "6000,000": the pattern captured
-    # the lookahead's triplet in \1 and replaced the digit it meant to
-    # keep, so no count of 1,000 or more came out right.
     :sys.replace_state(view.pid, fn state ->
       socket = state.socket
       assigns = socket.assigns
@@ -74,8 +71,10 @@ defmodule HighWireWeb.TimelineLiveTest do
     :sys.get_state(view.pid)
     html = render(view)
 
-    assert html =~ "60,000 messages so far"
-    refute html =~ "6000,000"
+    # The reader is told results may be incomplete, not how many messages
+    # the crawler has behind it.
+    assert html =~ "Search is still warming up, so results may be incomplete"
+    refute html =~ "messages so far"
   end
 
   test "a blocked feed's rows leave the timeline", %{conn: conn} do
@@ -119,7 +118,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "Whom to follow"
     refute html =~ "No suggestions yet"
     # followers ride on hover; the row itself carries no numbers
-    assert html =~ "2 followers"
+    assert html =~ "a few followers"
     # With no profile loaded the name falls back to the shortened id,
     # and the row still links to the full one.
     assert html =~ ~s(href="/profile?id=%40stranger%3D.ed25519")
@@ -151,7 +150,7 @@ defmodule HighWireWeb.TimelineLiveTest do
 
     assert html =~ "Show another set"
     refute html =~ "Finding…"
-    assert html =~ "2 followers"
+    assert html =~ "a few followers"
   end
 
   test "a set that never comes back lets go of the button", %{conn: conn} do
@@ -193,7 +192,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     html = notify(view, feed_payload([], follows: follows, contacts: contacts))
 
     # The collapsed rail shows the draw; the rest wait behind the toggle.
-    assert html =~ "Show all 20"
+    assert html =~ "Show all"
     assert count_visible_contacts(html, follows) == 7
 
     html = render_click(view, "toggle-contacts", %{})
@@ -202,7 +201,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert count_visible_contacts(html, follows) == 20
 
     html = render_click(view, "toggle-contacts", %{})
-    assert html =~ "Show all 20"
+    assert html =~ "Show all"
     assert count_visible_contacts(html, follows) == 7
   end
 
@@ -1163,6 +1162,40 @@ defmodule HighWireWeb.TimelineLiveTest do
     refute html =~ "the main topic"
   end
 
+  test "search reaches a nested reply through its thread's row", %{conn: conn} do
+    now = System.system_time(:millisecond)
+
+    root =
+      ssb_msg("%root-deep.sha256", "@alice.ed25519", now - 2_000, %{
+        "type" => "post",
+        "text" => "the thread head"
+      })
+
+    mid =
+      ssb_msg("%mid-deep.sha256", "@bob.ed25519", now - 1_000, %{
+        "type" => "post",
+        "text" => "answered the head",
+        "root" => "%root-deep.sha256"
+      })
+
+    fork =
+      ssb_msg("%fork-deep.sha256", "@carol.ed25519", now, %{
+        "type" => "post",
+        "text" => "buried remark",
+        "root" => "%mid-deep.sha256",
+        "fork" => "%root-deep.sha256"
+      })
+
+    {:ok, view, _html} = live(conn, "/")
+    notify(view, feed_payload([root, mid, fork]))
+
+    # A nested reply's root names its parent, not the thread; keying the
+    # row by that raw root matched no row at all. Normalized, the nested
+    # reply's text surfaces the thread it belongs to.
+    html = render_change(view, "search", %{"q" => "buried"})
+    assert html =~ "the thread head"
+  end
+
   test "a query in the URL reseeds the search on a fresh mount", %{conn: conn} do
     {:ok, view, html} = live(conn, "/?q=needle")
 
@@ -1248,13 +1281,13 @@ defmodule HighWireWeb.TimelineLiveTest do
        [%{key: "%h.sha256", author: "@alice.ed25519", text: "a needle", ts: 1_700_000_000_000}]}
     )
 
-    assert render(view) =~ "1 match"
+    assert render(view) =~ "a match"
 
     # While the new query is out, its predecessor's hits stay on screen
     # — still the best answer the view has — under the searching line.
     html = render_change(view, "search", %{"q" => "haystack"})
     assert html =~ ~s(id="search-results")
-    assert html =~ "1 match"
+    assert html =~ "a match"
     assert html =~ "Searching…"
 
     # The new query's answer replaces them, so stale hits never outlive
@@ -1362,7 +1395,7 @@ defmodule HighWireWeb.TimelineLiveTest do
     html = render(view)
 
     assert html =~ ~s(id="search-results")
-    assert html =~ "1 match"
+    assert html =~ "a match"
     assert html =~ "in the haystack"
     # and nothing contradicts it or treats it as a side-channel
     refute html =~ "Nothing matches"
@@ -1973,7 +2006,7 @@ defmodule HighWireWeb.TimelineLiveTest do
   # each event type's sentence is built from. Search reads nothing else.
   defp slim(msg) do
     c = msg["value"]["content"]
-    base = ["type", "text", "root"]
+    base = ["type", "text", "root", "fork"]
 
     fields =
       case c do
@@ -2019,7 +2052,6 @@ defmodule HighWireWeb.TimelineLiveTest do
     %{
       feed: HighWire.Timeline.build_feed(msgs, self_id, counts),
       messages: Enum.map(msgs, &slim/1),
-      reply_counts: %{},
       like_counts: counts,
       likes_by: HighWire.Timeline.like_authors(likes),
       my_likes: HighWire.Timeline.my_likes(likes, self_id),

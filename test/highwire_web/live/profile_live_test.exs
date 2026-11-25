@@ -505,12 +505,15 @@ defmodule HighWireWeb.ProfileLiveTest do
         |> seed(relations: %{follows: [followed], blocked: [blocked]})
         |> render()
 
-      # The counts are the identity's own graph, and each name opens the
+      # The lists are the identity's own graph, and each name opens the
       # feed it names — the list is how a reader gets from "this feed
-      # follows someone" to that someone.
+      # follows someone" to that someone. How many there are is not the
+      # point, so no total is printed.
       assert html =~ "Relationships"
-      assert html =~ "Following (1)"
-      assert html =~ "Blocking (1)"
+      assert html =~ "Following"
+      assert html =~ "Blocking"
+      refute html =~ "Following ("
+      refute html =~ "Blocking ("
       assert html =~ "/profile?id=" <> URI.encode_www_form(followed)
       assert html =~ "/profile?id=" <> URI.encode_www_form(blocked)
       assert html =~ "Followed Feed"
@@ -544,8 +547,8 @@ defmodule HighWireWeb.ProfileLiveTest do
       # though the viewer's short key would otherwise sort between them.
       assert view |> element("#profile-follows") |> render() |> relation_order() == [me, amy, zed]
       assert view |> element("#profile-blocked") |> render() |> relation_order() == [me, zed]
-      assert html =~ "Following (3)"
-      assert html =~ "Blocking (2)"
+      refute html =~ "Following ("
+      refute html =~ "Blocking ("
     end
   end
 

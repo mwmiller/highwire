@@ -354,19 +354,22 @@ defmodule HighWireWeb.PostLive do
     # one, and the thread root otherwise. `branch` names that message, so
     # every client reading the log nests the answer under the message it
     # answers. A private thread's reply is boxed for its participants so
-    # the answer never leaves the box the thread arrived in.
+    # the answer never leaves the box the thread arrived in. The root's
+    # channel rides along, so a reply reads in the thread's channel
+    # everywhere, not just here.
     key = root["key"]
     branch = reply_branch(socket.assigns)
     private? = private_thread?(root)
     recipients = private_recipients(socket)
+    channel = content(root)["channel"]
     view = self()
 
     Task.start(fn ->
       result =
         if private? do
-          Timeline.reply_private(key, branch, body, recipients)
+          Timeline.reply_private(key, branch, body, recipients, channel)
         else
-          Timeline.reply(key, branch, body)
+          Timeline.reply(key, branch, body, channel)
         end
 
       send(view, {:reply_done, result})
@@ -554,6 +557,7 @@ defmodule HighWireWeb.PostLive do
     assigns =
       assign(assigns,
         likes: likes,
+        reply_count: Timeline.reply_count(assigns.replies),
         root_liked: root_liked,
         root_likers: root_likers,
         participants: participants,
@@ -582,8 +586,8 @@ defmodule HighWireWeb.PostLive do
             <Relationship.badge standing={standing(@relationships, who)} class="ml-auto" />
           </Nav.rail_link>
 
-          <p :if={@replies != []} class="px-4 pt-3 text-xs text-faint">
-            {length(@replies)} {if length(@replies) == 1, do: "reply", else: "replies"}
+          <p :if={@reply_count > 0} class="px-4 pt-3 text-xs text-faint">
+            {Timeline.reply_summary(@reply_count)}
           </p>
         </div>
 
@@ -666,8 +670,8 @@ defmodule HighWireWeb.PostLive do
                   />
 
                   <div class="mt-3 flex gap-4 text-xs text-dim">
-                    <span :if={length(@replies) > 0}>
-                      {length(@replies)} {if length(@replies) == 1, do: "reply", else: "replies"}
+                    <span :if={@reply_count > 0}>
+                      {Timeline.reply_summary(@reply_count)}
                     </span>
                     <%!-- A wrap, so a post the whole crowd liked adds
                     lines under it rather than running the row past the

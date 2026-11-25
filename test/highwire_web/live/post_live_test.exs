@@ -323,6 +323,19 @@ defmodule HighWireWeb.PostLiveTest do
       assert html =~ ~s(id="rail-timeline")
       assert length(:binary.matches(html, ~s(href="/"))) == 1
     end
+
+    test "the rail counts the replies the thread model seats", %{conn: conn} do
+      alice = @alice
+      key = Base.url_encode64("%rail-count=.sha256", padding: false)
+      {:ok, view, _html} = live(conn, "/post/" <> key)
+
+      seed_thread(view, msg(alice, "%rail-count=.sha256", "the post"), [
+        msg(alice, "%rail-count-one=.sha256", "the answer", 1_700_000_060_000),
+        msg(alice, "%rail-count-two=.sha256", "the other answer", 1_700_000_120_000)
+      ])
+
+      assert render(view) =~ "a few replies"
+    end
   end
 
   describe "message anchors" do

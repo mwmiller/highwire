@@ -32,7 +32,6 @@ defmodule HighWire.Timeline do
                         `:recent` (newest replies) and `:self?`
     * `:messages`     — flat newest-first list (order-of-arrival view),
                         capped at 200
-    * `:reply_counts` — `%{root_key => n}` from post messages
     * `:like_counts`  — `%{message_key => n}` from vote messages
     * `:likes_by`     — `%{message_key => [author_id]}` the positive
                         voters per target, most recent voter first
@@ -64,6 +63,7 @@ defmodule HighWire.Timeline do
   alias HighWire.Blob
   alias HighWire.Chess
   alias HighWire.Contacts
+  alias HighWire.CountWords
   alias HighWire.SSB.{Client, Keys, MessageIndex, PrivateBox, Profile, Relations, Sidecar}
   alias HighWire.Suggester
   alias HighWireWeb.MessageText
@@ -605,24 +605,14 @@ defmodule HighWire.Timeline do
   @doc """
   Publishes a reply. `root` is the thread's root message key; `branch`
   is the parent message key (a root reply branches from the root
-  itself).
-  """
-  @spec reply(binary(), binary(), binary()) :: {:ok, binary() | nil} | {:error, term()}
-  def reply(root, branch, text)
-      when is_binary(root) and is_binary(branch) and is_binary(text) do
-    publish_content(reply_content(root, branch, text))
-  end
-
-  @doc """
-  Publishes a reply. `root` is the thread's root message key; `branch`
-  is the parent message key (a root reply branches from the root
-  itself). Optional `fork` names the thread the reply belongs to.
+  itself). `channel` is the thread's channel name, when it has one: a
+  reply without it reads outside the channel in other clients.
   """
   @spec reply(binary(), binary(), binary(), binary() | nil) ::
           {:ok, binary() | nil} | {:error, term()}
-  def reply(root, branch, text, fork \\ nil)
+  def reply(root, branch, text, channel \\ nil)
       when is_binary(root) and is_binary(branch) and is_binary(text) do
-    publish_content(reply_content(root, branch, text, fork))
+    publish_content(reply_content(root, branch, text, channel))
   end
 
   @doc """
@@ -631,13 +621,14 @@ defmodule HighWire.Timeline do
   The body is boxed for `recipients` and published like any other
   message, so a reply to a private post never leaves the box it arrived
   in. `recipients` are feed ids — the thread's participants plus self —
-  and the box format caps them at seven.
+  and the box format caps them at seven. `channel` is the thread's
+  channel name, when it has one.
   """
   @spec reply_private(binary(), binary(), binary(), [binary()], binary() | nil) ::
           {:ok, binary() | nil} | {:error, term()}
-  def reply_private(root, branch, text, recipients, fork \\ nil)
+  def reply_private(root, branch, text, recipients, channel \\ nil)
       when is_binary(root) and is_binary(branch) and is_binary(text) do
-    boxed_publish(reply_content(root, branch, text, fork), recipients)
+    boxed_publish(reply_content(root, branch, text, channel), recipients)
   end
 
   @doc """
@@ -720,14 +711,12 @@ defmodule HighWire.Timeline do
   @doc false
   def post_content(text), do: %{"type" => "post", "text" => text}
   @doc false
-  def reply_content(root, branch, text, fork \\ nil) do
+  def reply_content(root, branch, text, channel \\ nil) do
     content = %{"type" => "post", "text" => text, "root" => root, "branch" => branch}
 
-    if fork do
-      Map.put(content, "fork", fork)
-    else
-      content
-    end
+    if is_binary(channel) and channel != "",
+      do: Map.put(content, "channel", channel),
+      else: content
   end
 
   @doc false
@@ -840,7 +829,6 @@ defmodule HighWire.Timeline do
     %{
       feed: [],
       messages: [],
-      reply_counts: %{},
       like_counts: %{},
       likes_by: %{},
       my_likes: [],
@@ -1689,9 +1677,11 @@ defmodule HighWire.Timeline do
             _ -> %{}
           end
 
+        counts = window_reply_counts(state)
+
         rows =
           Enum.map(items, fn item ->
-            row = root_row(item, self_id, private?)
+            row = root_row(item, self_id, private?, Map.get(counts, item["key"]))
             Map.put(row, :likes, Map.get(like_counts, item["key"], row.likes))
           end)
 
@@ -1891,17 +1881,30 @@ defmodule HighWire.Timeline do
   # but this page does hold is still part of the thread, and the feed row
   # that promised it must not open on a page without it.
   defp post_replies(state, window, root_key, known) do
-    replies =
-      case fetch_thread(state.client, root_key) do
-        list when is_list(list) and list != [] -> list
-        _ -> window_replies(window, root_key)
-      end
+    replies = thread_replies(state.client, window, root_key)
 
     chain = Enum.uniq_by(replies ++ known ++ window, & &1["key"])
     seated = attach_forks(replies, chain, root_key)
     by_key = Map.new(chain ++ seated, &{&1["key"], &1})
 
-    Enum.map(seated, &Map.put(&1, :thread_depth, hops_to_root(&1, by_key, root_key, 0)))
+    seated
+    |> Enum.uniq_by(& &1["key"])
+    |> Enum.map(&Map.put(&1, :thread_depth, hops_to_root(&1, by_key, root_key, 0)))
+  end
+
+  # The thread's replies, as the page lists them: one row per message and
+  # never the thread's head. The engine's view can list the root among the
+  # replies, which the page would draw a second time as a depth-0 reply and
+  # count as one; the fallback window never holds it. A repeated key is the
+  # same message, not another reply.
+  defp thread_replies(client, window, root_key) do
+    case fetch_thread(client, root_key) do
+      list when is_list(list) and list != [] ->
+        Enum.reject(list, &(&1["key"] == root_key))
+
+      _ ->
+        window_replies(window, root_key)
+    end
   end
 
   # A reply-to-a-reply is a FORK: patchwork pins content.root to the
@@ -2007,14 +2010,21 @@ defmodule HighWire.Timeline do
   # Hops from a message up to the thread root: 0 for a reply to the root,
   # one per fork answering another reply. A parent the window never carried
   # ends the count where the chain is known, so a gap indents less, not oddly.
-  defp hops_to_root(m, by_key, root_key, hops) do
+  # Messages that name each other in root are malformed but real, so the
+  # seen set ends a cycle and the depth budget ends a chain longer than the
+  # root walk itself accepts — either way the walk ends inside the Timeline
+  # process instead of recursing until it dies there.
+  defp hops_to_root(m, by_key, root_key, hops, seen \\ MapSet.new()) do
     root = content(m)["root"]
 
     parent =
-      if is_binary(root) and root != root_key and root != m["key"],
-        do: Map.get(by_key, root)
+      if is_binary(root) and root != root_key and root != m["key"] and
+           not MapSet.member?(seen, root),
+         do: Map.get(by_key, root)
 
-    if post?(parent), do: hops_to_root(parent, by_key, root_key, hops + 1), else: hops
+    if post?(parent) and hops < @thread_root_depth,
+      do: hops_to_root(parent, by_key, root_key, hops + 1, MapSet.put(seen, root)),
+      else: hops
   end
 
   # get unboxes private content in place (value only, private: true) —
@@ -3822,12 +3832,11 @@ defmodule HighWire.Timeline do
     anchors = Enum.map(contacts, &row_msg/1)
     acc = Enum.uniq_by(state.acc ++ anchors, & &1["key"])
 
-    reply_counts = reply_counts(acc)
     likes = likes_state(acc)
     like_counts = like_counts(likes)
 
     # Flat list (order-of-arrival view). The LiveView's search reads only
-    # author, text, type/root and key (for rootless posts), so each message
+    # author, text, type/root/fork and key (for rootless posts), so each message
     # is projected down to those before it leaves the payload — the full
     # value/signature/hash bloat was pure bytes on first paint. Same
     # newest-first ordering, same generous cap for infinite scroll.
@@ -3871,7 +3880,6 @@ defmodule HighWire.Timeline do
     payload = %{
       feed: feed,
       messages: messages,
-      reply_counts: reply_counts,
       like_counts: like_counts,
       likes_by: like_authors(likes),
       my_likes: my_likes(likes, state.self_id),
@@ -4237,7 +4245,7 @@ defmodule HighWire.Timeline do
       |> Enum.sort_by(&bump_ts/1, :desc)
 
     recent = Enum.take(fresh, 3)
-    replies = length(fresh)
+    replies = reply_count(fresh)
 
     likes = thread_likes(group, root_key, like_counts)
 
@@ -4676,8 +4684,14 @@ defmodule HighWire.Timeline do
   # A `roots` view item (thread summary + rollup extras) shaped exactly
   # like a feed row, so the timeline renders it with the same
   # components. private? marks it for the private badge.
+  #
+  # `count` is the thread model's reply total when the caller can see
+  # the whole thread (see window_reply_counts/1); nil keeps the engine's
+  # rollup, which is the only total left for a thread the window cannot
+  # hold whole. The post page counts the same model, so the row and the
+  # page cannot disagree over a thread the window carries.
   @doc false
-  def root_row(item, self_id, private?) do
+  def root_row(item, self_id, private?, count \\ nil) do
     msg = %{
       "key" => item["key"],
       "value" => item["value"],
@@ -4689,7 +4703,7 @@ defmodule HighWire.Timeline do
     # recent newest-first and the template reverses for display, so flip
     # here or the thread renders backwards — and keep the newest cap.
     recent = item["latestReplies"] |> List.wrap() |> Enum.reverse() |> Enum.take(3)
-    replies = item["totalReplies"] || 0
+    replies = count || item["totalReplies"] || 0
     author = value_of(msg)["author"]
 
     activity =
@@ -4744,8 +4758,10 @@ defmodule HighWire.Timeline do
   # is in the window, walk up through in-window post parents so every
   # piece groups under one key — otherwise an intermediate parent heads
   # its own row while the replies it spawned head another (the split
-  # conversations bug).
-  defp thread_root(msg, by_key) do
+  # conversations bug). The LiveView's search keys rows by the same
+  # answer, so a nested reply lands on its thread's row there too.
+  @doc false
+  def thread_root(msg, by_key) do
     c = content(msg)
 
     case c["type"] do
@@ -4861,12 +4877,47 @@ defmodule HighWire.Timeline do
   defp post?(msg), do: content(msg)["type"] == "post"
   defp boxed?(msg), do: is_binary(value_of(msg)["content"])
 
-  # Replies reference the thread root by key; counts only count post
-  # messages, not votes/contacts that share the root.
-  defp reply_counts(acc) do
+  # The one definition of a thread's reply count: every reply the thread
+  # model seats, counted once. The timeline row and the post viewer both
+  # take their number from here, so a thread cannot show two totals.
+  @doc false
+  def reply_count(replies) when is_list(replies), do: length(replies)
+
+  # The reply total as the interface says it: how busy the thread reads,
+  # not a number to check. Past a handful the exact figure stops being
+  # the point, so a big thread is counted the way people count — see
+  # CountWords. The row and the post viewer share the phrasing so one
+  # thread cannot describe itself two ways.
+  @doc false
+  def reply_summary(count) when is_integer(count),
+    do: CountWords.phrase(count, "reply", "replies")
+
+  # Per-thread reply totals, folded onto the thread each reply really
+  # belongs to: a plain reply names it in root, a patchwork fork names its
+  # parent there and the thread in fork, and the normalizer resolves both.
+  # Only post messages count — votes and abouts share the root but answer
+  # nothing.
+  @doc false
+  def reply_counts(acc) do
+    by_key = Map.new(acc, &{&1["key"], &1})
+
     acc
     |> Enum.filter(fn msg -> post?(msg) and msg_id?(content(msg)["root"]) end)
-    |> Enum.frequencies_by(fn msg -> content(msg)["root"] end)
+    |> Enum.frequencies_by(fn msg -> thread_root(msg, by_key) end)
+  end
+
+  # Per-thread reply totals for the threads whose head the window still
+  # holds — the ones the post page can seat whole. A row built from the
+  # roots view takes its total from here rather than the engine rollup,
+  # which never saw the window's forks; a thread the window does not
+  # head keeps the engine's total.
+  defp window_reply_counts(state) do
+    window = post_window(state)
+    heads = MapSet.new(window, & &1["key"])
+
+    window
+    |> reply_counts()
+    |> Map.take(MapSet.to_list(heads))
   end
 
   # A row's like total: the seed already covers the root key, so the
@@ -5226,7 +5277,10 @@ defmodule HighWire.Timeline do
 
   defp search_projection(msg) do
     c = content(msg)
-    base = ["type", "text", "root"]
+    # fork rides along: it is one hop to the thread a nested reply belongs
+    # to, where the root chain can only reach it while the parent is still
+    # in the window.
+    base = ["type", "text", "root", "fork"]
 
     fields =
       case c do

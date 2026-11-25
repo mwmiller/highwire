@@ -531,7 +531,9 @@ body.zoom-open { overflow: hidden; }
 
 /* A reply answers a message: its hop count from the root travels as
    --reply-depth, and the reply steps in that many widths. A reply to the root
-   itself is flush. */
+   itself is flush. --reply-depth keeps the true count; the layout stops
+   stepping at six hops, so a deep thread flattens into one column instead of
+   marching its text off a narrow window. */
 .reply-indent {
-  padding-left: calc(var(--reply-depth, 0) * 1.25rem);
+  padding-left: calc(min(var(--reply-depth, 0), 6) * 1.25rem);
 }
