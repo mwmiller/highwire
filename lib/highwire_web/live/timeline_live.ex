@@ -587,16 +587,33 @@ defmodule HighWireWeb.TimelineLive do
     private? = socket.assigns.view == :private
     recipients = boxed_recipients(socket, chosen)
 
-    if private? and recipients == [socket.assigns.self_id] do
-      assign(socket, compose_error: "Choose at least one recipient.")
-    else
-      view = self()
+    cond do
+      private? and recipients == [socket.assigns.self_id] ->
+        assign(socket, compose_error: "Choose at least one recipient.")
 
-      Task.start(fn ->
-        send(view, {:publish_done, private?, publish_for(body, recipients, private?)})
-      end)
+      error = recipients_error(private?, recipients) ->
+        assign(socket, compose_error: publish_error(error))
 
-      assign(socket, compose_pending: true)
+      true ->
+        view = self()
+
+        Task.start(fn ->
+          send(view, {:publish_done, private?, publish_for(body, recipients, private?)})
+        end)
+
+        assign(socket, compose_pending: true)
+    end
+  end
+
+  # A private post boxed for more people than a box carries is refused at
+  # the press, before anything is sealed: the composer says why and the
+  # draft, with its recipients, stays. A public post has no such limit.
+  defp recipients_error(false, _recipients), do: nil
+
+  defp recipients_error(true, recipients) do
+    case Timeline.private_recipients(recipients) do
+      {:ok, _} -> nil
+      {:error, reason} -> reason
     end
   end
 
@@ -1075,6 +1092,9 @@ defmodule HighWireWeb.TimelineLive do
   defp in_scope?(:mentions, row, _self_id), do: mention_match?(row)
 
   defp publish_error(:offline), do: "Not connected yet. Try again in a moment."
+
+  defp publish_error({:too_many_recipients, count, limit}),
+    do: "A private message reaches #{limit} people; this one has #{count}. Nothing was sent."
 
   defp publish_error(reason) when is_binary(reason), do: reason
   defp publish_error(%{"message" => msg}) when is_binary(msg), do: msg

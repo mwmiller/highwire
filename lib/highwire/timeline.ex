@@ -621,8 +621,9 @@ defmodule HighWire.Timeline do
   The body is boxed for `recipients` and published like any other
   message, so a reply to a private post never leaves the box it arrived
   in. `recipients` are feed ids — the thread's participants plus self —
-  and the box format caps them at seven. `channel` is the thread's
-  channel name, when it has one.
+  and the box format carries seven: a larger thread is refused rather
+  than trimmed, so no participant is left out of the answer. `channel`
+  is the thread's channel name, when it has one.
   """
   @spec reply_private(binary(), binary(), binary(), [binary()], binary() | nil) ::
           {:ok, binary() | nil} | {:error, term()}
@@ -803,22 +804,19 @@ defmodule HighWire.Timeline do
   end
 
   @doc false
-  @spec private_recipients([binary()]) :: {:ok, [binary()]} | {:error, term()}
+  @spec private_recipients([binary()]) ::
+          {:ok, [binary()]}
+          | {:error, :no_recipients | {:too_many_recipients, pos_integer(), pos_integer()}}
   def private_recipients(recipients) do
     ids = recipients |> List.wrap() |> Enum.filter(&is_binary/1) |> Enum.uniq()
+    limit = PrivateBox.max_recipients()
 
     cond do
       ids == [] ->
         {:error, :no_recipients}
 
-      length(ids) > PrivateBox.max_recipients() ->
-        Logger.warning(
-          "timeline: #{length(ids)} private recipients exceeds the box's " <>
-            "#{PrivateBox.max_recipients()}; keeping the first " <>
-            "#{PrivateBox.max_recipients()}"
-        )
-
-        {:ok, Enum.take(ids, PrivateBox.max_recipients())}
+      length(ids) > limit ->
+        {:error, {:too_many_recipients, length(ids), limit}}
 
       true ->
         {:ok, ids}

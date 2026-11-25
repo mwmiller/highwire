@@ -362,6 +362,17 @@ defmodule HighWireWeb.PostLive do
     private? = private_thread?(root)
     recipients = private_recipients(socket)
     channel = content(root)["channel"]
+
+    case check_recipients(private?, recipients) do
+      {:ok, _} ->
+        publish_reply(socket, {key, branch, body, recipients, channel}, private?)
+
+      {:error, reason} ->
+        assign(socket, reply_error: reply_error(reason))
+    end
+  end
+
+  defp publish_reply(socket, {key, branch, body, recipients, channel}, private?) do
     view = self()
 
     Task.start(fn ->
@@ -409,12 +420,25 @@ defmodule HighWireWeb.PostLive do
 
   defp reply_error(:offline), do: "Still connecting. Try again in a moment."
 
+  defp reply_error({:too_many_recipients, count, limit}),
+    do: "A private message reaches #{limit} people; this thread has #{count}. Nothing was sent."
+
   defp reply_error(_reason), do: "Reply failed."
+
+  # A private reply that cannot reach every participant is refused at the
+  # press, before anything is boxed: the composer says why and the draft
+  # stays. A public reply has no such limit.
+  defp check_recipients(false, _recipients), do: {:ok, nil}
+  defp check_recipients(true, recipients), do: Timeline.private_recipients(recipients)
 
   # A like the engine refused is the one action here that undoes itself,
   # so it names what happened beside the thread it emptied.
   defp like_error(:offline),
     do: "That like didn't go through: not connected yet. Try again in a moment."
+
+  defp like_error({:too_many_recipients, count, limit}),
+    do:
+      "That like didn't go through: a private message reaches #{limit} people, and this thread has #{count} on it."
 
   defp like_error(_reason), do: "That like didn't go through. Try again."
 
@@ -425,8 +449,8 @@ defmodule HighWireWeb.PostLive do
 
   # Everyone a private reply in this thread must reach: the root author,
   # the reply authors, and self — the participants a box should carry.
-  # The root author and self go first, so a thread too large for one box
-  # keeps the two readers it cannot drop; Timeline caps the rest.
+  # A thread larger than one box is refused rather than trimmed, so no
+  # participant is silently left out of the answer.
   defp private_recipients(socket) do
     root = socket.assigns.root
     replies = Map.get(socket.assigns, :replies, [])

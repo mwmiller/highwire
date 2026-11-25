@@ -357,6 +357,19 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert html =~ "Choose at least one recipient."
     end
 
+    test "a private post to more people than a box carries is refused locally", %{conn: conn} do
+      chosen = for i <- 1..8, do: "@peer#{i}=.ed25519"
+      view = private_view(conn, chosen)
+
+      html =
+        view
+        |> form("#compose", %{"body" => "a crowd", "recipients" => chosen})
+        |> render_submit()
+
+      assert html =~ "A private message reaches 7 people; this one has 9. Nothing was sent."
+      assert html =~ "Choose who can read it."
+    end
+
     test "a recipient selection survives a draft keystroke", %{conn: conn} do
       view = private_view(conn)
 

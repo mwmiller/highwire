@@ -256,10 +256,16 @@ defmodule HighWire.TimelineTest do
       assert Timeline.private_recipients([]) == {:error, :no_recipients}
     end
 
-    test "more than the box's ceiling keeps the first seven" do
+    test "more recipients than a box carries is refused, not trimmed" do
       ids = for _ <- 1..9, do: feed_id(keypair())
-      assert {:ok, kept} = Timeline.private_recipients(ids)
-      assert kept == Enum.take(ids, 7)
+
+      assert Timeline.private_recipients(ids) ==
+               {:error, {:too_many_recipients, 9, 7}}
+
+      # Nothing is sealed either: a box that silently left people out
+      # would read as delivered to everyone who could open it.
+      assert Timeline.private_content(Timeline.post_content("hi"), ids) ==
+               {:error, {:too_many_recipients, 9, 7}}
     end
 
     test "duplicate recipients collapse, and non-binaries drop" do

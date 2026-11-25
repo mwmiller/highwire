@@ -142,6 +142,94 @@ defmodule HighWireWeb.PrivatePublishTest do
       end)
     end
 
+    test "a reply on a thread too large for one box is refused, and says why", %{conn: conn} do
+      kp = keypair()
+      self_id = feed_id(kp)
+      key = "%private-root=.sha256"
+      root = private_root(key)
+
+      # Seven repliers plus the root author and self: nine people, and a
+      # box carries seven, so somebody would have to be left out.
+      replies =
+        for i <- 1..7 do
+          %{
+            "key" => "%private-reply-#{i}=.sha256",
+            "value" => %{
+              "author" => feed_id(keypair()),
+              "timestamp" => 1_700_000_000_000 + i,
+              "content" => %{"type" => "post", "text" => "answer #{i}"}
+            }
+          }
+        end
+
+      {:ok, view, _html} = live(conn, "/post/" <> Base.url_encode64(key, padding: false))
+
+      view
+      |> seed(%{
+        status: :ok,
+        self_id: self_id,
+        not_found: false,
+        root: root,
+        replies: replies
+      })
+
+      with_publish_capture(fn ->
+        render_change(view, "reply-draft", %{"body" => "the answer"})
+        render_submit(view, "reply", %{})
+
+        refute_receive {:published, _}
+
+        html = render(view)
+
+        assert html =~
+                 "A private message reaches 7 people; this thread has 9. Nothing was sent."
+
+        # The draft is still there, so nothing typed is lost to the refusal.
+        assert html =~ "the answer"
+      end)
+    end
+
+    test "a like on a thread too large for one box is refused, and says why", %{conn: conn} do
+      kp = keypair()
+      self_id = feed_id(kp)
+      key = "%private-root=.sha256"
+      root = private_root(key)
+
+      replies =
+        for i <- 1..7 do
+          %{
+            "key" => "%private-reply-#{i}=.sha256",
+            "value" => %{
+              "author" => feed_id(keypair()),
+              "timestamp" => 1_700_000_000_000 + i,
+              "content" => %{"type" => "post", "text" => "answer #{i}"}
+            }
+          }
+        end
+
+      {:ok, view, _html} = live(conn, "/post/" <> Base.url_encode64(key, padding: false))
+
+      view
+      |> seed(%{
+        status: :ok,
+        self_id: self_id,
+        not_found: false,
+        root: root,
+        replies: replies
+      })
+
+      with_publish_capture(fn ->
+        view
+        |> element(~s(button[phx-value-key="#{key}"][aria-label="Like"]))
+        |> render_click()
+
+        refute_receive {:published, _}
+
+        assert render(view) =~
+                 "That like didn&#39;t go through: a private message reaches 7 people, and this thread has 9 on it."
+      end)
+    end
+
     test "a like is boxed as a vote on the thread", %{conn: conn} do
       kp = keypair()
       self_id = feed_id(kp)
