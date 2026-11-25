@@ -409,6 +409,10 @@ jobs:
       # unnotarized dmg is rejected outright by Gatekeeper on macOS 15 and
       # later ("Unnotarized Developer ID"), so the next step submits and
       # staples the dmg itself.
+      # The updater's private key signs the update artifacts, and its
+      # public half in tauri.conf.json is what an installed app verifies
+      # them against. Without the secret the bundle step fails rather
+      # than shipping artifacts no install can accept.
       - name: Tauri build (macOS)
         if: runner.os == 'macOS'
         working-directory: src-tauri
@@ -417,6 +421,8 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: tauri build
 
       # The .app inside is already notarized and stapled by the build above;
@@ -447,12 +453,18 @@ jobs:
       - name: Tauri build (Linux)
         if: runner.os == 'Linux'
         working-directory: src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: tauri build --config tauri.linux.conf.json
 
       - name: Tauri build (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: tauri build --config tauri.windows.conf.json
 
       - uses: actions/upload-artifact@v6
@@ -468,6 +480,12 @@ jobs:
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/windows/*.exe
+            src-tauri/target/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz
+            src-tauri/target/release/bundle/nsis/*.nsis.zip
+            src-tauri/target/release/bundle/macos/*.sig
+            src-tauri/target/release/bundle/appimage/*.sig
+            src-tauri/target/release/bundle/nsis/*.sig
           if-no-files-found: error
 
       # Dispatch runs carry a branch ref, not a tag to compare against.
@@ -501,6 +519,63 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      # An installed app asks for latest.json beside the installers and
+      # verifies whatever it downloads against the same key that signed
+      # it. One entry per platform Tauri's updater can replace; a leg
+      # whose signature is missing simply has no entry, so a platform
+      # whose updater artifact cannot be built never blocks the rest.
+      - name: Build the update manifest
+        run: |
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+          from datetime import datetime, timezone
+
+          version = os.environ["GITHUB_REF_NAME"]
+          if version.startswith("v"):
+              version = version[1:]
+
+          base = (
+              f"https://github.com/{os.environ['GITHUB_REPOSITORY']}"
+              f"/releases/download/{os.environ['GITHUB_REF_NAME']}"
+          )
+
+          platforms = {}
+
+          def add(platform, pattern):
+              for path in sorted(glob.glob(f"dist/{pattern}")):
+                  signature = path + ".sig"
+                  if not os.path.isfile(signature):
+                      continue
+                  with open(signature) as handle:
+                      signature = handle.read().strip()
+                  platforms[platform] = {
+                      "signature": signature,
+                      "url": f"{base}/{os.path.basename(path)}",
+                  }
+
+          add("darwin-aarch64", "*.app.tar.gz")
+          add("linux-x86_64", "*_amd64.AppImage.tar.gz")
+          add("linux-aarch64", "*_aarch64.AppImage.tar.gz")
+          add("windows-x86_64", "*.nsis.zip")
+
+          if not platforms:
+              raise SystemExit("no signed updater artifacts to publish")
+
+          manifest = {
+              "version": version,
+              "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "platforms": platforms,
+          }
+
+          with open("dist/latest.json", "w") as handle:
+              json.dump(manifest, handle, indent=2)
+              handle.write("\n")
+
+          print(json.dumps(manifest, indent=2))
+          PY
 
       - uses: softprops/action-gh-release@v3
         with:

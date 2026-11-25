@@ -46,6 +46,10 @@ npm-debug.log
 
 # Tauri (native shell) build artifacts.
 /src-tauri/target/
+
+# The updater's signing key: its public half is in tauri.conf.json, and
+# the private half belongs in the release secrets, never in the tree.
+/.tauri/
 /src-tauri/binaries/
 /src-tauri/gen/
 /dist/

@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
-use tauri::{Manager, RunEvent};
+use tauri::{Emitter, Manager, RunEvent};
+use tauri_plugin_updater::UpdaterExt;
 
 #[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
@@ -201,6 +202,9 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
         }),
     )?;
     let quit = PredefinedMenuItem::quit(handle, Some("Quit HighWire"))?;
+    // Nothing checks for updates on its own: this item is the only way in.
+    let check_updates =
+        MenuItemBuilder::with_id("check-updates", "Check for Updates…").build(handle)?;
 
     let undo = PredefinedMenuItem::undo(handle, None)?;
     let redo = PredefinedMenuItem::redo(handle, None)?;
@@ -232,6 +236,7 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
 
     let highwire = SubmenuBuilder::new(handle, "HighWire")
         .item(&about)
+        .item(&check_updates)
         .separator()
         .item(&prefs)
         .separator()
@@ -408,13 +413,69 @@ fn open_external(url: String) -> Result<(), String> {
     Ok(())
 }
 
+// The updater reads the signed manifest the release workflow publishes
+// beside the installers, so an install moves itself forward instead of
+// waiting for someone to find the GitHub page. Only the reader's menu
+// action calls this; the client never reaches the network on its own.
+// A check that finds nothing is the ordinary case and answers None.
+#[tauri::command]
+async fn check_update(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let updater = app.updater().map_err(|err| err.to_string())?;
+    let update = updater.check().await.map_err(|err| err.to_string())?;
+
+    Ok(update.map(|update| update.version.clone()))
+}
+
+// Downloads and installs whatever `check_update` last offered, verifying
+// it against the signing key in the config, then relaunches into the new
+// build so the backend restarts with it. A large app bundle takes a
+// while, so each percent lands in the banner as it arrives (one event
+// per percent, not per chunk).
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|err| err.to_string())?;
+
+    let Some(update) = updater.check().await.map_err(|err| err.to_string())? else {
+        return Err("the release is no longer offered".into());
+    };
+
+    let handle = app.clone();
+    let mut last_percent = None;
+
+    update
+        .download_and_install(
+            move |downloaded, total| {
+                let Some(total) = total.filter(|total| *total > 0) else {
+                    return;
+                };
+
+                let percent = (downloaded as u64 * 100 / total) as u8;
+
+                if Some(percent) != last_percent {
+                    last_percent = Some(percent);
+                    let _ = handle.emit("updates://progress", percent);
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+
+    app.restart();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let backend_pid: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     let exit_pid = backend_pid.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![open_external])
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            open_external,
+            check_update,
+            install_update
+        ])
         .setup(move |app| {
             build_menu(app)?;
             // Spawn synchronously so the PID is recorded before any event
@@ -450,6 +511,11 @@ pub fn run() {
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.reload();
                     }
+                }
+                "check-updates" => {
+                    // The webview owns the card and the download; the menu
+                    // only says the reader asked.
+                    let _ = app.emit("updates://check", ());
                 }
                 #[cfg(target_os = "macos")]
                 "emoji" => show_character_palette(),
