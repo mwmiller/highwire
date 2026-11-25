@@ -27,6 +27,10 @@ The macOS app bundle is signed with a Developer ID and notarized; the
 Gatekeeper override. All artifacts are produced by the tag-triggered
 release workflow (`.github/workflows/release.yml`).
 
+An installed app updates itself from the release's signed manifest, under
+**HighWire → Check for Updates…**, so downloading an installer is the
+first move, not a habit.
+
 ## Status
 
 **Application**

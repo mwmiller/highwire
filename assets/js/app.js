@@ -1313,6 +1313,101 @@ document.addEventListener("auxclick", e => {
   if (e.button === 1) openExternally(e)
 })
 
+// The updater is asked only when the reader asks: HighWire works offline,
+// so nothing in it reaches GitHub on its own. The desktop menu's "Check for
+// Updates…" emits `updates://check`, and this card is the answer — an offer
+// when a release exists, a quiet line when the version in use is the latest,
+// and nothing at all when the check cannot reach the network.
+const UpdateBanner = {
+  mounted() {
+    if (!window.__TAURI__) return
+
+    this.versionEl = this.el.querySelector("[data-update-version]")
+    this.statusEl = this.el.querySelector("[data-update-status]")
+    this.installButton = this.el.querySelector("[data-update-install]")
+    this.laterButton = this.el.querySelector("[data-update-later]")
+    this.unlisteners = []
+    this.checking = false
+
+    this.installButton.addEventListener("click", () => this.install())
+    this.laterButton.addEventListener("click", () => this.el.classList.add("hidden"))
+
+    window.__TAURI__.event
+      .listen("updates://check", () => this.check())
+      .then(unlisten => this.unlisteners.push(unlisten))
+      .catch(() => {})
+  },
+
+  async check() {
+    if (this.checking) return
+
+    this.checking = true
+    this.el.classList.add("hidden")
+
+    try {
+      const version = await window.__TAURI__.core.invoke("check_update")
+      if (!this.el.isConnected) return
+
+      if (version) this.offer(version)
+      else this.upToDate()
+    } catch (_) {
+      // Offline, or the manifest did not answer: the app is fine as it is.
+    } finally {
+      this.checking = false
+    }
+  },
+
+  offer(version) {
+    this.versionEl.textContent = `HighWire ${version} is available.`
+    this.statusEl.textContent = "Install it here, and HighWire reopens on the new version."
+    this.installButton.classList.remove("hidden")
+    this.installButton.disabled = false
+    this.laterButton.disabled = false
+    this.laterButton.textContent = "Not now"
+    this.el.classList.remove("hidden")
+  },
+
+  async upToDate() {
+    const current = await window.__TAURI__.app
+      .getVersion()
+      .catch(() => null)
+
+    this.versionEl.textContent = current
+      ? `HighWire ${current} is the latest version.`
+      : "HighWire is up to date."
+    this.statusEl.textContent = "There is nothing to install."
+    this.installButton.classList.add("hidden")
+    this.laterButton.textContent = "Close"
+    this.el.classList.remove("hidden")
+  },
+
+  async install() {
+    this.installButton.disabled = true
+    this.laterButton.disabled = true
+    this.statusEl.textContent = "Downloading…"
+
+    // One event per percent, so the line moves without the window having
+    // to guess whether a silent download is stuck.
+    try {
+      const unlisten = await window.__TAURI__.event.listen("updates://progress", ({payload}) => {
+        if (typeof payload === "number") this.statusEl.textContent = `Downloading… ${payload}%`
+      })
+      this.unlisteners.push(unlisten)
+
+      await window.__TAURI__.core.invoke("install_update")
+      this.statusEl.textContent = "Installed. Reopening HighWire…"
+    } catch (_) {
+      this.installButton.disabled = false
+      this.laterButton.disabled = false
+      this.statusEl.textContent = "The update didn't install. Try again later."
+    }
+  },
+
+  destroyed() {
+    this.unlisteners.forEach(unlisten => unlisten())
+  }
+}
+
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
   hooks: {
@@ -1331,7 +1426,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
     ReplyTarget,
     FollowMoves,
     HistoryNav,
-    ReplayKeys
+    ReplayKeys,
+    UpdateBanner
   }
 })
 
