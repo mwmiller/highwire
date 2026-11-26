@@ -1651,6 +1651,43 @@ defmodule HighWireWeb.TimelineLiveTest do
       refute html =~ ~s(href="#{head_path}")
     end
 
+    test "a nested reply preview says which reply it answers", %{conn: conn} do
+      base = 1_700_000_000_000
+
+      root =
+        ssb_msg("%nested-root.sha256", "@alice.ed25519", base - 10_000, %{
+          "type" => "post",
+          "text" => "the thread"
+        })
+
+      first =
+        ssb_msg("%nested-first.sha256", "@bob.ed25519", base - 5_000, %{
+          "type" => "post",
+          "text" => "the first answer",
+          "root" => "%nested-root.sha256",
+          "branch" => ["%nested-root.sha256"]
+        })
+
+      second =
+        ssb_msg("%nested-second.sha256", "@carol.ed25519", base, %{
+          "type" => "post",
+          "text" => "the nested answer",
+          "root" => "%nested-root.sha256",
+          "branch" => ["%nested-first.sha256"]
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload([root, first, second]))
+
+      # The previews read as a conversation: the answer to a reply names
+      # the person it answers, while a reply to the thread itself stays
+      # bare — the thread's head is the row it sat under.
+      marker = "↳ " <> HighWire.Avatar.short_id("@bob.ed25519") <> ":"
+      assert html =~ marker
+      assert html =~ "the nested answer"
+      assert count(html, "↳") == 1
+    end
+
     test "the window's rows are capped so first paint isn't a wall of rows", %{conn: conn} do
       now = 1_700_000_000_000
 

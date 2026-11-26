@@ -1842,7 +1842,12 @@ defmodule HighWireWeb.TimelineLive do
               {Ident.display_name(author_of(reply), @ctx)}
             </span>
             <Relationship.badge standing={standing(@ctx, author_of(reply))} />
-            <span class="min-w-0 truncate text-xs text-sub">{snippet(reply, @ctx)}</span>
+            <span class="min-w-0 truncate text-xs text-sub">
+              <span :if={parent = reply_parent_name(reply, @ctx)} class="text-faint">
+                ↳ {parent}:
+              </span>
+              {snippet(reply, @ctx)}
+            </span>
             <span class="ml-auto shrink-0 text-[11px] text-faint">
               <.age ts={ts(reply)} />
             </span>
@@ -2313,6 +2318,16 @@ defmodule HighWireWeb.TimelineLive do
     case text(msg) do
       "" -> MessageText.describe(msg, ctx)
       body -> snippet_of(body, Map.get(ctx, :rev))
+    end
+  end
+
+  # The name a nested preview answers, when the payload's index knows the
+  # parent's author. A reply to the thread's head has no marker, and an
+  # unknown parent leaves the line as the reply's own words.
+  defp reply_parent_name(reply, ctx) do
+    with key when is_binary(key) <- Map.get(reply, :reply_to),
+         id when is_binary(id) <- Map.get(ctx, :index, %{})[key] do
+      Ident.display_name(id, ctx)
     end
   end
 

@@ -66,6 +66,7 @@ defmodule HighWire.Timeline do
   alias HighWire.CountWords
   alias HighWire.SSB.{Client, Keys, MessageIndex, PrivateBox, Profile, Relations, Sidecar}
   alias HighWire.Suggester
+  alias HighWire.ThreadGraph
   alias HighWireWeb.MessageText
 
   @topic "timeline"
@@ -114,6 +115,12 @@ defmodule HighWire.Timeline do
   # built to fan out remote `get`s on every open, so the walk stops here
   # and the deepest message reached heads the row instead.
   @thread_root_depth 32
+
+  # How many resolved roots the thread graph keeps. Message bodies age out
+  # of the window; the one-line skeleton that says which conversation they
+  # belonged to does not need to. Past this, the graph is rebuilt from the
+  # window rather than grown forever.
+  @thread_graph_cap 20_000
 
   # Store-wide contact drain: a completed pass is not repeated on the
   # next reload — only after this long (the per-feed window already
@@ -537,11 +544,13 @@ defmodule HighWire.Timeline do
   message is not in the local store.
 
   The returned replies are threaded: each carries `:thread_depth` (the
-  number of reply hops between it and root — 0 for a root reply, 1 for
-  a reply to a root reply, and so on) so the post viewer can indent each
-  reply under the one it answers. Forks (reply-to-a-reply) are seated
-  among their siblings by `insert_fork/3`; the seat is preserved and
-  each fork's depth is counted from the chain it answers.
+  number of reply hops between it and root — 0 for a reply to the root,
+  one per answer further down) so the post viewer can indent each reply
+  under the one it answers. A reply names its parent in `branch`, the
+  protocol's pointer; clients that pin `root` to the message answered
+  instead of the thread's head are read the same way. `parent_key/1` is
+  the one place that answers which message a reply answers, so depth and
+  seating agree however deep the chain runs.
   """
   @spec post(binary()) :: %{root: map(), replies: [map()], focus: binary() | nil} | nil
   def post(key) when is_binary(key) do
@@ -933,6 +942,10 @@ defmodule HighWire.Timeline do
       # than log one "stray" per straggler (cleared when the stream ends).
       abandoned: MapSet.new(),
       acc: [],
+      # key → thread head, kept across folds and restarts so a
+      # conversation survives the window ageing its middle out (see
+      # fold_thread_roots/2 and HighWire.ThreadGraph).
+      thread_roots: ThreadGraph.load(),
       messages: empty_payload(),
       blob_ls_ref: nil,
       blob_timer: nil,
@@ -1847,22 +1860,23 @@ defmodule HighWire.Timeline do
 
   defp target_key(_msg), do: nil
 
-  # Walk up to the thread's first message: a plain reply's root IS that
-  # message, but a fork's root is the parent reply, so one hop lands on
-  # the middle of the thread. The seen set keeps a malformed cycle from
-  # walking forever, and the depth budget keeps an acyclic chain from
-  # doing it either — each step can be a remote `get`, so an unbounded
-  # chain is an unbounded fan-out of remote calls on every open.
+  # Walk up to the thread's first message: most clients name that message
+  # in root, while others point root at the parent reply (or at branch),
+  # so one hop can land in the middle of the thread. The seen set keeps a
+  # malformed cycle from walking forever, and the depth budget keeps an
+  # acyclic chain from doing it either — each step can be a remote `get`,
+  # so an unbounded chain is an unbounded fan-out of remote calls on
+  # every open.
   defp resolve_thread_root(state, window, key, msg, seen, depth) do
-    root = content(msg)["root"]
+    parent = parent_key(msg)
 
-    if depth > 0 and is_binary(root) and root != key and not MapSet.member?(seen, root) do
-      case fetch_msg(state, window, root) do
+    if depth > 0 and is_binary(parent) and parent != key and not MapSet.member?(seen, parent) do
+      case fetch_msg(state, window, parent) do
         nil ->
           msg
 
-        parent ->
-          resolve_thread_root(state, window, root, parent, MapSet.put(seen, root), depth - 1)
+        up ->
+          resolve_thread_root(state, window, parent, up, MapSet.put(seen, parent), depth - 1)
       end
     else
       msg
@@ -1939,13 +1953,19 @@ defmodule HighWire.Timeline do
   # order behind the subtree instead of jumping ahead of it. A parent
   # the window never saw rides at the end rather than vanishing.
   defp insert_fork(fork, replies, by_key) do
-    parent = content(fork)["root"]
-
     last_seat =
-      replies
-      |> Enum.with_index()
-      |> Enum.filter(fn {m, _i} -> m["key"] == parent or descendant_of?(m, parent, by_key) end)
-      |> List.last()
+      case parent_key(fork) do
+        nil ->
+          nil
+
+        parent ->
+          replies
+          |> Enum.with_index()
+          |> Enum.filter(fn {m, _i} ->
+            m["key"] == parent or descendant_of?(m, parent, by_key)
+          end)
+          |> List.last()
+      end
 
     case last_seat do
       nil -> replies ++ [fork]
@@ -1954,20 +1974,17 @@ defmodule HighWire.Timeline do
   end
 
   defp descendant_of?(m, ancestor, by_key, seen \\ MapSet.new()) do
-    root = content(m)["root"]
+    parent = parent_key(m)
 
     cond do
-      not is_binary(root) or MapSet.member?(seen, root) ->
+      is_nil(parent) or MapSet.member?(seen, parent) ->
         false
 
-      root == ancestor ->
+      parent == ancestor ->
         true
 
       true ->
-        case by_key[root] do
-          nil -> false
-          parent -> descendant_of?(parent, ancestor, by_key, MapSet.put(seen, root))
-        end
+        descendant_of?(by_key[parent], ancestor, by_key, MapSet.put(seen, parent))
     end
   end
 
@@ -2013,16 +2030,15 @@ defmodule HighWire.Timeline do
   # root walk itself accepts — either way the walk ends inside the Timeline
   # process instead of recursing until it dies there.
   defp hops_to_root(m, by_key, root_key, hops, seen \\ MapSet.new()) do
-    root = content(m)["root"]
+    parent = parent_key(m)
+    up = parent && Map.get(by_key, parent)
 
-    parent =
-      if is_binary(root) and root != root_key and root != m["key"] and
-           not MapSet.member?(seen, root),
-         do: Map.get(by_key, root)
-
-    if post?(parent) and hops < @thread_root_depth,
-      do: hops_to_root(parent, by_key, root_key, hops + 1, MapSet.put(seen, root)),
-      else: hops
+    if post?(up) and parent != root_key and hops < @thread_root_depth and
+         not MapSet.member?(seen, parent) do
+      hops_to_root(up, by_key, root_key, hops + 1, MapSet.put(seen, parent))
+    else
+      hops
+    end
   end
 
   # get unboxes private content in place (value only, private: true) —
@@ -3554,6 +3570,14 @@ defmodule HighWire.Timeline do
   # payload is already final, and the rebuild needs the window that
   # built it. The next reload resets acc anyway.
   defp finalize(state) do
+    # Fold the thread graph before the rows: a reply whose parent has aged
+    # out of the window still lands in its conversation instead of heading
+    # a row of its own.
+    previous = thread_roots(state)
+    roots = fold_thread_roots(state.acc, previous)
+    persist_thread_roots(previous, roots)
+    state = Map.put(state, :thread_roots, roots)
+
     {payload, missing, base, post_refs} = build_payload(state)
 
     # The reload heartbeat re-fetches the window and lands here every time.
@@ -3718,7 +3742,8 @@ defmodule HighWire.Timeline do
 
     entries =
       for msg <- state.edit_buf, {edit_key, target} <- List.wrap(MessageIndex.edit(msg)) do
-        {edit_key, target, edit_root(target, by_key) || MessageIndex.edit_thread_root(target)}
+        {edit_key, target,
+         edit_root(target, by_key, thread_roots(state)) || MessageIndex.edit_thread_root(target)}
       end
 
     if entries != [], do: MessageIndex.record_edits(entries)
@@ -3748,10 +3773,10 @@ defmodule HighWire.Timeline do
   defp received_ts(%{"timestamp" => ts}) when is_integer(ts), do: ts
   defp received_ts(_), do: nil
 
-  defp edit_root(target, by_key) do
+  defp edit_root(target, by_key, roots) do
     case Map.get(by_key, target) do
       nil -> nil
-      parent -> thread_root(parent, by_key) || target
+      parent -> thread_root(parent, by_key, roots) || target
     end
   end
 
@@ -3844,7 +3869,7 @@ defmodule HighWire.Timeline do
       |> Enum.take(2000)
       |> Enum.map(&search_projection/1)
 
-    feed = build_feed(acc, state.self_id, like_counts, contacts)
+    feed = build_feed(acc, state.self_id, like_counts, contacts, thread_roots(state))
 
     # key → author, but only for the keys the rows about to go out can
     # ask about: each row's own message, its previewed replies, and the
@@ -4082,10 +4107,10 @@ defmodule HighWire.Timeline do
   # row per author per direction per spate listing who they touched.
   @doc false
   def build_feed(acc, self_id, like_counts) do
-    build_feed(acc, self_id, like_counts, nil)
+    build_feed(acc, self_id, like_counts, nil, %{})
   end
 
-  defp build_feed(acc, self_id, like_counts, contact_entries) do
+  defp build_feed(acc, self_id, like_counts, contact_entries, roots) do
     # Every row builder below names a message by its value map
     # (value["author"], value["content"], …), so a record whose envelope
     # carries no value map — a corrupt one — would crash the timeline
@@ -4132,19 +4157,26 @@ defmodule HighWire.Timeline do
     edit_index = edit_index(acc)
     {_contacts, rest} = Enum.split_with(acc, &contact?/1)
 
-    {threaded, standalone} =
-      Enum.split_with(rest, fn msg ->
-        thread_root(msg, by_key) != nil or edit_thread(msg, by_key, edit_index) != nil
+    # The fold already resolved every window message's root into the
+    # graph — read that answer instead of walking the same chain again,
+    # so a message's root is computed once per pass. The fallback covers a
+    # caller that brought no graph (build_feed/3) and the messages the
+    # fold does not file: an edit threads under the post it revises.
+    {groups, standalone} =
+      Enum.reduce(rest, {%{}, []}, fn msg, {groups, alone} ->
+        case folded_root(msg, by_key, roots, edit_index) do
+          nil -> {groups, [msg | alone]}
+          root -> {Map.update(groups, root, [msg], &[msg | &1]), alone}
+        end
       end)
 
     thread_entries =
-      threaded
-      |> Enum.group_by(fn msg ->
-        thread_root(msg, by_key) || edit_thread(msg, by_key, edit_index)
-      end)
+      groups
       |> Enum.map(fn {root_key, group} ->
         build_thread_entry(root_key, group, by_key, like_counts, self_id)
       end)
+
+    standalone = Enum.reverse(standalone)
 
     contact_entries = Enum.map(contact_entries, &contact_row(&1, self_id))
 
@@ -4242,7 +4274,11 @@ defmodule HighWire.Timeline do
       )
       |> Enum.sort_by(&bump_ts/1, :desc)
 
-    recent = Enum.take(fresh, 3)
+    recent =
+      fresh
+      |> Enum.take(3)
+      |> Enum.map(&with_reply_to(&1, root_key))
+
     replies = reply_count(fresh)
 
     likes = thread_likes(group, root_key, like_counts)
@@ -4700,7 +4736,13 @@ defmodule HighWire.Timeline do
     # them oldest-first (rollups render in list order). Feed rows store
     # recent newest-first and the template reverses for display, so flip
     # here or the thread renders backwards — and keep the newest cap.
-    recent = item["latestReplies"] |> List.wrap() |> Enum.reverse() |> Enum.take(3)
+    recent =
+      item["latestReplies"]
+      |> List.wrap()
+      |> Enum.reverse()
+      |> Enum.take(3)
+      |> Enum.map(&with_reply_to(&1, item["key"]))
+
     replies = count || item["totalReplies"] || 0
     author = value_of(msg)["author"]
 
@@ -4753,28 +4795,113 @@ defmodule HighWire.Timeline do
   # rows); they only contribute like counts.
   #
   # Roots are chain-normalized: when only part of a conversation's chain
-  # is in the window, walk up through in-window post parents so every
-  # piece groups under one key — otherwise an intermediate parent heads
-  # its own row while the replies it spawned head another (the split
-  # conversations bug). The LiveView's search keys rows by the same
-  # answer, so a nested reply lands on its thread's row there too.
+  # is in the window, walk up through post parents (a `branch`-named
+  # parent, then `root`) so every piece groups under one key — otherwise
+  # an intermediate parent heads its own row while the replies it spawned
+  # head another (the split conversations bug). A parent the window has
+  # already aged out is answered from the thread graph. The LiveView's
+  # search keys rows by the same answer, so a nested reply lands on its
+  # thread's row there too.
   @doc false
-  def thread_root(msg, by_key) do
+  def thread_root(msg, by_key), do: thread_root(msg, by_key, %{})
+
+  @doc false
+  def thread_root(msg, by_key, roots) do
     c = content(msg)
 
     case c["type"] do
-      "post" -> post_thread_root(c, msg, by_key)
+      "post" -> post_thread_root(c, msg, by_key, roots)
       "about" -> about_thread_root(c)
       _ -> nil
     end
   end
 
-  defp post_thread_root(c, msg, by_key) do
+  # A previewed reply that answers another reply says which message it
+  # answers; the row's index supplies the name. A reply to the thread's
+  # head needs no marker — the head is the row itself.
+  defp with_reply_to(reply, root_key) do
+    case parent_key(reply) do
+      nil -> reply
+      ^root_key -> reply
+      parent -> Map.put(reply, :reply_to, parent)
+    end
+  end
+
+  defp post_thread_root(c, msg, by_key, roots) do
     cond do
       msg_id?(c["fork"]) -> c["fork"]
-      msg_id?(c["root"]) -> walk_root(c["root"], by_key)
+      parent = parent_key(msg) -> walk_root(parent, by_key, roots)
       is_binary(msg["key"]) -> msg["key"]
       true -> nil
+    end
+  end
+
+  # The message a post answers. `branch` is the protocol's parent pointer:
+  # a key, or a list of keys when one reply answers several messages. Of
+  # several, the last one named threads the reply — the most recent message
+  # answered — so indentation is the same on every read. `branch` is absent
+  # from clients that pin `root` to the message being answered instead of
+  # the thread's head, so `root` is the fallback. `fork` names the head
+  # itself and is handled before this — it is never a parent.
+  defp parent_key(msg) do
+    c = content(msg)
+
+    branches =
+      case c["branch"] do
+        list when is_list(list) -> Enum.reverse(list)
+        branch -> [branch]
+      end
+
+    (branches ++ [c["root"]])
+    |> Enum.find(fn key -> is_binary(key) and key != msg["key"] and msg_id?(key) end)
+  end
+
+  # key → the thread head that key belongs to, for every post the fold has
+  # seen. Message bodies age out of the window; the skeleton does not, so
+  # retention drops bytes without splitting a conversation.
+  @doc false
+  def fold_thread_roots(acc, roots) do
+    by_key = Map.new(acc, fn msg -> {msg["key"], msg} end)
+
+    roots =
+      Enum.reduce(acc, roots, fn msg, graph ->
+        with key when is_binary(key) <- msg["key"],
+             true <- post?(msg),
+             root when is_binary(root) <- thread_root(msg, by_key, graph) do
+          Map.put(graph, key, root)
+        else
+          _ -> graph
+        end
+      end)
+
+    if map_size(roots) > @thread_graph_cap do
+      Map.take(roots, Map.keys(by_key))
+    else
+      roots
+    end
+  end
+
+  defp thread_roots(state), do: Map.get(state, :thread_roots, %{})
+
+  # A message's thread: the graph's answer for a window post (the fold's
+  # own resolution), then the live walk for anything the graph does not
+  # hold, then the post an edit revises.
+  defp folded_root(msg, by_key, roots, edit_index) do
+    Map.get(roots, msg["key"]) ||
+      thread_root(msg, by_key, roots) ||
+      edit_thread(msg, by_key, edit_index)
+  end
+
+  # Only what a fold changed goes to disk; a fold that trimmed the graph
+  # to its cap rewrites the file, so the stored copy cannot outgrow the
+  # window it describes.
+  defp persist_thread_roots(previous, roots) do
+    if map_size(roots) < map_size(previous) do
+      ThreadGraph.rewrite(roots)
+    else
+      roots
+      |> Enum.reject(fn {key, root} -> Map.get(previous, key) == root end)
+      |> ThreadGraph.put()
     end
   end
 
@@ -4782,18 +4909,29 @@ defmodule HighWire.Timeline do
     if msg_id?(c["about"]), do: c["about"]
   end
 
-  # Bounded upward walk: posts only; stop at the first ancestor missing
-  # from the window (its further chain is unknowable here), at a
-  # non-post or rootless parent, on revisit, or at depth 32 so a cyclic
-  # or pathological chain can never hang the finalize pass.
-  defp walk_root(root, by_key, seen \\ MapSet.new(), depth \\ 0) do
+  # Bounded upward walk: posts only; stop at a non-post or rootless
+  # parent, on revisit, or at depth 32 so a cyclic or pathological chain
+  # can never hang the finalize pass. A parent the window has aged out is
+  # answered from the thread graph, so its body is not needed to keep the
+  # conversation whole.
+  defp walk_root(root, by_key, roots, seen \\ MapSet.new(), depth \\ 0) do
     parent = Map.get(by_key, root)
 
-    if parent != nil and post?(parent) and msg_id?(content(parent)["root"]) and
-         depth < 32 and not MapSet.member?(seen, root) do
-      walk_root(content(parent)["root"], by_key, MapSet.put(seen, root), depth + 1)
-    else
-      root
+    cond do
+      MapSet.member?(seen, root) or depth >= @thread_root_depth ->
+        root
+
+      parent == nil ->
+        Map.get(roots, root, root)
+
+      post?(parent) ->
+        case parent_key(parent) do
+          nil -> root
+          up -> walk_root(up, by_key, roots, MapSet.put(seen, root), depth + 1)
+        end
+
+      true ->
+        root
     end
   end
 
@@ -5084,7 +5222,7 @@ defmodule HighWire.Timeline do
       Enum.flat_map(feed, fn row ->
         msg = row[:msg] || %{}
         recent = Map.get(row, :recent, [])
-        [msg["key"], row[:root_key] | Enum.map(recent, & &1["key"])]
+        [msg["key"], row[:root_key] | Enum.flat_map(recent, &[&1["key"], &1[:reply_to]])]
       end)
 
     targets =

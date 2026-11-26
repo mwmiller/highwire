@@ -25,6 +25,7 @@ defmodule HighWire.Application do
           HighWire.SearchIndex,
           HighWire.BlobIndex,
           HighWire.SSB.MessageIndex,
+          HighWire.ThreadGraph,
           HighWire.Games.Catalog,
           HighWire.Backgammon.Store,
           HighWire.Chess.Store,

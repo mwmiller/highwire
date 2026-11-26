@@ -2651,6 +2651,147 @@ defmodule HighWire.TimelineTest do
              ]
     end
 
+    test "a reply that names its parent in branch threads under it at any depth" do
+      # The shape this app publishes: root is the thread's head and branch
+      # names the message answered. Reading root alone made every answer a
+      # depth-0 sibling of the message it answers.
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      first =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      second =
+        msg("@c=.ed25519", "%b=.sha256", 3_000, %{
+          "type" => "post",
+          "text" => "second",
+          "root" => "%r=.sha256",
+          "branch" => ["%a=.sha256"]
+        })
+
+      third =
+        msg("@d=.ed25519", "%c=.sha256", 4_000, %{
+          "type" => "post",
+          "text" => "third",
+          "root" => "%r=.sha256",
+          "branch" => ["%b=.sha256"]
+        })
+
+      st = %{client: nil, messages: %{messages: [root, first, second, third]}, thread_roots: %{}}
+      {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
+
+      assert Enum.map(post.replies, &{&1["key"], &1.thread_depth}) == [
+               {"%a=.sha256", 0},
+               {"%b=.sha256", 1},
+               {"%c=.sha256", 2}
+             ]
+    end
+
+    test "a previewed reply that answers another reply names it" do
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      first =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      second =
+        msg("@c=.ed25519", "%b=.sha256", 3_000, %{
+          "type" => "post",
+          "text" => "second",
+          "root" => "%r=.sha256",
+          "branch" => ["%a=.sha256"]
+        })
+
+      [row] = Timeline.build_feed([root, first, second], "@me", %{})
+
+      assert Enum.map(row.recent, &{&1["key"], &1[:reply_to]}) == [
+               {"%b=.sha256", "%a=.sha256"},
+               {"%a=.sha256", nil}
+             ]
+    end
+
+    test "a reply naming several parents threads under the last one named" do
+      # A merge reply names every message it answers. One of them has to
+      # carry the indentation: the last key named is the parent, and depth
+      # counts from it — so a reply answering both a reply and that reply's
+      # parent sits one deeper than the reply, not level with it.
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      first =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      second =
+        msg("@c=.ed25519", "%b=.sha256", 3_000, %{
+          "type" => "post",
+          "text" => "second",
+          "root" => "%r=.sha256",
+          "branch" => ["%a=.sha256"]
+        })
+
+      merge =
+        msg("@d=.ed25519", "%m=.sha256", 4_000, %{
+          "type" => "post",
+          "text" => "both",
+          "root" => "%r=.sha256",
+          "branch" => ["%a=.sha256", "%b=.sha256"]
+        })
+
+      st = %{client: nil, messages: %{messages: [root, first, second, merge]}}
+      {:reply, post, _st} = Timeline.handle_call({:post, "%r=.sha256"}, {self(), make_ref()}, st)
+
+      assert Enum.map(post.replies, &{&1["key"], &1.thread_depth}) == [
+               {"%a=.sha256", 0},
+               {"%b=.sha256", 1},
+               {"%m=.sha256", 2}
+             ]
+
+      # The feed's preview names the same parent the page indents under.
+      [row] = Timeline.build_feed([root, first, second, merge], "@me", %{})
+      assert [%{"key" => "%m=.sha256"} = preview | _] = row.recent
+      assert preview[:reply_to] == "%b=.sha256"
+    end
+
+    test "the thread graph keeps the head after the parent leaves the window" do
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      parent =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      # A fold while the parent is still in the window records its head.
+      roots = Timeline.fold_thread_roots([root, parent], %{})
+      assert roots["%a=.sha256"] == "%r=.sha256"
+
+      # A reply answering the now-absent parent is still part of its
+      # conversation: the skeleton answers what the bodies no longer can.
+      fork =
+        msg("@c=.ed25519", "%f=.sha256", 3_000, %{
+          "type" => "post",
+          "text" => "second",
+          "root" => "%a=.sha256",
+          "branch" => ["%a=.sha256"]
+        })
+
+      assert Timeline.thread_root(fork, %{}, roots) == "%r=.sha256"
+    end
+
     test "a root cycle ends the hop count instead of recursing forever" do
       # Two replies naming each other in root is malformed, not merely
       # deep: without a seen set the hop walk would recurse until the
@@ -2898,6 +3039,35 @@ defmodule HighWire.TimelineTest do
       # The walk climbed the full budget then stopped, landing on the
       # message `cap` hops up — not the true head at %c1.
       assert post.root["key"] == "%c#{length - cap}=.sha256"
+    end
+  end
+
+  describe "the stored thread graph" do
+    setup do
+      # The suite's graph is the application's own instance; a hand-built
+      # finalize writes through it, so each test starts from empty.
+      HighWire.ThreadGraph.rewrite(%{})
+      on_exit(fn -> HighWire.ThreadGraph.rewrite(%{}) end)
+      :ok
+    end
+
+    test "a finalize writes the chains the next start reads" do
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      reply =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      st = drain_state(acc: [root, reply], pending: %{123 => "@me.ed25519"})
+      {:noreply, _st} = Timeline.handle_info({Client, 123, :done}, st)
+
+      stored = HighWire.ThreadGraph.load()
+      assert stored["%a=.sha256"] == "%r=.sha256"
+      assert stored["%r=.sha256"] == "%r=.sha256"
     end
   end
 
