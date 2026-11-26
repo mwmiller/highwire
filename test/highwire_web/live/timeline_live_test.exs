@@ -1519,6 +1519,49 @@ defmodule HighWireWeb.TimelineLiveTest do
   end
 
   describe "feed coherence" do
+    test "a conversation shows one row however its replies name their parent", %{conn: conn} do
+      base = 1_700_000_000_000
+
+      head =
+        ssb_msg("%head-split.sha256", "@alice.ed25519", base - 10_000, %{
+          "type" => "post",
+          "text" => "the head of the conversation"
+        })
+
+      parent =
+        ssb_msg("%parent-split.sha256", "@bob.ed25519", base - 5_000, %{
+          "type" => "post",
+          "text" => "a reply that names the head",
+          "root" => "%head-split.sha256"
+        })
+
+      leaf =
+        ssb_msg("%leaf-split.sha256", "@carol.ed25519", base, %{
+          "type" => "post",
+          "text" => "a reply naming an intermediate parent",
+          "root" => "%parent-split.sha256"
+        })
+
+      payload = feed_payload([leaf, parent, head])
+
+      # The feed hands one conversation back as two rows: the replies
+      # grouped under the parent they name, and the head on its own. The
+      # window still holds the chain between them.
+      split =
+        HighWire.Timeline.build_feed([head, parent], nil, %{}) ++
+          HighWire.Timeline.build_feed([leaf], nil, %{})
+
+      {:ok, view, _html} = live(conn, "/")
+      _html = notify(view, %{payload | feed: split})
+      feed = view |> element("#feed-column") |> render()
+
+      # One row for the conversation, showing the message at its top and
+      # the reply the other row knew.
+      assert length(Regex.scan(~r/id="row-/, feed)) == 1
+      assert feed =~ "the head of the conversation"
+      assert feed =~ "a reply that names the head"
+    end
+
     test "a reply bumps an already-shown thread to the top", %{conn: conn} do
       base = 1_700_000_000_000
 

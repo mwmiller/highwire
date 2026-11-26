@@ -909,7 +909,7 @@ defmodule HighWireWeb.TimelineLive do
       (window_rows ++ paged_rows)
       |> annotate_likes(socket.assigns.like_counts)
       |> Enum.sort_by(& &1.activity, :desc)
-      |> Enum.uniq_by(&dedupe_id/1)
+      |> collapse_threads(socket.assigns.messages)
 
     %{entry | rows: rows}
   end
@@ -985,11 +985,66 @@ defmodule HighWireWeb.TimelineLive do
   # block by the same author are two rows, and a spate that cooled off
   # before the next one is its own line. The anchor message keys it: the
   # row moves while its spate is live, then freezes when the cooloff ends.
-  # Everything else keys by thread identity.
-  defp dedupe_id(%{kind: :contact} = row),
+  defp contact_uid(row),
     do: {:contact, author_of(row.msg), Map.get(row, :contact_action, :followed), row.msg["key"]}
 
-  defp dedupe_id(row), do: {:row, row_uid(row)}
+  # One conversation can reach the tab as two rows: the feed groups the
+  # replies that name an intermediate parent under that parent, while the
+  # head arrives as a row of its own. Both name the same message at the top
+  # of the chain, so the tab shows one row for the thread and folds in what
+  # the others knew — a reply preview or a raised activity is an update the
+  # reader has already been shown, and the collapse must not take it back.
+  defp collapse_threads(rows, messages) do
+    by_key =
+      messages
+      |> Map.new(fn msg -> {msg["key"], msg} end)
+      |> Map.merge(Map.new(rows, fn row -> {row.msg["key"], row.msg} end))
+
+    rows
+    |> Enum.group_by(fn
+      %{kind: :contact} = row -> contact_uid(row)
+      row -> {:thread, thread_head(row, by_key)}
+    end)
+    |> Enum.map(fn {_id, group} -> merge_thread(group) end)
+    |> Enum.sort_by(& &1.activity, :desc)
+  end
+
+  # The head of a row's conversation, walked through the messages the tab
+  # already holds — the same answer the store gives a search hit, so a reply
+  # and its thread land on one row in both places.
+  defp thread_head(row, by_key) do
+    Timeline.thread_root(row.msg, by_key) || row_uid(row)
+  end
+
+  defp merge_thread([row]), do: row
+
+  defp merge_thread(rows) do
+    # The row that names the head is the one to draw: it carries the message
+    # at the top of the thread, and the others are its replies seen alone.
+    base =
+      Enum.max_by(rows, fn row ->
+        {Map.get(row, :rooted?, false), Map.get(row, :replies, 0), row.activity}
+      end)
+
+    %{
+      base
+      | activity: Enum.max(Enum.map(rows, & &1.activity)),
+        replies: Enum.max(Enum.map(rows, &Map.get(&1, :replies, 0))),
+        recent: merge_recent(rows),
+        participants: rows |> Enum.flat_map(&Map.get(&1, :participants, [])) |> Enum.uniq(),
+        mentioned?: Enum.any?(rows, &Map.get(&1, :mentioned?, false))
+    }
+  end
+
+  # The newest previews across the collapsed rows, so a reply only one of
+  # them carried still greets the thread.
+  defp merge_recent(rows) do
+    rows
+    |> Enum.flat_map(&Map.get(&1, :recent, []))
+    |> Enum.uniq_by(& &1["key"])
+    |> Enum.sort_by(&(&1["timestamp"] || 0), :desc)
+    |> Enum.take(3)
+  end
 
   # DOM identity for a feed row. LiveView patches repeated children by
   # id, so a positional post-<idx> id detaches from its message the
