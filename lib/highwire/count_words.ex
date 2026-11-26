@@ -34,7 +34,7 @@ defmodule HighWire.CountWords do
       "several"
 
       iex> HighWire.CountWords.words(120)
-      "hundreds of"
+      "dozens of"
   """
   def words(count) when count <= 0, do: "no"
   def words(1), do: "a"
@@ -49,6 +49,29 @@ defmodule HighWire.CountWords do
   def words(count) when count <= 999_999, do: "hundreds of thousands of"
   def words(count) when count <= 999_999_999, do: "millions of"
   def words(_count), do: "billions of"
+
+  @doc """
+  The quantity with `more` after it, for a sentence that carries on:
+  `"one more"`, `"a few more"`, `"several more"`, `"about a dozen
+  more"`, `"a score more"`, `"dozens more"`, `"hundreds more"`.
+
+  `words/1` answers how many, and its noun follows; this answers how many
+  others, and no noun does. The larger bands say "of" because a noun comes
+  next — "dozens of replies" — so that "of" is dropped here, where the
+  next word is "more".
+
+      iex> HighWire.CountWords.more(4)
+      "several more"
+
+      iex> HighWire.CountWords.more(59)
+      "dozens more"
+  """
+  def more(count) do
+    case words(count) do
+      "a" -> "one more"
+      quantity -> String.replace_suffix(quantity, " of", "") <> " more"
+    end
+  end
 
   @doc """
   The quantity with its noun, pluralised for the count. Pass the plural

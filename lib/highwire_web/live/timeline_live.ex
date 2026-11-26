@@ -2008,9 +2008,10 @@ defmodule HighWireWeb.TimelineLive do
   # :followed, :blocked or :unfollowed, keyed by the row's :contact_action
   # (the Timeline groups contact edits by direction so a block never
   # masquerades as a follow). The flat window's individual contact
-  # messages fall back to their single contact and its verb. "+N more"
-  # toggles the full list (same expand event as post bodies); each chip
-  # links to that feed's profile.
+  # messages fall back to their single contact and its verb. The rest of the
+  # list hides behind "and several more", in words, and that button toggles
+  # it (same expand event as post bodies); each chip links to that feed's
+  # profile.
   defp contact_row(assigns) do
     action = Map.get(assigns.row, :contact_action, :followed)
     people = Map.get(assigns.row, action) || [content(assigns.row.msg)["contact"]]
@@ -2071,7 +2072,7 @@ defmodule HighWireWeb.TimelineLive do
             phx-value-key={@row.msg["key"]}
             class="text-accent hover:underline"
           >
-            {CountWords.words(length(@people) - length(@shown))} more
+            and {CountWords.more(length(@people) - length(@shown))}
           </button>
           <button
             :if={@expanded? and length(@people) > 3}
@@ -2098,8 +2099,8 @@ defmodule HighWireWeb.TimelineLive do
     # message anchors it.
     #
     # A run of channel toggles is one row too, so it lists the channels
-    # it touched — three at a time, with the rest behind the same
-    # "+N more" the contact rows use.
+    # it touched — three at a time, with the rest behind a "+N more" count,
+    # a figure because the channels themselves are named beside it.
     channels = Map.get(assigns.row, :channels)
     expanded? = MapSet.member?(assigns.ctx.expanded, assigns.row.msg["key"])
     shown = if expanded?, do: channels || [], else: Enum.take(channels || [], 3)

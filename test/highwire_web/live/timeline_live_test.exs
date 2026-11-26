@@ -467,6 +467,27 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert is_binary(html)
     end
 
+    test "a long list of follows says how many more in words", %{conn: conn} do
+      now = 1_700_000_000_000
+
+      msgs =
+        for i <- 1..35 do
+          ssb_msg("%follow-#{i}.sha256", "@alice:.ed25519", now + i * 60_000, %{
+            "type" => "contact",
+            "contact" => "@person#{i}:.ed25519",
+            "following" => true
+          })
+        end
+
+      {:ok, view, _html} = live(conn, "/")
+      html = notify(view, feed_payload(msgs))
+
+      # Three chips, then the rest as words: the button carries the sentence
+      # on, so no noun and no "of".
+      assert html =~ "and dozens more"
+      refute html =~ "of more"
+    end
+
     test "blocks land as their own rows beside follows and unfollows", %{conn: conn} do
       now = 1_700_000_000_000
 

@@ -3,6 +3,8 @@ defmodule HighWire.CountWordsTest do
 
   alias HighWire.CountWords
 
+  doctest HighWire.CountWords
+
   describe "words/1" do
     test "small counts keep the words people use for them" do
       assert CountWords.words(0) == "no"
@@ -27,6 +29,26 @@ defmodule HighWire.CountWordsTest do
     test "neighbouring counts can read the same" do
       # The point of the bands: 99, 100 and 101 are all dozens.
       assert CountWords.words(99) == CountWords.words(101)
+    end
+  end
+
+  describe "more/1" do
+    test "reads as a sentence carries on, without the of" do
+      assert CountWords.more(1) == "one more"
+      assert CountWords.more(3) == "a few more"
+      assert CountWords.more(7) == "several more"
+      assert CountWords.more(12) == "about a dozen more"
+      assert CountWords.more(25) == "a score more"
+      assert CountWords.more(59) == "dozens more"
+      assert CountWords.more(400) == "hundreds more"
+      assert CountWords.more(5_000) == "thousands more"
+    end
+
+    test "no band ever puts of before more" do
+      for count <- [0, 1, 3, 9, 12, 25, 59, 199, 999, 5_000, 50_000, 500_000, 5_000_000] do
+        refute CountWords.more(count) =~ "of more"
+        refute CountWords.more(count) =~ "a more"
+      end
     end
   end
 
