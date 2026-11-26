@@ -734,7 +734,8 @@ defmodule HighWireWeb.PostLive do
               id={message_dom_id(reply["key"], :reply)}
               phx-hook={focus_hook(reply["key"], @focus_key)}
               data-thread-end={reply["key"] == @thread_end_key}
-              class="flex gap-3 border-b border-edge-soft py-4"
+              class="reply-indent flex gap-3 border-b border-edge-soft py-4"
+              style={"--reply-depth: #{reply[:thread_depth] || 0}"}
             >
               <Avatar.face
                 id={author_of(reply)}
@@ -743,10 +744,7 @@ defmodule HighWireWeb.PostLive do
                 size={32}
                 class="mt-0.5"
               />
-              <div
-                class="reply-indent min-w-0 flex-1"
-                style={"--reply-depth: #{reply[:thread_depth] || 0}"}
-              >
+              <div class="min-w-0 flex-1">
                 <div class="flex items-baseline gap-2">
                   <span class="text-sm font-semibold text-paper">
                     <.link
