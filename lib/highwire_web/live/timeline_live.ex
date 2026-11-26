@@ -852,7 +852,7 @@ defmodule HighWireWeb.TimelineLive do
 
     {fresh_contacts, fresh_rows} =
       socket.assigns.feed
-      |> Enum.filter(&in_scope?(view, &1, self_id))
+      |> Enum.filter(&contributes?(view, &1, self_id))
       |> Enum.reject(&blocked_author?(&1, blocked))
       |> Enum.split_with(&(&1.kind == :contact))
 
@@ -905,11 +905,15 @@ defmodule HighWireWeb.TimelineLive do
       |> Enum.sort_by(& &1.activity, :desc)
       |> Enum.take(@max_tab_rows)
 
+    # Scope after the collapse, not before: a thread the reader is in can
+    # reach the tab as a head row that does not say so, beside the replies
+    # that do, and merging is what makes the head row the tab's row.
     rows =
       (window_rows ++ paged_rows)
       |> annotate_likes(socket.assigns.like_counts)
       |> Enum.sort_by(& &1.activity, :desc)
       |> collapse_threads(socket.assigns.messages)
+      |> Enum.filter(&in_scope?(view, &1, self_id))
 
     %{entry | rows: rows}
   end
@@ -1002,18 +1006,17 @@ defmodule HighWireWeb.TimelineLive do
 
     rows
     |> Enum.group_by(fn
-      %{kind: :contact} = row -> contact_uid(row)
-      row -> {:thread, thread_head(row, by_key)}
+      %{kind: :contact} = row ->
+        contact_uid(row)
+
+      row ->
+        # The head of the conversation, walked through the messages the tab
+        # already holds — the same answer the store gives a search hit, so a
+        # reply and its thread land on one row in both places.
+        {:thread, Timeline.thread_root(row.msg, by_key) || row_uid(row)}
     end)
     |> Enum.map(fn {_id, group} -> merge_thread(group) end)
     |> Enum.sort_by(& &1.activity, :desc)
-  end
-
-  # The head of a row's conversation, walked through the messages the tab
-  # already holds — the same answer the store gives a search hit, so a reply
-  # and its thread land on one row in both places.
-  defp thread_head(row, by_key) do
-    Timeline.thread_root(row.msg, by_key) || row_uid(row)
   end
 
   defp merge_thread([row]), do: row
@@ -1023,24 +1026,35 @@ defmodule HighWireWeb.TimelineLive do
     # at the top of the thread, and the others are its replies seen alone.
     base =
       Enum.max_by(rows, fn row ->
-        {Map.get(row, :rooted?, false), Map.get(row, :replies, 0), row.activity}
+        {Map.get(row, :rooted?, false), Map.get(row, :replies) || 0, row.activity}
       end)
 
-    %{
-      base
-      | activity: Enum.max(Enum.map(rows, & &1.activity)),
-        replies: Enum.max(Enum.map(rows, &Map.get(&1, :replies, 0))),
-        recent: merge_recent(rows),
-        participants: rows |> Enum.flat_map(&Map.get(&1, :participants, [])) |> Enum.uniq(),
-        mentioned?: Enum.any?(rows, &Map.get(&1, :mentioned?, false))
-    }
+    # Every row here is the same conversation, so what any of them knew is
+    # true of the one row: the highest count, the raised activity, the
+    # previews, and the reader's own part in it. `paged` rides along too —
+    # a row that came from a page stays one, or the window cap would trim
+    # away a page the reader asked for. Map.merge, not an update: post rows
+    # do not all carry an edited_by.
+    Map.merge(base, %{
+      activity: Enum.max(Enum.map(rows, & &1.activity)),
+      replies: rows |> Enum.map(&(Map.get(&1, :replies) || 0)) |> Enum.max(),
+      recent: merge_recent(base, rows),
+      participants: rows |> Enum.flat_map(&Map.get(&1, :participants, [])) |> Enum.uniq(),
+      mentioned?: Enum.any?(rows, &Map.get(&1, :mentioned?, false)),
+      self?: Enum.any?(rows, &Map.get(&1, :self?, false)),
+      edited_by: rows |> Enum.flat_map(&Map.get(&1, :edited_by, [])) |> Enum.uniq(),
+      paged: Enum.any?(rows, &Map.get(&1, :paged, false))
+    })
   end
 
   # The newest previews across the collapsed rows, so a reply only one of
-  # them carried still greets the thread.
-  defp merge_recent(rows) do
-    rows
-    |> Enum.flat_map(&Map.get(&1, :recent, []))
+  # them carried still greets the thread. A row that came in as a lone reply
+  # holds it as its own message, not as a preview, so those messages join the
+  # previews: the collapse keeps a reply's count, and must keep its words.
+  defp merge_recent(base, rows) do
+    own = for row <- rows, is_map(row.msg), row.msg["key"] != base.msg["key"], do: row.msg
+
+    (Enum.flat_map(rows, &Map.get(&1, :recent, [])) ++ own)
     |> Enum.uniq_by(& &1["key"])
     |> Enum.sort_by(&(&1["timestamp"] || 0), :desc)
     |> Enum.take(3)
@@ -1141,6 +1155,15 @@ defmodule HighWireWeb.TimelineLive do
   # reject contact/other rows themselves. Private follows merge_into's
   # rule: the public window never carries boxed messages, so a private
   # search draws on loaded pages alone.
+  # A thread or post row contributes whole, whatever view is showing: a
+  # conversation the reader is in arrives as a head row that carries no
+  # sign of them plus the replies that do, and the collapsed row is scoped
+  # once, after. Contact rows and the rest are scoped as before.
+  defp contributes?(:participating, %{kind: kind}, _self_id) when kind in [:thread, :post],
+    do: true
+
+  defp contributes?(view, row, self_id), do: in_scope?(view, row, self_id)
+
   defp in_scope?(:public, row, _self_id), do: row.kind in [:thread, :post, :contact, :other]
   defp in_scope?(:private, _row, _self_id), do: false
   defp in_scope?(:participating, row, _self_id), do: participating?(row)

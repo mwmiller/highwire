@@ -1562,6 +1562,40 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert feed =~ "a reply that names the head"
     end
 
+    test "the collapsed row keeps the reader's own part in the conversation", %{conn: conn} do
+      base = 1_700_000_000_000
+      me = "@reader.ed25519"
+
+      head =
+        ssb_msg("%head-mine.sha256", "@alice.ed25519", base - 10_000, %{
+          "type" => "post",
+          "text" => "someone else started this"
+        })
+
+      mine =
+        ssb_msg("%mine-self.sha256", me, base, %{
+          "type" => "post",
+          "text" => "and I answered",
+          "root" => "%head-mine.sha256"
+        })
+
+      payload = feed_payload([head, mine], self_id: me)
+
+      # The head comes back as its own row and my reply as another, so only
+      # the reply row knows the reader is in the conversation. The merge has
+      # to keep that, or the one row drops out of Participating.
+      split =
+        HighWire.Timeline.build_feed([head], me, %{}) ++
+          HighWire.Timeline.build_feed([mine], me, %{})
+
+      {:ok, view, _html} = live(conn, "/")
+      _ = notify(view, %{payload | feed: split})
+
+      html = render_click(view, "view", %{"v" => "participating"})
+      assert html =~ "someone else started this"
+      assert html =~ "and I answered"
+    end
+
     test "a reply bumps an already-shown thread to the top", %{conn: conn} do
       base = 1_700_000_000_000
 
