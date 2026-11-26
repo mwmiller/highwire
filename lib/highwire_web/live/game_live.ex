@@ -13,8 +13,7 @@ defmodule HighWireWeb.GameLive do
   alias HighWire.Backgammon
   alias HighWire.Backgammon.Store
   alias HighWire.Chess
-  alias HighWire.Chess.Engine
-  alias HighWire.Chess.Legacy
+  alias HighWire.Chess.{Engine, Kibitz, Legacy}
   alias HighWire.Games.Catalog
   alias HighWire.SSB.{Identities, Profile, Relations}
   alias HighWireWeb.Components.{Avatar, Board, ChessBoard, Relationship, Shell}
@@ -29,6 +28,7 @@ defmodule HighWireWeb.GameLive do
       Phoenix.PubSub.subscribe(HighWire.PubSub, Store.topic())
       Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Store.topic())
       Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Legacy.Store.topic())
+      Phoenix.PubSub.subscribe(HighWire.PubSub, Kibitz.topic())
     end
 
     {:ok,
@@ -54,6 +54,7 @@ defmodule HighWireWeb.GameLive do
     |> assign(:game_id, game_id)
     |> assign(:previous, previous)
     |> assign(:following, following)
+    |> assign(:kibitz, Kibitz.thread(game))
     |> assign_board(game)
   end
 
@@ -240,6 +241,25 @@ defmodule HighWireWeb.GameLive do
     end
   end
 
+  # A kibitz is anyone's to post: the message names the game's root, not a
+  # seat, so a spectator's feed is enough. A player sees the two players'
+  # private talk elsewhere; this is the observers' chat.
+  def handle_event("kibitz", %{"msg" => text}, socket) do
+    case socket.assigns.game do
+      nil ->
+        {:noreply, socket}
+
+      game ->
+        case Kibitz.post(game, text) do
+          {:ok, _key} ->
+            {:noreply, assign(socket, :kibitz, Kibitz.thread(game))}
+
+          {:error, _reason} ->
+            {:noreply, assign(socket, :error, "That kibitz did not go out.")}
+        end
+    end
+  end
+
   def handle_event("resign", _params, socket) do
     case resign(socket.assigns.game) do
       {:ok, _key} ->
@@ -386,6 +406,10 @@ defmodule HighWireWeb.GameLive do
     {:noreply, reload(socket, game_id)}
   end
 
+  def handle_info(:chess_kibitz, socket) do
+    {:noreply, assign(socket, :kibitz, Kibitz.thread(socket.assigns.game))}
+  end
+
   def handle_info(:tick, %{assigns: %{playing?: true}} = socket) do
     %{line: line, at: at} = socket.assigns
     last = length(line) - 1
@@ -514,6 +538,7 @@ defmodule HighWireWeb.GameLive do
     %{
       ply: ply,
       san: item && (item.san || item.uci),
+      note: item && item[:note],
       turn: pos.turn,
       from: item && String.slice(item.uci, 0, 2),
       to: item && String.slice(item.uci, 2, 2),
@@ -591,6 +616,7 @@ defmodule HighWireWeb.GameLive do
       :if={@step}
       phx-click="replay"
       phx-value-to={@step.ply}
+      title={@step[:note]}
       data-active={to_string(@step.ply == @current)}
       class={[
         "truncate rounded px-1.5 py-0.5 text-left font-mono text-[11px] transition",
@@ -748,6 +774,16 @@ defmodule HighWireWeb.GameLive do
     end
   end
 
+  # The note on the move on show, or on the last one played when the page is
+  # live. A note is written by whoever played the move, so a game read from
+  # the network carries its players' notes too.
+  defp note(%{at: at, line: line}) do
+    case Enum.at(line, at || length(line) - 1) do
+      %{note: note} -> note
+      _ -> nil
+    end
+  end
+
   # The facts beside the board belong to the position drawn on it: showing
   # move 0 and calling it black's move would be a lie the picture does not
   # tell.
@@ -787,6 +823,7 @@ defmodule HighWireWeb.GameLive do
     assigns =
       assigns
       |> assign(current: current(assigns), now: now(assigns))
+      |> assign(:note, note(assigns))
       |> assign(:standings, standings(assigns.game, assigns.self_id))
 
     ~H"""
@@ -862,6 +899,16 @@ defmodule HighWireWeb.GameLive do
                 status={@game.status}
               />
 
+              <%!-- Whatever the player who made the move on show wrote beside
+                   it. The note travels with the move, so replaying a game
+                   reads them in the order they were written. --%>
+              <p
+                :if={@note not in [nil, ""]}
+                class="mt-2 text-[11px] whitespace-pre-line italic text-faint"
+              >
+                {@note}
+              </p>
+
               <div
                 :if={@promos != []}
                 class="mt-2 flex items-center gap-2 rounded border border-edge bg-panel px-3 py-2"
@@ -935,6 +982,43 @@ defmodule HighWireWeb.GameLive do
                   <.ply step={pair.black} current={@current} />
                 </li>
               </ol>
+
+              <%!-- The observers' chat, in the protocol's shape: a message
+                   rooted at the game, from any feed. A player sees it once
+                   the game is over, so a comment cannot advise the side to
+                   move. --%>
+              <section
+                :if={Kibitz.visible?(@game, @self_id)}
+                class="mt-3 border-t border-edge-soft pt-2"
+              >
+                <h3 class="text-[11px] uppercase tracking-wider text-faint">Kibitz</h3>
+
+                <p :if={@kibitz == []} class="mt-1 text-xs italic text-faint">
+                  Nobody has said anything about this game yet.
+                </p>
+
+                <ul class="mt-1 space-y-1.5">
+                  <li :for={line <- @kibitz} :key={line.key} class="text-xs leading-snug">
+                    <Avatar.avatar id={line.author} size={14} class="inline-block align-middle" />
+                    <span class="text-muted">{name(line.author)}</span>
+                    <span class="ml-1 text-dim">{line.text}</span>
+                  </li>
+                </ul>
+
+                <form :if={@self_id} phx-submit="kibitz" class="mt-2 flex items-center gap-1">
+                  <input
+                    type="text"
+                    name="msg"
+                    maxlength="2000"
+                    autocomplete="off"
+                    placeholder="Say something about this game"
+                    class="min-w-0 flex-1 rounded border border-edge bg-panel px-2 py-1 text-xs text-paper placeholder:text-faint focus:border-focus focus:outline-none"
+                  />
+                  <button class="rounded border border-edge px-2 py-1 text-xs text-muted transition hover:border-focus hover:text-paper">
+                    kibitz
+                  </button>
+                </form>
+              </section>
             </aside>
           </div>
         </div>

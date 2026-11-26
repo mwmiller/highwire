@@ -4,10 +4,14 @@ defmodule HighWireWeb.GameLiveTest do
   import Phoenix.LiveViewTest
 
   alias HighWire.Backgammon.{Chain, Engine, Game, Log, Store}
+  alias HighWire.Chess.Kibitz
   alias HighWire.Games.Catalog
 
   setup do
     Store.clear()
+    HighWire.Chess.Store.clear()
+    HighWire.Chess.Legacy.Store.clear()
+    Kibitz.clear()
     Catalog.clear()
     :ok
   end
@@ -57,6 +61,69 @@ defmodule HighWireWeb.GameLiveTest do
       assert html =~ "Waiting for friend"
       refute html =~ "unknown"
     end
+  end
+
+  describe "a chess game" do
+    test "shows the note a move carried", %{conn: conn} do
+      game_id = seed_chess_note("played this one twice in my head")
+
+      {:ok, _view, html} = live(conn, "/games/#{game_id}")
+
+      assert html =~ "played this one twice in my head"
+    end
+
+    # The page belongs to a game, not to its players: someone who is not in
+    # it reads the board, the moves and what everyone has said about it.
+    test "shows the kibitz about a game to a spectator", %{conn: conn} do
+      game_id = seed_chess_kibitz("nice fork")
+
+      {:ok, _view, html} = live(conn, "/games/#{game_id}")
+
+      assert html =~ "Kibitz"
+      assert html =~ "nice fork"
+      assert html =~ "spectating"
+    end
+  end
+
+  # A chess game with one move played, written the way the client writes one:
+  # challenge, accept, then the move and the note the player put beside it.
+  defp seed_chess_note(note) do
+    {:ok, game_id, _key} =
+      HighWire.Chess.Log.open("white",
+        author: "@challenger.ed25519",
+        publish: fn _content -> {:ok, "%note-challenge.sha256"} end
+      )
+
+    {:ok, _key} =
+      HighWire.Chess.Log.accept(HighWire.Chess.Store.get(game_id),
+        author: "@accepter.ed25519",
+        publish: fn _content -> {:ok, "%note-accept.sha256"} end
+      )
+
+    {:ok, _key} =
+      HighWire.Chess.Log.play(HighWire.Chess.Store.get(game_id), "e2e4",
+        author: "@challenger.ed25519",
+        note: note,
+        publish: fn _content -> {:ok, "%note-move.sha256"} end
+      )
+
+    game_id
+  end
+
+  defp seed_chess_kibitz(text) do
+    {:ok, game_id, _key} =
+      HighWire.Chess.Log.open("white",
+        author: "@challenger.ed25519",
+        publish: fn _content -> {:ok, "%chess-challenge.sha256"} end
+      )
+
+    {:ok, _key} =
+      Kibitz.post(HighWire.Chess.Store.get(game_id), text,
+        author: "@watcher.ed25519",
+        publish: fn _content -> {:ok, "%chess-kibitz.sha256"} end
+      )
+
+    game_id
   end
 
   # A game opened, accepted, rolled out and played a turn — through the

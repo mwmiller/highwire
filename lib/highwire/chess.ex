@@ -8,9 +8,15 @@ defmodule HighWire.Chess do
   client published). All of them name the same idea, so everything that
   asks "is this chess?" or "which store owns this?" goes through here and
   sees one answer.
+
+  `chess_chat` is the protocol's kibitz: it names a game by its root and
+  says something about it, and anyone may publish one. It is routed to the
+  kibitz store rather than a game store, because it is not a move and no
+  fold should ever see it. It is still a chess message, so the timeline
+  leaves it to the page of the game it talks about.
   """
 
-  alias HighWire.Chess.{Game, Legacy, Store}
+  alias HighWire.Chess.{Game, Kibitz, Legacy, Store}
 
   @doc """
   The canonical type for a raw chess message type, or nil for anything that
@@ -29,7 +35,9 @@ defmodule HighWire.Chess do
 
   @doc "Whether a content map is a chess message in any format."
   @spec message?(term()) :: boolean()
-  def message?(content), do: Game.message?(content) or Legacy.message?(content)
+  def message?(content) do
+    Kibitz.message?(content) or Game.message?(content) or Legacy.message?(content)
+  end
 
   @doc """
   File one envelope in the store that owns its format.
@@ -41,6 +49,7 @@ defmodule HighWire.Chess do
   @spec observe(map()) :: :ok
   def observe(%{"value" => %{"content" => content}} = msg) when is_map(content) do
     cond do
+      Kibitz.message?(content) -> Kibitz.observe(msg)
       Legacy.message?(content) -> Legacy.Store.observe(msg)
       Game.message?(content) -> Store.observe(msg)
       true -> :ok

@@ -78,6 +78,22 @@ defmodule HighWire.Chess.Legacy do
   def game_id(_), do: nil
 
   @doc """
+  The key of the message that opened a game, from its id.
+
+  The inverse of `game_id/1`: an id has to be path-safe, a key is what the
+  game's messages and its kibitz name it by.
+  """
+  @spec root_key(binary() | nil) :: binary() | nil
+  def root_key(game_id) when is_binary(game_id) do
+    case Base.decode16(game_id, case: :lower) do
+      {:ok, <<_::256>> = bytes} -> "%" <> Base.encode64(bytes) <> ".sha256"
+      _ -> nil
+    end
+  end
+
+  def root_key(_), do: nil
+
+  @doc """
   One game's snapshot, in the shape the room and the game page read.
 
   `rows` are that game's messages, in any order — only `ply` orders a game,
