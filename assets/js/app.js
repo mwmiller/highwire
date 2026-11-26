@@ -1404,7 +1404,8 @@ const UpdateBanner = {
   },
 
   destroyed() {
-    this.unlisteners.forEach(unlisten => unlisten())
+    // In a browser there is no updater, and mounted never got this far.
+    if (this.unlisteners) this.unlisteners.forEach(unlisten => unlisten())
   }
 }
 
