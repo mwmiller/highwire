@@ -116,13 +116,6 @@ defmodule HighWire.Chess.Log do
   end
 
   defp author(opts) do
-    Keyword.get(opts, :author) || active_identity()
-  end
-
-  defp active_identity do
-    case Identities.active() do
-      %{"id" => id} when is_binary(id) -> id
-      _ -> nil
-    end
+    Keyword.get(opts, :author) || Identities.active_id()
   end
 end

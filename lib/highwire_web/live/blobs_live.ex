@@ -639,12 +639,9 @@ defmodule HighWireWeb.BlobsLive do
   # One pass for the posts on this page: every bundle's author resolved
   # against the reader's own edges, so each mark is a map lookup.
   defp standings(bundles) do
-    case Identities.active() do
-      %{"id" => self_id} when is_binary(self_id) ->
-        Relations.standings_for(Enum.map(bundles, & &1.author), self_id)
-
-      _ ->
-        %{}
+    case Identities.active_id() do
+      nil -> %{}
+      self_id -> Relations.standings_for(Enum.map(bundles, & &1.author), self_id)
     end
   end
 

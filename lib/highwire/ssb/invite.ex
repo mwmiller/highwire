@@ -24,6 +24,7 @@ defmodule HighWire.SSB.Invite do
 
   require Logger
 
+  alias HighWire.Base64
   alias HighWire.SSB.{Admin, Client, Identities, Network}
   alias HighWire.Timeline
 
@@ -63,9 +64,9 @@ defmodule HighWire.SSB.Invite do
          true <- port >= 1 and port <= 65_535,
          key_body = key_disp |> String.trim() |> String.trim_leading("@"),
          key_body = String.replace_suffix(key_body, ".ed25519", ""),
-         {:ok, pub_key} <- base64(key_body),
+         {:ok, pub_key} <- Base64.decode(key_body),
          true <- byte_size(pub_key) == 32,
-         {:ok, seed} <- base64(seed_b64),
+         {:ok, seed} <- Base64.decode(seed_b64),
          true <- byte_size(seed) == 32 do
       {:ok,
        %{
@@ -240,14 +241,4 @@ defmodule HighWire.SSB.Invite do
   # "@<b64>.ed25519" in the engine's spelling — padded standard base64,
   # the form keys:pub_key_disp and every published message use.
   defp display_id(pub_key), do: "@" <> Base.encode64(pub_key) <> ".ed25519"
-
-  defp base64(str) do
-    str = String.trim(str)
-    padded = str <> String.duplicate("=", rem(4 - rem(byte_size(str), 4), 4))
-
-    case Base.decode64(padded) do
-      {:ok, bin} -> {:ok, bin}
-      :error -> Base.url_decode64(padded)
-    end
-  end
 end

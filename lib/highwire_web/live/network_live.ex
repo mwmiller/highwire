@@ -526,14 +526,7 @@ defmodule HighWireWeb.NetworkLive do
       (report["connections"] || []) ++
         Enum.map(known_rows(report, @known_peers_cap), &elem(&1, 1))
 
-    Relations.standings_for(ids, current_self())
-  end
-
-  defp current_self do
-    case Identities.active() do
-      %{"id" => id} when is_binary(id) -> id
-      _ -> nil
-    end
+    Relations.standings_for(ids, Identities.active_id())
   end
 
   @impl true

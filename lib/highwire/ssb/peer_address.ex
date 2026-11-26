@@ -21,6 +21,7 @@ defmodule HighWire.SSB.PeerAddress do
 
   require Logger
 
+  alias HighWire.Base64
   alias HighWire.SSB.Admin
   alias HighWire.Timeline
 
@@ -46,7 +47,7 @@ defmodule HighWire.SSB.PeerAddress do
          true <- port >= 1 and port <= 65_535,
          true <- String.trim(host) != "",
          key_body = key_body |> String.trim() |> String.trim_leading("shs:"),
-         {:ok, key} <- base64(key_body),
+         {:ok, key} <- Base64.decode(key_body),
          true <- byte_size(key) == 32 do
       {:ok, %{host: String.trim(host), port: port, key: key}}
     else
@@ -128,14 +129,4 @@ defmodule HighWire.SSB.PeerAddress do
   # gossip layer strips the sigil and suffix on ingest, so either
   # spelling reaches the same conn.json entry.
   defp display_id(key), do: "@" <> Base.encode64(key) <> ".ed25519"
-
-  defp base64(str) do
-    str = String.trim(str)
-    padded = str <> String.duplicate("=", rem(4 - rem(byte_size(str), 4), 4))
-
-    case Base.decode64(padded) do
-      {:ok, bin} -> {:ok, bin}
-      :error -> Base.url_decode64(padded)
-    end
-  end
 end

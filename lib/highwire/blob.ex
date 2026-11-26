@@ -191,20 +191,12 @@ defmodule HighWire.Blob do
     end
   end
 
-  # Standard base64 is what ssb refs use; the URL-safe alphabet is
-  # accepted too, and padding is repaired for unpadded emitters.
+  # A ref names a sha256, so anything that does not decode to 32 bytes is
+  # not a ref — the decoder accepts both alphabets and either padding.
   defp decode(b64) do
-    padded = b64 <> String.duplicate("=", rem(4 - rem(byte_size(b64), 4), 4))
-
-    found =
-      Enum.find_value([Base.decode64(padded), Base.url_decode64(padded)], fn
-        {:ok, bin} when byte_size(bin) == 32 -> Base.encode16(bin, case: :lower)
-        _ -> nil
-      end)
-
-    case found do
-      nil -> :error
-      hex -> {:ok, hex}
+    case HighWire.Base64.decode(b64) do
+      {:ok, bin} when byte_size(bin) == 32 -> {:ok, Base.encode16(bin, case: :lower)}
+      _ -> :error
     end
   end
 

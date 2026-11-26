@@ -61,7 +61,7 @@ defmodule HighWireWeb.GamesLive do
       Phoenix.PubSub.subscribe(HighWire.PubSub, Chess.Legacy.Store.topic())
     end
 
-    self_id = self_id()
+    self_id = Identities.active_id()
 
     {:ok,
      socket
@@ -260,7 +260,7 @@ defmodule HighWireWeb.GamesLive do
   # game. The card the room already has stays where it is in that case — a
   # room whose rows blink out and back is a room that looks like it forgot.
   defp refresh(games, game_id, self_id) do
-    case Chess.Store.get(game_id) || Chess.Legacy.Store.get(game_id) || Store.get(game_id) do
+    case HighWire.Games.get(game_id) do
       nil -> games
       game -> [put_live_status(game, self_id) | Enum.reject(games, &(&1.game_id == game_id))]
     end
@@ -300,13 +300,6 @@ defmodule HighWireWeb.GamesLive do
       is_binary(self_id) and game.mover == self_id and game.status in [:playing, :opening]
 
     Map.put(game, :yours?, yours?)
-  end
-
-  defp self_id do
-    case Identities.active() do
-      %{"id" => id} when is_binary(id) -> id
-      _ -> nil
-    end
   end
 
   # Somebody else's challenge with no opponent yet is not a game to watch; it

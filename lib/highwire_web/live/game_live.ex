@@ -34,7 +34,7 @@ defmodule HighWireWeb.GameLive do
     {:ok,
      socket
      |> assign(:page_title, "Game")
-     |> assign(:self_id, self_id())
+     |> assign(:self_id, Identities.active_id())
      |> assign(:error, nil)
      |> open(game_id)}
   end
@@ -414,6 +414,10 @@ defmodule HighWireWeb.GameLive do
     end
   end
 
+  # The id shape is the same for both games, so the stores are asked in turn
+  # rather than the URL being believed.
+  defp load(game_id), do: HighWire.Games.get(game_id)
+
   defp moves_from(game, square) do
     for uci <- Engine.legal_moves(game.position),
         binary_part(uci, 0, 2) == square,
@@ -555,25 +559,12 @@ defmodule HighWireWeb.GameLive do
     end
   end
 
-  # The id shape is the same for both games, so the kind is what the store
-  # finds rather than what the URL claims.
-  defp load(game_id) do
-    Chess.Store.get(game_id) || Chess.Legacy.Store.get(game_id) || Store.get(game_id)
-  end
-
   # Which side of the glass you are on, whichever way the game names its
   # players: a chess game has a challenger and an accepter, a backgammon
   # one keeps white and black, and a game read from the network has both.
   defp spectating?(game, self_id) do
     players = Enum.map([:challenger, :accepter, :white, :black], &Map.get(game, &1))
     is_nil(self_id) or self_id not in players
-  end
-
-  defp self_id do
-    case Identities.active() do
-      %{"id" => id} when is_binary(id) -> id
-      _ -> nil
-    end
   end
 
   # Every player the page names, resolved in one pass per render: a badge is
