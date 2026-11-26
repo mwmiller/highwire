@@ -64,6 +64,18 @@ defmodule HighWireWeb.GameLiveTest do
   end
 
   describe "a chess game" do
+    # A challenge can hand a seat to one feed before anyone accepts it, so
+    # that feed is the game's opponent-to-be, not a bystander reading it.
+    test "the feed a challenge was addressed to is not spectating", %{conn: conn} do
+      game_id = seed_chess_open_directed("@friend.ed25519")
+      signed_in_as("@friend.ed25519")
+
+      {:ok, _view, html} = live(conn, "/games/#{game_id}")
+
+      assert html =~ "Waiting for"
+      refute html =~ "spectating"
+    end
+
     test "shows the note a move carried", %{conn: conn} do
       game_id = seed_chess_note("played this one twice in my head")
 
@@ -105,6 +117,17 @@ defmodule HighWireWeb.GameLiveTest do
         author: "@challenger.ed25519",
         note: note,
         publish: fn _content -> {:ok, "%note-move.sha256"} end
+      )
+
+    game_id
+  end
+
+  defp seed_chess_open_directed(to) do
+    {:ok, game_id, _key} =
+      HighWire.Chess.Log.open("white",
+        author: "@challenger.ed25519",
+        to: to,
+        publish: fn _content -> {:ok, "%directed-challenge.sha256"} end
       )
 
     game_id
@@ -244,6 +267,23 @@ defmodule HighWireWeb.GameLiveTest do
     )
 
     game_id
+  end
+
+  # The page reads the running identity from the engine's secret first and
+  # the registry second. This test's feed is the registry's active one, so a
+  # secret another test's engine left in the home waits outside for it.
+  defp signed_in_as(id) do
+    path = Path.join(HighWire.home_dir(), "identities.json")
+    secret = Path.join(HighWire.ssb_dir(), "secret")
+    hidden = secret <> ".signed-in-as-#{System.unique_integer([:positive])}"
+
+    if File.exists?(secret), do: File.rename!(secret, hidden)
+    File.write!(path, Jason.encode!(%{"active" => id, "identities" => []}))
+
+    on_exit(fn ->
+      File.rm(path)
+      if File.exists?(hidden), do: File.rename!(hidden, secret)
+    end)
   end
 
   defp hex(bin), do: Base.encode16(bin, case: :lower)

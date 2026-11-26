@@ -587,9 +587,11 @@ defmodule HighWireWeb.GameLive do
   # Which side of the glass you are on, whichever way the game names its
   # players: a chess game has a challenger and an accepter, a backgammon
   # one keeps white and black, and a game read from the network has both.
+  # A challenge addressed to a feed makes that feed the empty seat's owner, so
+  # the page asking them to accept is not also calling them a spectator.
   defp spectating?(game, self_id) do
     players = Enum.map([:challenger, :accepter, :white, :black], &Map.get(game, &1))
-    is_nil(self_id) or self_id not in players
+    is_nil(self_id) or self_id not in [invited(game) | players]
   end
 
   # Every player the page names, resolved in one pass per render: a badge is
