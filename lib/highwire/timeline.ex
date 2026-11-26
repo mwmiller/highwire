@@ -4110,6 +4110,13 @@ defmodule HighWire.Timeline do
     build_feed(acc, self_id, like_counts, nil, %{})
   end
 
+  # The payload path hands the fold's graph in as well: a window that no
+  # longer holds a message's parents answers their chain from there.
+  @doc false
+  def build_feed(acc, self_id, like_counts, roots) when is_map(roots) do
+    build_feed(acc, self_id, like_counts, nil, roots)
+  end
+
   defp build_feed(acc, self_id, like_counts, contact_entries, roots) do
     # Every row builder below names a message by its value map
     # (value["author"], value["content"], …), so a record whose envelope
@@ -4884,13 +4891,33 @@ defmodule HighWire.Timeline do
   defp thread_roots(state), do: Map.get(state, :thread_roots, %{})
 
   # A message's thread: the graph's answer for a window post (the fold's
-  # own resolution), then the live walk for anything the graph does not
-  # hold, then the post an edit revises.
+  # own resolution) walked one more time, then the live walk for anything
+  # the graph does not hold, then the post an edit revises.
+  #
+  # The graph's answer is walked rather than trusted: an entry recorded
+  # before a message's parent arrived names the parent as the head, and
+  # taking it as it stands splits that conversation into a row for the
+  # parent and another for the head that arrived later. The window can
+  # resolve the rest, so it does.
   defp folded_root(msg, by_key, roots, edit_index) do
-    Map.get(roots, msg["key"]) ||
+    stored_root(Map.get(roots, msg["key"]), by_key, roots) ||
       thread_root(msg, by_key, roots) ||
       edit_thread(msg, by_key, edit_index)
   end
+
+  # A stored root the window still holds is a hop, not an answer: walk from
+  # it the way any other chain is walked. A root the window has aged out is
+  # answered from the graph, as before. A root neither the window nor the
+  # graph can place says nothing, so the message's own chain, which is
+  # current, answers instead.
+  defp stored_root(root, by_key, roots) when is_binary(root) do
+    case walk_root(root, by_key, roots) do
+      ^root -> if Map.has_key?(by_key, root), do: root
+      walked -> walked
+    end
+  end
+
+  defp stored_root(_root, _by_key, _roots), do: nil
 
   # Only what a fold changed goes to disk; a fold that trimmed the graph
   # to its cap rewrites the file, so the stored copy cannot outgrow the

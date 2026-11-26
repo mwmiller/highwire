@@ -2792,6 +2792,56 @@ defmodule HighWire.TimelineTest do
       assert Timeline.thread_root(fork, %{}, roots) == "%r=.sha256"
     end
 
+    test "a stored root the window can walk past does not split the conversation" do
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      parent =
+        msg("@b=.ed25519", "%a=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256",
+          "branch" => ["%r=.sha256"]
+        })
+
+      reply =
+        msg("@c=.ed25519", "%l=.sha256", 3_000, %{
+          "type" => "post",
+          "text" => "second",
+          "root" => "%a=.sha256",
+          "branch" => ["%a=.sha256"]
+        })
+
+      # A fold ran before the head reached the window, so the graph names
+      # this reply's parent as its thread. The window holds the chain above
+      # that parent now, and the feed follows it to the head: one row, not
+      # a row for the parent and another for the head.
+      roots = %{"%l=.sha256" => "%a=.sha256"}
+
+      [row] = Timeline.build_feed([root, parent, reply], "@me", %{}, roots)
+      assert row.root_key == "%r=.sha256"
+      assert row.replies == 2
+    end
+
+    test "a stored root the window cannot place gives way to the message's chain" do
+      root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
+
+      # The reply names the head itself; the graph still remembers a parent
+      # that has since left the window, from a fold that ran before the
+      # reply was read with its root in hand.
+      reply =
+        msg("@b=.ed25519", "%l=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "first",
+          "root" => "%r=.sha256"
+        })
+
+      roots = %{"%l=.sha256" => "%gone=.sha256"}
+
+      [row] = Timeline.build_feed([root, reply], "@me", %{}, roots)
+      assert row.root_key == "%r=.sha256"
+      assert row.replies == 1
+    end
+
     test "a root cycle ends the hop count instead of recursing forever" do
       # Two replies naming each other in root is malformed, not merely
       # deep: without a seen set the hop walk would recurse until the
