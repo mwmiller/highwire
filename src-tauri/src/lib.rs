@@ -461,7 +461,55 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
         .await
         .map_err(|err| err.to_string())?;
 
-    app.restart();
+    #[cfg(target_os = "macos")]
+    {
+        relaunch_with_the_pin(&app);
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        app.restart();
+    }
+}
+
+// tauri 2.12.2 through 2.12.5 launch the new copy with `open -n` while this
+// instance is still alive, so the Dock adds a second, unpinned tile and the
+// pinned one looks closed until a manual restart. A detached shell waits for
+// this process to go, then opens the bundle now on disk, so LaunchServices
+// sees one app before and after. The wait outlasts backend shutdown (two
+// five-second graces) and still gives up on a hung exit.
+#[cfg(target_os = "macos")]
+fn relaunch_with_the_pin(app: &tauri::AppHandle) {
+    let exe = std::env::current_exe().ok();
+
+    let Some(bundle) = exe.as_deref().and_then(macos_bundle) else {
+        app.restart();
+    };
+
+    // Both values arrive as arguments, so no path is spliced into the script.
+    let script = "i=0; \
+        while kill -0 \"$1\" 2>/dev/null && [ \"$i\" -lt 300 ]; do sleep 0.1; i=$((i+1)); done; \
+        open -n \"$2\"";
+
+    let _ = StdCommand::new("/bin/sh")
+        .args(["-c", script, "highwire-relaunch"])
+        .arg(std::process::id().to_string())
+        .arg(&bundle)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn();
+
+    app.exit(0);
+}
+
+#[cfg(target_os = "macos")]
+fn macos_bundle(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    exe.ancestors()
+        .find(|path| path.extension().is_some_and(|ext| ext == "app"))
+        .map(std::path::Path::to_path_buf)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -551,6 +599,21 @@ mod tests {
         assert!(acceptable_external("https://example.com/a?b=1").is_ok());
         assert!(acceptable_external("http://example.com").is_ok());
         assert!(acceptable_external("mailto:someone@example.com").is_ok());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_bundle_is_the_app_around_the_binary() {
+        let exe = std::path::Path::new("/Applications/HighWire.app/Contents/MacOS/highwire");
+
+        assert_eq!(
+            super::macos_bundle(exe).unwrap(),
+            std::path::Path::new("/Applications/HighWire.app")
+        );
+        assert_eq!(
+            super::macos_bundle(std::path::Path::new("/tmp/highwire")),
+            None
+        );
     }
 
     #[test]
