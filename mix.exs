@@ -98,18 +98,23 @@ defmodule HighWire.MixProject do
       # lineage (the upstream 1.2.x line), not a fast-forward from here.
       {:enacl, git: "https://github.com/cmoid/enacl", branch: "moid-v1.1.1"},
       # The SSB engine the sidecar spawns. This GitHub repository is a
-      # mirror of erlbutt on SSB
+      # read-only mirror of erlbutt on SSB
       # (ssb://%TvkoTlcpiyV8DGLLAo5XzB8K+u1qnk56mxMwWmCst0g=.sha256); the
       # earlier git history lives in cmoid/erlbutt-prototype, archived and
-      # read-only. The v0.3.0 tag is the seam between them: its tree is the code the old history ended with.
-      # Pinned to a tag, not a branch: branch heads get rewritten, and a
-      # locked commit that no longer sits under a ref is not fetchable
-      # ("not our ref"), which strands clean checkouts and every release
-      # leg. Updates arrive by bumping the tag in a commit. compile: false,
-      # app: false — it's a rebar3/OTP tree consumed as a built release
-      # (mix engine.build), not a library mix should compile or start.
+      # read-only. The v0.3.0 tag is the seam between them: its tree is the
+      # code the old history ended with.
+      # Branch-tracking main, so upstream fixes and RPCs arrive by
+      # `mix deps.update erlbutt` (the engine.update alias also rebuilds
+      # the release); mix.lock pins the exact commit, so a checkout builds
+      # the same code twice in a row. That history was rewritten once, in
+      # November 2026, which stranded a locked commit under no ref and
+      # failed mix deps.get in every v1.11.0 release leg — the same thing
+      # again fails the same way, loudly, and is fixed by moving the pin to
+      # a commit the mirror still serves. compile: false, app: false — it's
+      # a rebar3/OTP tree consumed as a built release (mix engine.build),
+      # not a library mix should compile or start.
       {:erlbutt,
-       git: "https://github.com/cmoid/erlbutt", tag: "v0.3.0", compile: false, app: false},
+       git: "https://github.com/cmoid/erlbutt", branch: "main", compile: false, app: false},
       {:bandit, "~> 1.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       # Benchmarks only (bench/), and dev-only so it never reaches a
