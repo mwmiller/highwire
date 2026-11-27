@@ -1077,12 +1077,15 @@ defmodule HighWireWeb.TimelineLive do
   # them carried still greets the thread. A row that came in as a lone reply
   # holds it as its own message, not as a preview, so those messages join the
   # previews: the collapse keeps a reply's count, and must keep its words.
+  # The order is the rows' own: sorting by either stamp alone reads wrong —
+  # a skewed claim would preview as newest, and an old claim that just
+  # arrived would preview as older than a reply that arrived before it.
   defp merge_recent(base, rows) do
     own = for row <- rows, is_map(row.msg), row.msg["key"] != base.msg["key"], do: row.msg
 
     (Enum.flat_map(rows, &Map.get(&1, :recent, [])) ++ own)
     |> Enum.uniq_by(& &1["key"])
-    |> Enum.sort_by(&(&1["timestamp"] || 0), :desc)
+    |> Enum.sort_by(&Timeline.bump_ts/1, :desc)
     |> Enum.take(3)
   end
 

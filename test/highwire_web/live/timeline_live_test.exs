@@ -1621,6 +1621,69 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert feed =~ "a reply that names the head"
     end
 
+    test "collapsed previews order by the bump, not by claim or arrival alone",
+         %{conn: conn} do
+      base = 1_700_000_000_000
+
+      head =
+        ssb_msg("%head-skew.sha256", "@alice.ed25519", base - 20_000, %{
+          "type" => "post",
+          "text" => "the conversation"
+        })
+
+      # Claims a time well past the one it was received at — a skewed
+      # clock. Claimed, it is the newest in the thread; the feed's bump
+      # (min of claimed and received) seats it oldest.
+      skewed =
+        ssb_msg("%skewed.sha256", "@bob.ed25519", base + 5_000, %{
+          "type" => "post",
+          "text" => "claimed a future time",
+          "root" => "%head-skew.sha256"
+        })
+        |> Map.put("timestamp", base - 10_000)
+
+      # The later arrival claims the earlier time: received last, the
+      # bump puts it after the one that arrived first.
+      later =
+        ssb_msg("%later-skew.sha256", "@carol.ed25519", base - 3_000, %{
+          "type" => "post",
+          "text" => "claimed an older time",
+          "root" => "%head-skew.sha256"
+        })
+        |> Map.put("timestamp", base - 1_000)
+
+      first =
+        ssb_msg("%first-skew.sha256", "@dave.ed25519", base - 2_000, %{
+          "type" => "post",
+          "text" => "claimed and arrived first",
+          "root" => "%head-skew.sha256"
+        })
+        |> Map.put("timestamp", base - 2_000)
+
+      roots = %{"%skewed.sha256" => "%head-skew.sha256"}
+
+      # Two passes reach the tab with a row each: the head already previews
+      # two replies, and the skewed one comes alone with its head resolved
+      # from the graph. The collapse merges their previews, and they must
+      # read in the order the rows are ordered — by the bump, oldest first
+      # as the template reverses the newest-first store.
+      split =
+        HighWire.Timeline.build_feed([head, later, first], nil, %{}) ++
+          HighWire.Timeline.build_feed([skewed], nil, %{}, roots)
+
+      {:ok, view, _html} = live(conn, "/")
+      _ = notify(view, %{feed_payload([head, later, first, skewed]) | feed: split})
+      feed = view |> element("#feed-column") |> render()
+
+      assert length(Regex.scan(~r/id="row-/, feed)) == 1
+
+      # Oldest first, as the rows read: the future-dated claim is oldest by
+      # its arrival, and the older claim out of the two arrived replies is
+      # older by the time it claims.
+      assert pos(feed, "claimed a future time") < pos(feed, "claimed an older time")
+      assert pos(feed, "claimed an older time") < pos(feed, "claimed and arrived first")
+    end
+
     test "a row keeps the head the feed resolved when the window cannot walk to it",
          %{conn: conn} do
       base = 1_700_000_000_000

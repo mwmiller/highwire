@@ -5052,8 +5052,10 @@ defmodule HighWire.Timeline do
   # contains future-dated claimed times without a `now` dependency: the
   # same message always gets the same activity across rebuilds, so rows
   # can't drift on heartbeats. Either side falls back when unreadable,
-  # exactly as the engine does.
-  defp bump_ts(msg) do
+  # exactly as the engine does. Public (with @doc false) because the
+  # collapsed row's previews sort by it too.
+  @doc false
+  def bump_ts(msg) do
     claimed = msg["value"]["timestamp"]
     received = msg["timestamp"]
 
