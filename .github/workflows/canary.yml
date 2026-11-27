@@ -1,0 +1,40 @@
+name: Canary
+
+# The engine is a git dep pinned by tag on HighWire's mirror, and every
+# other dependency is pinned in mix.lock. Upstream rewrote erlbutt's
+# history once and stranded the pinned revision, which failed mix
+# deps.get in every leg of the v1.11.0 release. This job fetches and
+# builds from the lock on every push, on any branch, so a stranded or
+# rewritten ref fails here the day it happens instead of during a tagged
+# release.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  release-canary:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+
+      - name: libsodium
+        run: sudo apt-get update && sudo apt-get install -y libsodium-dev
+
+      - run: mix local.hex --force && mix local.rebar --force
+
+      # Fails here when a pinned ref no longer exists: a git dep whose
+      # locked commit sits under no ref is refused as "not our ref".
+      - name: Fetch every dependency from its pinned ref
+        run: mix deps.get
+
+      - name: Report the engine ref that resolved
+        run: |
+          git -C deps/erlbutt describe --tags --always
+          git -C deps/erlbutt rev-parse HEAD
+          grep '"erlbutt"' mix.lock
+
+      - name: Build the engine release from that checkout
+        run: mix engine.build
