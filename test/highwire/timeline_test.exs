@@ -2792,6 +2792,79 @@ defmodule HighWire.TimelineTest do
       assert Timeline.thread_root(fork, %{}, roots) == "%r=.sha256"
     end
 
+    test "a reply that names something which is not a post stands on its own" do
+      # A contact message named as a reply's root: the contact is not a
+      # head, so nothing hangs from it. Treating its key as one drew the
+      # contact twice — as the contact it is, and as a thread whose only
+      # content was the reply.
+      contact =
+        msg("@a=.ed25519", "%c=.sha256", 1_000, %{
+          "type" => "contact",
+          "contact" => "@b=.ed25519",
+          "following" => true
+        })
+
+      reply =
+        msg("@b=.ed25519", "%p=.sha256", 2_000, %{
+          "type" => "post",
+          "text" => "answering a contact message makes no thread",
+          "root" => "%c=.sha256"
+        })
+
+      rows = Timeline.build_feed([contact, reply], nil, %{})
+
+      assert Enum.count(rows, &(&1.kind == :contact)) == 1
+      refute Enum.any?(rows, &(&1.kind == :thread))
+      assert [post] = Enum.filter(rows, &(&1.kind == :post))
+      assert post.msg["key"] == "%p=.sha256"
+    end
+
+    test "an edit of something which is not a post heads no thread" do
+      contact =
+        msg("@a=.ed25519", "%c=.sha256", 1_000, %{
+          "type" => "contact",
+          "contact" => "@b=.ed25519",
+          "following" => true
+        })
+
+      edit =
+        msg("@b=.ed25519", "%e=.sha256", 2_000, %{
+          "type" => "post-edit",
+          "revisionRoot" => "%c=.sha256",
+          "text" => "a revision of a contact edit"
+        })
+
+      rows = Timeline.build_feed([contact, edit], nil, %{})
+
+      assert Enum.count(rows, &(&1.kind == :contact)) == 1
+
+      refute Enum.any?(rows, fn row ->
+               row.kind == :thread and Map.get(row, :root_key) == "%c=.sha256"
+             end)
+    end
+
+    test "an about of something which is not a post heads no thread" do
+      tag =
+        msg("@a=.ed25519", "%t=.sha256", 1_000, %{
+          "type" => "tag",
+          "root" => "%t=.sha256",
+          "tag" => "music"
+        })
+
+      about =
+        msg("@b=.ed25519", "%u=.sha256", 2_000, %{
+          "type" => "about",
+          "about" => "%t=.sha256",
+          "name" => "a label for that tag"
+        })
+
+      rows = Timeline.build_feed([tag, about], nil, %{})
+
+      refute Enum.any?(rows, fn row ->
+               row.kind == :thread and Map.get(row, :root_key) == "%t=.sha256"
+             end)
+    end
+
     test "a stored root the window can walk past does not split the conversation" do
       root = msg("@a=.ed25519", "%r=.sha256", 1_000, %{"type" => "post", "text" => "op"})
 

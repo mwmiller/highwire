@@ -4818,7 +4818,7 @@ defmodule HighWire.Timeline do
 
     case c["type"] do
       "post" -> post_thread_root(c, msg, by_key, roots)
-      "about" -> about_thread_root(c)
+      "about" -> about_thread_root(c, by_key)
       _ -> nil
     end
   end
@@ -4836,7 +4836,7 @@ defmodule HighWire.Timeline do
 
   defp post_thread_root(c, msg, by_key, roots) do
     cond do
-      msg_id?(c["fork"]) -> c["fork"]
+      msg_id?(c["fork"]) and heads?(c["fork"], by_key) -> c["fork"]
       parent = parent_key(msg) -> walk_root(parent, by_key, roots)
       is_binary(msg["key"]) -> msg["key"]
       true -> nil
@@ -4932,8 +4932,13 @@ defmodule HighWire.Timeline do
     end
   end
 
-  defp about_thread_root(c) do
-    if msg_id?(c["about"]), do: c["about"]
+  # An about joins the conversation of the message it references, when that
+  # message is a post. An about of a tag, a contact or another event has no
+  # conversation to join — grouping under its key made that message the head
+  # of a "thread" it never headed.
+  defp about_thread_root(c, by_key) do
+    about = c["about"]
+    if msg_id?(about) and heads?(about, by_key), do: about
   end
 
   # Bounded upward walk: posts only; stop at a non-post or rootless
@@ -4958,7 +4963,21 @@ defmodule HighWire.Timeline do
         end
 
       true ->
-        root
+        # The parent is in the window and is not a post, so no conversation
+        # hangs from it. Answering with its key headed a "thread" with a
+        # contact, an about or a vote at the top, drawing that message a
+        # second time; the reply stands on its own instead.
+        nil
+    end
+  end
+
+  # Only a post heads a conversation. A key the window does not hold is
+  # still a candidate — its body is not needed to keep its replies
+  # together — but one the window can read has to be a post.
+  defp heads?(key, by_key) do
+    case Map.get(by_key, key) do
+      nil -> true
+      msg -> post?(msg)
     end
   end
 
@@ -4997,12 +5016,20 @@ defmodule HighWire.Timeline do
   defp edit_thread(msg, by_key, edit_index) do
     with true <- edit?(msg),
          target when is_binary(target) <- Map.get(edit_index, msg["key"]) do
-      case Map.get(by_key, target) do
-        nil -> MessageIndex.edit_thread_root(target)
-        parent -> thread_root(parent, by_key) || target
-      end
+      edit_target_thread(target, by_key)
     else
       _ -> nil
+    end
+  end
+
+  # A revision of a post joins that post's conversation. A revision of
+  # anything else — a contact, an about — has no conversation to join:
+  # the message it revises is not a post, so the revision stands on its
+  # own rather than threading under it.
+  defp edit_target_thread(target, by_key) do
+    case Map.get(by_key, target) do
+      nil -> MessageIndex.edit_thread_root(target)
+      target_msg -> if post?(target_msg), do: thread_root(target_msg, by_key) || target
     end
   end
 
