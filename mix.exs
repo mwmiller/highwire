@@ -104,9 +104,9 @@ defmodule HighWire.MixProject do
       # read-only. The v0.3.0 tag is the seam between the two: its tree is
       # the code the old history ended with.
       #
-      # Fetched from HighWire's own mirror (mwmiller/erlbutt), where each
-      # upstream main we take is pushed to the upstream-main branch and
-      # tagged hw-<short sha>. The dep names that tag, so the commit
+      # Fetched from HighWire's own mirror (mwmiller/erlbutt), whose main
+      # carries the upstream history: each upstream main we take is pushed
+      # there and tagged hw-<short sha>. The dep names that tag, so the commit
       # mix.lock pins is always under a ref this project controls and
       # stays fetchable on a clean checkout even if upstream rewrites its
       # history — which it did once, in November 2026, stranding a locked
