@@ -1,0 +1,31 @@
+name: Audit
+
+# The Rust shell's crates had no advisory gate: a Tauri or transitive
+# crate fixed in a patch release only surfaced when someone ran
+# cargo audit by hand. This scans src-tauri/Cargo.lock against the
+# RustSec database on every push, on any branch, and fails on any
+# advisory not discounted with a reason in src-tauri/.cargo/audit.toml.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust-advisories:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+
+      # Pinned: the advisory IDs and the audit.toml keys this project
+      # relies on are version specific. The database itself is fetched
+      # fresh on every run, so a newly published advisory fails here the
+      # first push after it lands.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.23.0 --locked
+
+      # Run from src-tauri so cargo-audit picks up its .cargo/audit.toml.
+      - name: Scan the Rust shell's lockfile
+        working-directory: src-tauri
+        run: cargo audit --file Cargo.lock

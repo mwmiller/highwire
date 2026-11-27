@@ -1,0 +1,30 @@
+# Advisories cargo-audit reports for src-tauri/Cargo.lock that this
+# project cannot act on yet. Everything else it finds fails the
+# rust-advisories job in .github/workflows/audit.yml.
+
+[advisories]
+ignore = [
+  # glib 0.18.5 is unsound (RUSTSEC-2024-0429, patched at >=0.20.0): the
+  # Iterator and DoubleEndedIterator impls on glib::VariantStrIter can
+  # hand out invalid references. It is compiled only in the Linux build,
+  # where gtk 0.18 arrives through muda, tao and webkit2gtk. No version
+  # on crates.io clears it: tauri 2.12.7 still requires gtk ^0.18, and
+  # tao 0.38 requires gtk ^0.19, whose glib is 0.19. Both sit below the
+  # patched line, so this waits on the gtk-rs 0.20 migration reaching
+  # Tauri's Linux dependency stack.
+  "RUSTSEC-2024-0429",
+
+  # proc-macro-error 1.0.4 is unmaintained (RUSTSEC-2024-0370). It comes
+  # in with glib-macros 0.18 on that same Linux-only gtk-rs 0.18 chain
+  # and runs at build time only. The crate was abandoned with no fixed
+  # release; its dependents have to move to proc-macro-error2 or drop
+  # it, which again means the gtk-rs 0.20 migration.
+  "RUSTSEC-2024-0370",
+
+  # chrono 0.4.45 is unmaintained (RUSTSEC-2026-0543), but nothing here
+  # compiles it. It is in Cargo.lock only because serde_with declares it
+  # as an optional dependency; `cargo tree -i chrono --target all
+  # --all-features` resolves no path to it. It leaves the lockfile when
+  # serde_with changes that entry, so there is nothing to pin or bump.
+  "RUSTSEC-2026-0543",
+]
