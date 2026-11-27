@@ -2274,9 +2274,21 @@ defmodule HighWireWeb.TimelineLiveTest do
     likes = HighWire.Timeline.likes_state(msgs)
     counts = HighWire.Timeline.like_counts(likes)
 
+    # Every post the fold files carries its thread head, and search reads
+    # that rather than walking the window, so the stand-in payload does too.
+    roots = HighWire.Timeline.fold_thread_roots(msgs, %{})
+
+    messages =
+      Enum.map(msgs, fn msg ->
+        case Map.get(roots, msg["key"]) do
+          root when is_binary(root) -> Map.put(slim(msg), "root_key", root)
+          _ -> slim(msg)
+        end
+      end)
+
     %{
       feed: HighWire.Timeline.build_feed(msgs, self_id, counts),
-      messages: Enum.map(msgs, &slim/1),
+      messages: messages,
       like_counts: counts,
       likes_by: HighWire.Timeline.like_authors(likes),
       my_likes: HighWire.Timeline.my_likes(likes, self_id),

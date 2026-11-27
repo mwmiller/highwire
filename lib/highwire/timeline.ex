@@ -5492,10 +5492,12 @@ defmodule HighWire.Timeline do
       }
     }
 
-    # The head the fold gave this message travels with it: search and the
-    # tab both need the row a message belongs to, and a walk over the
-    # window cannot always find it — a parent ages out, and the payload
-    # drops branch. One short key per message buys the answer outright.
+    # The head the fold gave this message travels with it: search needs the
+    # row a message belongs to, and a walk over the window cannot always
+    # find it — a parent ages out, and the payload drops branch. One short
+    # key per message buys the answer outright, on heads as well as replies
+    # (a row whose head is outside the page being filtered still has to be
+    # named), and it is smaller than any map keyed by message key would be.
     case Map.get(roots, msg["key"]) do
       root when is_binary(root) -> Map.put(projected, "root_key", root)
       _ -> projected

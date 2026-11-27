@@ -2266,7 +2266,7 @@ defmodule HighWireWeb.TimelineLive do
         direct = Enum.filter(page_rows, &matches_query?(&1, q))
         known = MapSet.new(direct, &row_uid/1)
 
-        window_rows = matched_threads(assigns.messages, q, assigns.feed)
+        window_rows = matched_threads(assigns.messages, q)
 
         window =
           assigns.feed
@@ -2280,39 +2280,31 @@ defmodule HighWireWeb.TimelineLive do
     end
   end
 
-  defp matched_threads(messages, q, rows) do
+  defp matched_threads(messages, q) do
     ql = String.downcase(q)
-    by_key = Map.new(messages, &{&1["key"], &1})
-    row_ids = MapSet.new(rows, &row_uid/1)
 
     messages
     |> Enum.filter(fn msg ->
       String.contains?(String.downcase(author_of(msg)), ql) or
         String.contains?(String.downcase(text(msg)), ql)
     end)
-    |> Enum.map(&thread_id(&1, by_key, row_ids))
+    |> Enum.map(&thread_id/1)
     |> Enum.reject(&is_nil/1)
     |> MapSet.new()
   end
 
-  # The row a message belongs to. The payload carries the head the fold
-  # resolved, and a row claims it, so that answer is taken as it stands;
-  # otherwise a post walks its root chain (or fork) — not just its parent,
-  # which is what the raw root names on a nested reply — and a rootless
-  # post is its own. Non-posts (votes, abouts) key no row, so they
-  # contribute nothing.
-  defp thread_id(msg, by_key, row_ids) do
+  # The row a message belongs to, as the payload already resolved it: each
+  # post the fold filed carries the head it was grouped under, and walking
+  # the window here cannot reproduce that answer — the projection drops
+  # `branch`, and a parent that has aged out cannot be followed — so it
+  # would name an intermediate parent, or nothing. Non-posts (votes,
+  # abouts) key no row, so they contribute nothing; a message that is its
+  # own row the row filter has already found.
+  defp thread_id(msg) do
     case Map.get(msg, "root_key") do
-      root when is_binary(root) ->
-        if MapSet.member?(row_ids, root), do: root, else: walked_thread_id(msg, by_key)
-
-      _ ->
-        walked_thread_id(msg, by_key)
+      root when is_binary(root) -> root
+      _ -> nil
     end
-  end
-
-  defp walked_thread_id(msg, by_key) do
-    if content(msg)["type"] == "post", do: Timeline.thread_root(msg, by_key)
   end
 
   defp matches_query?(_row, ""), do: true
