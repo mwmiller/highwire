@@ -1118,6 +1118,11 @@ defmodule HighWire.TimelineTest do
       assert Enum.any?(st.messages.feed, &(&1.msg["key"] == "%p=.sha256"))
       refute Enum.any?(st.messages.feed, &(&1.kind == :contact))
 
+      # The head the fold resolved rides with each message, so the tab can
+      # place a message in its row without walking a chain it may not hold.
+      assert %{"root_key" => "%p=.sha256"} =
+               Enum.find(st.messages.messages, &(&1["key"] == "%p=.sha256"))
+
       # then the drain lands
       {:noreply, st} = Timeline.handle_info({Client, :contact_ref, {:item, st._follow}}, st)
       assert st.contact_buf == [st._follow]

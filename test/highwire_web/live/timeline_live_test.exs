@@ -1230,6 +1230,44 @@ defmodule HighWireWeb.TimelineLiveTest do
     assert html =~ "the thread head"
   end
 
+  test "search keeps a reply with the thread the feed drew it in", %{conn: conn} do
+    now = System.system_time(:millisecond)
+
+    head =
+      ssb_msg("%head-gone.sha256", "@alice.ed25519", now - 3_000, %{
+        "type" => "post",
+        "text" => "a head the window still holds"
+      })
+
+    mid =
+      ssb_msg("%mid-gone.sha256", "@bob.ed25519", now - 2_000, %{
+        "type" => "post",
+        "text" => "an answer in between",
+        "root" => "%head-gone.sha256"
+      })
+
+    leaf =
+      ssb_msg("%leaf-gone.sha256", "@carol.ed25519", now, %{
+        "type" => "post",
+        "text" => "a remark worth finding",
+        "root" => "%mid-gone.sha256"
+      })
+
+    # The row is drawn from the head and carries the leaf as a preview, so
+    # the row filter alone never sees the leaf's words. The window has let
+    # the parent go, so only the head the fold resolved can place it — and
+    # that head now rides on the message.
+    feed = HighWire.Timeline.build_feed([head, mid, leaf], nil, %{})
+    messages = [slim(leaf) |> Map.put("root_key", "%head-gone.sha256")]
+
+    {:ok, view, _html} = live(conn, "/")
+    _ = notify(view, %{feed_payload([head, mid, leaf]) | feed: feed, messages: messages})
+
+    html = render_change(view, "search", %{"q" => "worth finding"})
+    assert html =~ "a head the window still holds"
+    assert html =~ "a remark worth finding"
+  end
+
   test "a query in the URL reseeds the search on a fresh mount", %{conn: conn} do
     {:ok, view, html} = live(conn, "/?q=needle")
 

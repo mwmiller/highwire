@@ -3858,18 +3858,21 @@ defmodule HighWire.Timeline do
     likes = likes_state(acc)
     like_counts = like_counts(likes)
 
+    roots = thread_roots(state)
+
     # Flat list (order-of-arrival view). The LiveView's search reads only
-    # author, text, type/root/fork and key (for rootless posts), so each message
-    # is projected down to those before it leaves the payload — the full
-    # value/signature/hash bloat was pure bytes on first paint. Same
-    # newest-first ordering, same generous cap for infinite scroll.
+    # author, text, type/root/fork, key (for rootless posts) and the
+    # thread head the fold resolved, so each message is projected down to
+    # those before it leaves the payload — the full value/signature/hash
+    # bloat was pure bytes on first paint. Same newest-first ordering,
+    # same generous cap for infinite scroll.
     messages =
       acc
       |> Enum.sort_by(&bump_ts/1, :desc)
       |> Enum.take(2000)
-      |> Enum.map(&search_projection/1)
+      |> Enum.map(&search_projection(&1, roots))
 
-    feed = build_feed(acc, state.self_id, like_counts, contacts, thread_roots(state))
+    feed = build_feed(acc, state.self_id, like_counts, contacts, roots)
 
     # key → author, but only for the keys the rows about to go out can
     # ask about: each row's own message, its previewed replies, and the
@@ -5465,7 +5468,7 @@ defmodule HighWire.Timeline do
     _, _ -> state
   end
 
-  defp search_projection(msg) do
+  defp search_projection(msg, roots) do
     c = content(msg)
     # fork rides along: it is one hop to the thread a nested reply belongs
     # to, where the root chain can only reach it while the parent is still
@@ -5481,13 +5484,22 @@ defmodule HighWire.Timeline do
           []
       end
 
-    %{
+    projected = %{
       "key" => msg["key"],
       "value" => %{
         "author" => msg["value"]["author"],
         "content" => Map.take(c, base ++ fields)
       }
     }
+
+    # The head the fold gave this message travels with it: search and the
+    # tab both need the row a message belongs to, and a walk over the
+    # window cannot always find it — a parent ages out, and the payload
+    # drops branch. One short key per message buys the answer outright.
+    case Map.get(roots, msg["key"]) do
+      root when is_binary(root) -> Map.put(projected, "root_key", root)
+      _ -> projected
+    end
   end
 
   defp reconnect(state) do
