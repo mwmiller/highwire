@@ -9,6 +9,13 @@ import Config
 
 # Use the `tz` IANA time zone database for DateTime timezone handling
 
+# The first-run welcome page: a fresh identity is greeted once with the
+# pub invite form. Tests turn the offer off, as they do the contact
+# drain: a test that boots the sidecar on the shared test home would
+# otherwise leave a marker behind that redirects every later page. The
+# welcome page's own tests turn it back on.
+config :highwire, :first_run, enabled: Mix.env() != :test
+
 # Configures the endpoint
 config :highwire, HighWireWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,

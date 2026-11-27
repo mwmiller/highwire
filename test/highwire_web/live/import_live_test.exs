@@ -135,6 +135,18 @@ defmodule HighWireWeb.ImportLiveTest do
       assert {:error, {:redirect, %{to: "/import"}}} = live(conn(), "/settings")
     end
 
+    test "the import offer is answered before the welcome page" do
+      start_supervised!({FakeSidecar, status: :import_pending, info: @consent_info})
+      HighWire.FirstRun.mark()
+
+      on_exit(fn ->
+        File.rm(HighWire.FirstRun.welcome_path())
+        File.rm(HighWire.FirstRun.welcomed_path())
+      end)
+
+      assert {:error, {:redirect, %{to: "/import"}}} = live(conn(), "/")
+    end
+
     test "an in-flight import gates the same way" do
       start_supervised!({FakeSidecar, status: :importing, info: %{}})
 

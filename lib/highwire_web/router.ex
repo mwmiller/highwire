@@ -21,7 +21,11 @@ defmodule HighWireWeb.Router do
     # into /import at mount. /import itself lives outside the session —
     # a hook must not redirect its own page.
     live_session :app,
-      on_mount: [{HighWireWeb.Hooks, :import_gate}, {HighWireWeb.Hooks, :gossip}] do
+      on_mount: [
+        {HighWireWeb.Hooks, :import_gate},
+        {HighWireWeb.Hooks, :first_run},
+        {HighWireWeb.Hooks, :gossip}
+      ] do
       live("/", TimelineLive)
       live("/about", Live)
       live("/profile", ProfileLive)
@@ -36,6 +40,10 @@ defmodule HighWireWeb.Router do
     end
 
     live("/import", ImportLive)
+
+    # The first-run page, outside the gated session for the same reason:
+    # the hook that sends a new identity here must not bounce it back.
+    live("/welcome", WelcomeLive)
 
     # Attaching an image *writes* to the engine's blob store, so unlike
     # the read-only blob GETs below this one runs in the browser pipeline:

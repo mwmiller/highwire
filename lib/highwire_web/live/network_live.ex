@@ -53,6 +53,7 @@ defmodule HighWireWeb.NetworkLive do
   alias HighWire.Timeline
   alias HighWireWeb.Components.Avatar
   alias HighWireWeb.Components.{Nav, Relationship, Shell}
+  alias HighWireWeb.InviteCopy
 
   import HighWireWeb.Components.Time, only: [age: 1]
 
@@ -1436,33 +1437,9 @@ defmodule HighWireWeb.NetworkLive do
   defp dial_error(:no_secret), do: "no account secret found."
   defp dial_error(reason), do: inspect(reason)
 
-  # Wording for a redemption outcome, in the shape the reader acts on.
-  # The invite is spent at the pub the moment `use` succeeds, so an
-  # announce failure is worded as joined-but-not-yet-listed rather than
-  # as something to retry.
-  defp invite_notice({:ok, %{host: host, port: port}}),
-    do: "Joined #{host}:#{port}. The pub follows this identity and the address is saved."
-
-  defp invite_notice({:error, :bad_invite}),
-    do: "That invite code is not valid."
-
-  defp invite_notice({:error, :no_identity}),
-    do: "No active identity. Switch to one, then join the pub."
-
-  defp invite_notice({:error, {:connect, _}}),
-    do: "Could not reach the pub. Check the address and try again."
-
-  defp invite_notice({:error, {:refused, _}}),
-    do: "The pub refused the invite. It may be expired or already used."
-
-  defp invite_notice({:error, {:announce, _}}),
-    do: "Joined the pub, but could not announce it here. It may not stay connected."
-
-  defp invite_notice({:error, :timeout}),
-    do: "The pub did not answer in time. Try again shortly."
-
-  defp invite_notice({:error, reason}),
-    do: "Joining the pub failed: #{inspect(reason)}"
+  # Wording for a redemption outcome. The welcome page shows the same
+  # sentences, so they live in one place.
+  defp invite_notice(result), do: InviteCopy.notice(result)
 
   # Wording for an added address. Adding records where something lives;
   # it does not follow it or reach it, so success names the address as

@@ -8,6 +8,10 @@ defmodule HighWireWeb.Hooks do
   The page itself sits outside the gated session, so the hook can never
   bounce its own target back and forth.
 
+  The first-run gate follows the same shape for a fresh identity: while
+  the install has a welcome page unanswered, every app route halts into
+  `/welcome`, which also lives outside this session.
+
   The gossip hook is the shared sign of life: it subscribes every page
   to connection-set changes and assigns `%{connected, pulse}` for the
   rail's footer badge.
@@ -16,6 +20,7 @@ defmodule HighWireWeb.Hooks do
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1, redirect: 2]
 
+  alias HighWire.FirstRun
   alias HighWire.SSB.Sidecar
   alias HighWire.Timeline
 
@@ -31,6 +36,20 @@ defmodule HighWireWeb.Hooks do
   def on_mount(:import_gate, _params, _session, socket) do
     if Sidecar.status() in @import_states do
       {:halt, redirect(socket, to: "/import")}
+    else
+      {:cont, socket}
+    end
+  end
+
+  # The first-run gate: a fresh identity has no peers and no feed, so
+  # every app route leads to the welcome page until the reader answers
+  # it. It runs after the import gate — an unopened import offer is the
+  # earlier decision, and its page is the one to answer first. The page
+  # itself sits outside this session, so the hook can never bounce its
+  # own target.
+  def on_mount(:first_run, _params, _session, socket) do
+    if FirstRun.pending?() do
+      {:halt, redirect(socket, to: "/welcome")}
     else
       {:cont, socket}
     end

@@ -48,6 +48,7 @@ defmodule HighWire.SSB.Sidecar do
 
   require Logger
 
+  alias HighWire.FirstRun
   alias HighWire.SSB.{Admin, Client, ConnSuppress, Identities, Import, Keys, Network}
 
   # How often an attached engine is checked. An attached engine answers
@@ -474,6 +475,12 @@ defmodule HighWire.SSB.Sidecar do
         {:ok, %{state | status: :import_pending, import: info}}
 
       :none ->
+        # A home with no secret is about to have one minted: this
+        # identity has never been on the network, so the welcome page
+        # is what introduces it to a pub. An install that already holds
+        # a secret — every upgraded one — writes nothing and sees no
+        # change.
+        _ = if not File.regular?(Import.local_secret()), do: FirstRun.mark()
         send(self(), :spawn_node)
         {:ok, %{state | status: :starting}}
     end
@@ -525,6 +532,9 @@ defmodule HighWire.SSB.Sidecar do
     # The offer must not come back: drop the marker before anything
     # else, so a crash between here and the spawn still means "fresh".
     _ = Import.clear_marker()
+    # Starting fresh means an identity no pub knows. The welcome page
+    # says what that costs and offers the invite that fixes it.
+    _ = FirstRun.mark()
     _ = ensure_port_free()
     send(self(), :spawn_node)
 

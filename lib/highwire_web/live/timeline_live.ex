@@ -1659,9 +1659,20 @@ defmodule HighWireWeb.TimelineLive do
             </p>
             <p
               :if={@status == :ok and @rows == [] and @view != :private and @q == ""}
-              class="px-4 py-3 text-sm text-dim"
+              class="px-4 pt-3 text-sm text-dim"
             >
               No messages yet.
+            </p>
+            <p
+              :if={@status == :ok and @rows == [] and @view != :private and @q == ""}
+              class="px-4 pb-3 text-sm text-dim"
+            >
+              A pub is how a new identity meets the network. <.link
+                navigate="/network"
+                class="text-accent underline-offset-2 hover:underline"
+              >
+                Join one on the Network page
+              </.link>.
             </p>
 
             <%= if @q != "" and @search_hits != [] do %>
