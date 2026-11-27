@@ -23,7 +23,7 @@ defmodule HighWire.CountWords do
 
   @doc """
   The quantity in words, without a noun: `"no"`, `"a"`, `"a few"`,
-  `"several"`, `"about a dozen"`, `"a score of"`, `"dozens of"`,
+  `"several"`, `"a dozen"`, `"about a dozen"`, `"a score of"`, `"dozens of"`,
   `"hundreds of"`, `"thousands of"`, `"tens of thousands of"`,
   `"hundreds of thousands of"`, `"millions of"`, `"billions of"`.
 
@@ -33,6 +33,9 @@ defmodule HighWire.CountWords do
       iex> HighWire.CountWords.words(4)
       "several"
 
+      iex> HighWire.CountWords.words(12)
+      "a dozen"
+
       iex> HighWire.CountWords.words(120)
       "dozens of"
   """
@@ -40,6 +43,8 @@ defmodule HighWire.CountWords do
   def words(1), do: "a"
   def words(count) when count <= 3, do: "a few"
   def words(count) when count <= 9, do: "several"
+  # Exactly a dozen needs no hedge; the band above it is the guess.
+  def words(12), do: "a dozen"
   def words(count) when count <= 19, do: "about a dozen"
   def words(count) when count <= 29, do: "a score of"
   def words(count) when count <= 199, do: "dozens of"
@@ -52,8 +57,9 @@ defmodule HighWire.CountWords do
 
   @doc """
   The quantity with `more` after it, for a sentence that carries on:
-  `"one more"`, `"a few more"`, `"several more"`, `"about a dozen
-  more"`, `"a score more"`, `"dozens more"`, `"hundreds more"`.
+  `"one more"`, `"a few more"`, `"several more"`, `"a dozen
+  more"`, `"about a dozen more"`, `"a score more"`, `"dozens more"`,
+  `"hundreds more"`.
 
   `words/1` answers how many, and its noun follows; this answers how many
   others, and no noun does. The larger bands say "of" because a noun comes

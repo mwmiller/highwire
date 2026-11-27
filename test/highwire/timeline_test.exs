@@ -2595,7 +2595,7 @@ defmodule HighWire.TimelineTest do
       assert Timeline.reply_summary(1) == "a reply"
       assert Timeline.reply_summary(3) == "a few replies"
       assert Timeline.reply_summary(9) == "several replies"
-      assert Timeline.reply_summary(12) == "about a dozen replies"
+      assert Timeline.reply_summary(12) == "a dozen replies"
       assert Timeline.reply_summary(20) == "a score of replies"
 
       for count <- [99, 100, 101] do
