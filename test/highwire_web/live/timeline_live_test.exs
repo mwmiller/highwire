@@ -1583,6 +1583,45 @@ defmodule HighWireWeb.TimelineLiveTest do
       assert feed =~ "a reply that names the head"
     end
 
+    test "a row keeps the head the feed resolved when the window cannot walk to it",
+         %{conn: conn} do
+      base = 1_700_000_000_000
+
+      head =
+        ssb_msg("%head-graph.sha256", "@alice.ed25519", base - 10_000, %{
+          "type" => "post",
+          "text" => "the head the graph kept"
+        })
+
+      leaf =
+        ssb_msg("%leaf-graph.sha256", "@carol.ed25519", base, %{
+          "type" => "post",
+          "text" => "the newest reply",
+          "root" => "%parent-graph.sha256"
+        })
+
+      roots = %{
+        "%leaf-graph.sha256" => "%head-graph.sha256",
+        "%parent-graph.sha256" => "%head-graph.sha256"
+      }
+
+      # Two passes reach the tab with a row each: the head from a page,
+      # and the leaf from a window that no longer holds the parent it
+      # answers. The leaf's head is already resolved, but walking the
+      # window again lands on the absent parent and would split it off.
+      feed =
+        HighWire.Timeline.build_feed([leaf], nil, %{}, roots) ++
+          HighWire.Timeline.build_feed([head], nil, %{})
+
+      {:ok, view, _html} = live(conn, "/")
+      _ = notify(view, %{feed_payload([leaf]) | feed: feed})
+      feed = view |> element("#feed-column") |> render()
+
+      assert length(Regex.scan(~r/id="row-/, feed)) == 1
+      assert feed =~ "the head the graph kept"
+      assert feed =~ "the newest reply"
+    end
+
     test "the collapsed row keeps the reader's own part in the conversation", %{conn: conn} do
       base = 1_700_000_000_000
       me = "@reader.ed25519"

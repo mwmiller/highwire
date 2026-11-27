@@ -1004,19 +1004,45 @@ defmodule HighWireWeb.TimelineLive do
       |> Map.new(fn msg -> {msg["key"], msg} end)
       |> Map.merge(Map.new(rows, fn row -> {row.msg["key"], row.msg} end))
 
+    # The heads the rows themselves name. A walk over the window may only
+    # move a row onto one of these; anything else would invent a head the
+    # feed never drew a row for.
+    claimed =
+      MapSet.new(rows, fn
+        %{kind: :contact} = row -> contact_uid(row)
+        row -> Map.get(row, :root_key)
+      end)
+
     rows
     |> Enum.group_by(fn
       %{kind: :contact} = row ->
         contact_uid(row)
 
       row ->
-        # The head of the conversation, walked through the messages the tab
-        # already holds — the same answer the store gives a search hit, so a
-        # reply and its thread land on one row in both places.
-        {:thread, Timeline.thread_root(row.msg, by_key) || row_uid(row)}
+        {:thread, thread_row_id(row, by_key, claimed)}
     end)
     |> Enum.map(fn {_id, group} -> merge_thread(group) end)
     |> Enum.sort_by(& &1.activity, :desc)
+  end
+
+  # The conversation a row belongs to. A feed row carries the head the fold
+  # resolved for it, with the thread graph, and that answer stands: walking
+  # the window again can only be worse informed — the payload's messages
+  # drop `branch`, and a parent that has aged out cannot be followed — so
+  # the walk would name an intermediate parent and split the row off its
+  # conversation. It still earns its keep the other way: when a row built
+  # from an older, smaller window can now be walked to a head another row
+  # already claims, the two are one conversation and must collapse.
+  defp thread_row_id(row, by_key, claimed) do
+    root = Map.get(row, :root_key)
+    walk = Timeline.thread_root(row.msg, by_key)
+
+    cond do
+      is_binary(walk) and MapSet.member?(claimed, walk) -> walk
+      is_binary(root) -> root
+      is_binary(walk) -> walk
+      true -> row_uid(row)
+    end
   end
 
   defp merge_thread([row]), do: row
