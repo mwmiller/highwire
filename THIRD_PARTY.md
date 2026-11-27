@@ -5,7 +5,9 @@ following third-party works:
 
 ## erlbutt (sidecar SSB engine)
 
-- Source: <https://github.com/cmoid/erlbutt> (HighWire maintains a fork)
+- Source: <https://github.com/cmoid/erlbutt>, with HighWire's mirror at
+  <https://github.com/mwmiller/erlbutt> carrying the upstream commit each
+  release is built from
 - License: **GPL-2.0-only** (SPDX headers in every source file;
   `LICENSES/COPYING` in that repository is the GPLv2 text)
 - Copyright (C) Charles Moid

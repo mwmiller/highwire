@@ -60,13 +60,15 @@ first move, not a habit.
 
 **Engine**
 
-- erlbutt is a branch-tracking git dep in `mix.exs` (`main`), locked
-  to an exact revision in `mix.lock`. `mix deps.get` fetches it;
-  `mix deps.update erlbutt` moves it to the current tip; `mix
-  engine.build` compiles it into dev's release. `mix setup` does both.
-- Release builds embed erlbutt built unmodified from that checkout
-  (`github.com/cmoid/erlbutt`) as a complete OTP release under
-  `priv/erlbutt`, booted as a sidecar when the app starts.
+- erlbutt is a git dep in `mix.exs`, pinned to a tag on HighWire's
+  mirror (`github.com/mwmiller/erlbutt`, tag `hw-<upstream short sha>`)
+  and locked to that commit in `mix.lock`. Upstream `main` reaches the
+  mirror, and a tag, before the pin moves, so the committed revision is
+  always under a ref this project controls. `mix deps.get` fetches it;
+  `mix engine.build` compiles it into dev's release. `mix setup` does both.
+- Release builds embed erlbutt built unmodified from that checkout as a
+  complete OTP release under `priv/erlbutt`, booted as a sidecar when the
+  app starts.
 - First-run import of an existing JS-client `~/.ssb` store (secret,
   flume `log.offset` history, blobs) arrives on its own gated page:
   the offer lists what was found and asks — Import it or Start
@@ -113,10 +115,11 @@ mix phx.server     # http://127.0.0.1:24042
 mix precommit      # format, credo, compile --warnings-as-errors, test
 ```
 
-`mix deps.update erlbutt && mix engine.build` (or the `mix
-engine.update` alias) pulls and rebuilds the engine when upstream
-moves. Point `ERLBUTT_REL` at another release to run against a
-working engine checkout instead.
+`mix engine.update` fetches the pinned tag and rebuilds the engine.
+Following upstream takes three steps: push the new erlbutt `main` to the
+mirror, tag it there, then name that tag in `mix.exs`. Point
+`ERLBUTT_REL` at another release to run against a working engine
+checkout instead.
 
 The engine's repo lives at `<HIGHWIRE_HOME>/.ssberl` — secret,
 `conn.json`, `ssb.cfg`, feeds, DETS and blobs. To run against an SSB

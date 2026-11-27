@@ -235,9 +235,9 @@ jobs:
       # Burrito wrapper; the release.yml runtime config points the
       # sidecar at it.
       #
-      # erlbutt is a branch-tracking git dep in mix.exs (main), so mix
-      # deps.get has already fetched it into deps/erlbutt at the exact
-      # revision locked in mix.lock — the engine is built UNMODIFIED
+      # erlbutt is a git dep in mix.exs pinned to a tag on HighWire's
+      # mirror, so mix deps.get has already fetched it into deps/erlbutt
+      # at the exact revision locked in mix.lock — the engine is built UNMODIFIED
       # from that checkout, and stays in lockstep with the app's other
       # deps. That step runs above this one. Two environment knobs only:
       #

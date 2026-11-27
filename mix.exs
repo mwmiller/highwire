@@ -97,24 +97,26 @@ defmodule HighWire.MixProject do
       # `mix deps.update enacl`. enacl's origin/main is a different
       # lineage (the upstream 1.2.x line), not a fast-forward from here.
       {:enacl, git: "https://github.com/cmoid/enacl", branch: "moid-v1.1.1"},
-      # The SSB engine the sidecar spawns. This GitHub repository is a
-      # read-only mirror of erlbutt on SSB
-      # (ssb://%TvkoTlcpiyV8DGLLAo5XzB8K+u1qnk56mxMwWmCst0g=.sha256); the
-      # earlier git history lives in cmoid/erlbutt-prototype, archived and
-      # read-only. The v0.3.0 tag is the seam between them: its tree is the
-      # code the old history ended with.
-      # Branch-tracking main, so upstream fixes and RPCs arrive by
-      # `mix deps.update erlbutt` (the engine.update alias also rebuilds
-      # the release); mix.lock pins the exact commit, so a checkout builds
-      # the same code twice in a row. That history was rewritten once, in
-      # November 2026, which stranded a locked commit under no ref and
-      # failed mix deps.get in every v1.11.0 release leg — the same thing
-      # again fails the same way, loudly, and is fixed by moving the pin to
-      # a commit the mirror still serves. compile: false, app: false — it's
-      # a rebar3/OTP tree consumed as a built release (mix engine.build),
-      # not a library mix should compile or start.
+      # The SSB engine the sidecar spawns. Its home is erlbutt on SSB
+      # (ssb://%TvkoTlcpiyV8DGLLAo5XzB8K+u1qnk56mxMwWmCst0g=.sha256);
+      # cmoid/erlbutt is a read-only mirror of that history, and the
+      # earlier history lives in cmoid/erlbutt-prototype, archived and
+      # read-only. The v0.3.0 tag is the seam between the two: its tree is
+      # the code the old history ended with.
+      #
+      # Fetched from HighWire's own mirror (mwmiller/erlbutt), where each
+      # upstream main we take is pushed to the upstream-main branch and
+      # tagged hw-<short sha>. The dep names that tag, so the commit
+      # mix.lock pins is always under a ref this project controls and
+      # stays fetchable on a clean checkout even if upstream rewrites its
+      # history — which it did once, in November 2026, stranding a locked
+      # commit and failing every v1.11.0 release leg. Moving the pin: fetch
+      # upstream main, push it to the mirror, tag it there, then name the
+      # new tag here. compile: false, app: false — it's a rebar3/OTP tree
+      # consumed as a built release (mix engine.build), not a library mix
+      # should compile or start.
       {:erlbutt,
-       git: "https://github.com/cmoid/erlbutt", branch: "main", compile: false, app: false},
+       git: "https://github.com/mwmiller/erlbutt", tag: "hw-44c3111", compile: false, app: false},
       {:bandit, "~> 1.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       # Benchmarks only (bench/), and dev-only so it never reaches a

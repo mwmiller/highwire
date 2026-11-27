@@ -8,10 +8,10 @@ defmodule Mix.Tasks.Engine.Build do
   @moduledoc """
   Builds the erlbutt SSB engine into a relx release the sidecar can spawn.
 
-  The engine is fetched by `mix deps.get` into `deps/#{@dep}` at the
-  revision pinned in `mix.lock` (branch-tracking in mix.exs, so
-  `mix deps.update #{@dep}` moves the pin). This task compiles it with
-  the vendored rebar3 and assembles the release:
+      The engine is fetched by `mix deps.get` into `deps/#{@dep}` at the tag
+    named in mix.exs and the exact revision pinned in `mix.lock` (HighWire's
+    mirror of upstream, tagged once per bump). This task compiles it with
+    the vendored rebar3 and assembles the release:
 
       mix engine.build          # dev profile -> deps/#{@dep}/_build/default/rel/ssb
       mix engine.build prod     # prod profile -> deps/#{@dep}/_build/prod/rel/ssb
