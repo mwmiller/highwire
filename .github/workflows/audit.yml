@@ -1,10 +1,10 @@
 name: Audit
 
-# The Rust shell's crates had no advisory gate: a Tauri or transitive
-# crate fixed in a patch release only surfaced when someone ran
-# cargo audit by hand. This scans src-tauri/Cargo.lock against the
-# RustSec database on every push, on any branch, and fails on any
-# advisory not discounted with a reason in src-tauri/.cargo/audit.toml.
+# Neither dependency tree had an advisory gate: a crate or a Hex
+# package fixed in a patch release only surfaced when someone ran the
+# audit by hand. Both are scanned on every push and pull request, on any
+# branch, and a newly published advisory fails the first run after it
+# lands.
 
 on:
   push:
@@ -29,3 +29,22 @@ jobs:
       - name: Scan the Rust shell's lockfile
         working-directory: src-tauri
         run: cargo audit --file Cargo.lock
+
+  elixir-advisories:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+
+      - run: mix local.hex --force && mix local.rebar --force
+
+      # hex.audit only reads mix.lock, but mix refuses to run a task
+      # while the manifest's dependencies are unresolved, so they are
+      # fetched first. Nothing is compiled.
+      - run: mix deps.get
+
+      # Retired packages and Hex security advisories for every entry in
+      # mix.lock.
+      - name: Scan the Elixir lockfile
+        run: mix hex.audit
